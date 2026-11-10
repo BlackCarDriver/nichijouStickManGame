@@ -1,0 +1,19 @@
+{
+  "name": "stickman-game",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "H5 2D 横版火柴人多人在线对战游戏（Phaser 3 + Matter.js + TypeScript）",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "phaser": "^3.90.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.7"
+  }
+}
