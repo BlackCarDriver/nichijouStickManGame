@@ -6,7 +6,7 @@
   "description": "H5 2D 横版火柴人多人在线对战游戏（Phaser 3 + Matter.js + TypeScript）",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "npm run validate && tsc --noEmit && vite build",
     "preview": "vite preview",
     "validate": "tsx tools/validate-maps.ts"
   },
