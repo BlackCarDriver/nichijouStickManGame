@@ -1,0 +1,37 @@
+/**
+ * 伤害数据结构 —— 全局唯一的伤害"语言"。
+ *
+ * 子弹、近战、踢、爆炸、环境伤害全部产生 DamageInfo，
+ * 由 DamageSystem 统一分发到 玩家血量 / 物体耐久 / 特效。
+ * 武器侧不需要知道"物体有耐久"，破坏侧不需要知道"子弹怎么飞"。
+ */
+
+export interface Vec2 {
+  x: number;
+  y: number;
+}
+
+/** 伤害来源类型（用于反馈强度、后续音效/统计区分） */
+export type DamageKind = 'bullet' | 'melee' | 'explosion' | 'kick' | 'env';
+
+export interface DamageInfo {
+  /** 伤害量（正数） */
+  amount: number;
+  kind: DamageKind;
+  /** 来源实体 id（玩家/投掷物），用于自伤判定与击杀归属 */
+  sourceId?: number;
+  /** 命中点（世界坐标），用于火花/碎片方向 */
+  point?: Vec2;
+  /** 表面法线（朝向来袭方向），用于火花方向 */
+  normal?: Vec2;
+  /** 击退冲量（px/step，仅对玩家生效） */
+  knockback?: Vec2;
+}
+
+/** 伤害结算结果 */
+export interface DamageResult {
+  /** 实际生效的伤害（0 = 未生效：无敌/已死/不可破坏） */
+  applied: number;
+  /** 是否因此被摧毁（物体）或死亡（玩家） */
+  killed: boolean;
+}

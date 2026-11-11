@@ -5,6 +5,9 @@ import { StickmanRenderer } from '../render/StickmanRenderer';
 import type { StickmanPose } from '../render/StickmanRenderer';
 import { GameFeel } from '../feel/GameFeel';
 import { COLLISION_CATEGORY, PLAYER_MASK_ALL } from '../core/CollisionCategories';
+import { emptyInput } from '../core/InputCommand';
+import { Health } from './Health';
+import type { DamageInfo } from '../combat/DamageInfo';
 
 export const PLAYER_CONFIG = {
   /** 碰撞体尺寸（火柴人总高约 111px，碰撞体略小于视觉） */
@@ -39,6 +42,14 @@ export const PLAYER_CONFIG = {
   jumpLockout: 0.15,
   /** 脚下射线探测深度（像素）。斜面需要更大的探测深度 */
   groundProbeDepth: 10,
+
+  // ---- 生命值 ----
+  /** 最大生命值 */
+  maxHp: 100,
+  /** 死亡后复活延迟（ms）：沙盒模式下无限重生 */
+  respawnDelayMs: 1200,
+  /** 复活后的无敌时长（ms） */
+  spawnInvulnMs: 900,
 } as const;
 
 /** matter.add.gameObject 返回的容器（运行时带 Matter body 与组件方法） */
@@ -72,6 +83,24 @@ export class Player extends Entity {
 
   /** 面向（1=右 -1=左）；镜头 look-ahead 使用 */
   facing: 1 | -1 = 1;
+
+  // ---- 生命值 ----
+  readonly health = new Health({ maxHp: PLAYER_CONFIG.maxHp });
+  /** 死亡后剩余复活倒计时（ms） */
+  private respawnTimer = 0;
+  /** 出生点（复活用） */
+  private readonly spawnX: number;
+  private readonly spawnY: number;
+
+  // ---- 瞄准（武器系统用）----
+  /** 瞄准角度（弧度，世界方向）。由场景按"谁持有鼠标"每帧设置 */
+  private aimAngle = 0;
+  /** 是否装备调试枪（W1 验证伤害管线用，W2 由 WeaponSystem 接管） */
+  equippedGun = false;
+
+  private static readonly HIT_INVULN_MS = 180;
+  /** 肩部到枪口的距离（手臂 + 枪身） */
+  private static readonly MUZZLE_REACH = 54;
 
   // ---- 着地状态 ----
   /** 脚下射线检测结果 */
@@ -117,6 +146,8 @@ export class Player extends Entity {
     super();
     this.scene = scene;
     this.color = color;
+    this.spawnX = x;
+    this.spawnY = y;
 
     this.container = scene.add.container(x, y) as MatterContainer;
     this.visual = scene.add.container(0, 0);
@@ -232,9 +263,96 @@ export class Player extends Entity {
     this.scene.events.emit('player-hit', this);
   }
 
+  // ==========================================================
+  //  伤害 / 生命值
+  // ==========================================================
+
+  /**
+   * 受到伤害（由 DamageSystem 调用）。返回实际生效的伤害量。
+   * 无敌帧拦截、击杀判定、受击姿态都在这里统一处理。
+   */
+  applyDamage(info: DamageInfo): number {
+    if (this.health.isDead) return 0;
+    const applied = this.health.applyDamage(info.amount);
+    if (applied <= 0) return 0;
+
+    // 击退 + 受击姿态（hit() 内部会广播 player-hit → 屏幕震动）
+    const kb = info.knockback ?? { x: 0, y: 0 };
+    this.hit(kb.x, kb.y, 380);
+    // 短无敌：避免连发武器在同一瞬间把玩家打穿（AK 高频子弹）
+    this.health.setInvulnerable(Player.HIT_INVULN_MS);
+
+    if (this.health.isDead) this.die();
+    return applied;
+  }
+
+  /** 治疗（医疗包用） */
+  heal(amount: number): number {
+    return this.health.heal(amount);
+  }
+
+  private die(): void {
+    this.respawnTimer = PLAYER_CONFIG.respawnDelayMs;
+    this.scene.events.emit('player-died', this);
+  }
+
+  /** 复活：回到出生点、满血、短无敌 */
+  private respawn(): void {
+    this.respawnTimer = 0;
+    this.health.reset();
+    this.health.setInvulnerable(PLAYER_CONFIG.spawnInvulnMs);
+    this.container.setPosition(this.spawnX, this.spawnY);
+    this.container.setVelocity(0, 0);
+    this.container.setRotation(0);
+    this.hitTimer = 0;
+    this.hitTilt = 0;
+    this.visual.setAlpha(1);
+    this.scene.events.emit('player-respawn', this);
+  }
+
+  // ==========================================================
+  //  瞄准 / 枪口
+  // ==========================================================
+
+  /** 设置瞄准角度（弧度，世界方向） */
+  /** 当前瞄准角度（弧度） */
+  get aim(): number {
+    return this.aimAngle;
+  }
+
+  /** 肩部位置（世界坐标）：瞄准角计算与枪口起点基准 */
+  get shoulderWorld(): { x: number; y: number } {
+    return {
+      x: this.container.x,
+      y: this.container.y + this.visual.y + StickmanRenderer.SHOULDER_Y,
+    };
+  }
+
+  /** 枪口位置（世界坐标）：子弹必须从这里出，否则会从墙里穿出来 */
+  get muzzle(): { x: number; y: number } {
+    const s = this.shoulderWorld;
+    const reach = Player.MUZZLE_REACH;
+    return {
+      x: s.x + Math.cos(this.aimAngle) * reach,
+      y: s.y + Math.sin(this.aimAngle) * reach,
+    };
+  }
+
   /** 每帧由场景调用：消费输入指令并更新物理与渲染 */
   update(cmd: InputCommand, deltaMs: number): void {
     const dt = deltaMs / 1000;
+
+    // ---- 生命值 / 死亡 → 复活 ----
+    this.health.update(deltaMs);
+    if (this.health.isDead) {
+      this.respawnTimer -= deltaMs;
+      if (this.respawnTimer <= 0) {
+        this.respawn();
+      } else {
+        // 死亡期间不接受操作（物理与渲染照常：尸体继续被打飞）
+        cmd = emptyInput();
+      }
+    }
 
     // 持续离地超过 150ms 才把地面法线重置为平地（短暂滑动/抖动不重置，避免闪烁）
     if (this.isGrounded) {
@@ -323,6 +441,9 @@ export class Player extends Entity {
     if (cmd.moveX !== 0) {
       this.facing = cmd.moveX > 0 ? 1 : -1;
     }
+
+    // 瞄准：明确角度优先（鼠标玩家）；null → 跟随身体朝向（无鼠标玩家）
+    this.aimAngle = cmd.aimAngle ?? (this.facing > 0 ? 0 : Math.PI);
 
     this.updatePose(deltaMs, wasGrounded);
     this.visual.scaleX = this.facing;
@@ -479,6 +600,36 @@ export class Player extends Entity {
 
     // 斜面时整体下移视觉（平滑值，避免抖动闪烁）
     this.visual.y = this.smSurfCenter;
+
+    // 死亡表现：半透明
+    this.visual.setAlpha(this.health.isDead ? 0.3 : 1);
+
+    // 播放调试枪（W1 临时装备）
+    if (this.equippedGun && !this.health.isDead) {
+      this.drawGun();
+    }
+  }
+
+  /**
+   * 画手中的枪（调试用）。
+   * 坐标系是 visual 的局部坐标：visual.scaleX = facing，
+   * 因此世界方向 (cos, sin) 要换成局部 (facing*cos, sin)。
+   */
+  private drawGun(): void {
+    const g = this.graphics;
+    const lx = Math.cos(this.aimAngle) * this.facing;
+    const ly = Math.sin(this.aimAngle);
+    const sx = 0;
+    const sy = StickmanRenderer.SHOULDER_Y;
+    const armLen = 32;
+    const gunLen = Player.MUZZLE_REACH - armLen;
+
+    // 手臂
+    g.lineStyle(4, this.color, 1);
+    g.lineBetween(sx, sy, sx + lx * armLen, sy + ly * armLen);
+    // 枪身
+    g.lineStyle(6, 0x2a2a35, 1);
+    g.lineBetween(sx + lx * armLen, sy + ly * armLen, sx + lx * (armLen + gunLen), sy + ly * (armLen + gunLen));
   }
 
   /** 联机预留：状态快照 */

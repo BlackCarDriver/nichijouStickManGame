@@ -20,8 +20,22 @@ export interface InputCommand {
   kick: boolean;
   /** 替换武器（P2 E；P1 右键上下文）—— M4 实现 */
   swap: boolean;
+  /**
+   * 瞄准角度（弧度，世界方向）。
+   * null = 使用身体朝向（无鼠标的玩家）；联机时由服务器/输入流携带同一字段。
+   */
+  aimAngle: number | null;
 }
 
 export function emptyInput(): InputCommand {
-  return { moveX: 0, jump: false, jumpHeld: false, crouch: false, attack: false, kick: false, swap: false };
+  return {
+    moveX: 0,
+    jump: false,
+    jumpHeld: false,
+    crouch: false,
+    attack: false,
+    kick: false,
+    swap: false,
+    aimAngle: null,
+  };
 }
