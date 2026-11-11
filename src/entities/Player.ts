@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { Entity } from '../core/Entity';
 import type { InputCommand } from '../core/InputCommand';
 import { StickmanRenderer } from '../render/StickmanRenderer';
+import type { StickmanPose } from '../render/StickmanRenderer';
 
 export const PLAYER_CONFIG = {
   /** 碰撞体尺寸（火柴人约高 111px，碰撞体略小于视觉） */
@@ -46,6 +47,17 @@ export class Player extends Entity {
   private walkPhase = 0;
   private facing: 1 | -1 = 1;
   readonly color: number;
+
+  // ---- 动画状态机（混合驱动：物理状态 → 程序化姿态） ----
+  private pose: StickmanPose = 'idle';
+  /** 受击剩余时间（>0 时处于受击乱舞状态） */
+  private hitTimer = 0;
+  /** 受击乱舞相位（快速变化，让四肢乱舞） */
+  private hitPhase = 0;
+  /** 受击身体倾斜角（由 Container rotation 实现旋转，随时间衰减） */
+  private hitTilt = 0;
+  private static readonly HIT_DURATION = 600;
+  private static readonly HIT_TILT_MAX = 0.5;
 
   constructor(scene: Phaser.Scene, x: number, y: number, color: number) {
     super();
@@ -117,14 +129,47 @@ export class Player extends Entity {
       this.facing = cmd.moveX > 0 ? 1 : -1;
     }
 
-    const moving = Math.abs(this.body.velocity.x) > 0.5;
-    if (moving && this.isGrounded) {
-      this.walkPhase += deltaMs * 0.012;
-    }
-
+    this.updatePose(deltaMs);
     this.syncFeet();
     this.container.scaleX = this.facing;
     this.draw();
+  }
+
+  /**
+   * 受击：进入短暂物理乱飞状态（主体位移由 Matter 冲量驱动，姿态为四肢乱舞）。
+   * 由踢飞（M2）/ 武器伤害（M3）调用。
+   */
+  hit(knockbackX: number, knockbackY: number, durationMs = Player.HIT_DURATION): void {
+    this.hitTimer = durationMs;
+    this.hitPhase = 0;
+    this.hitTilt = (Math.random() < 0.5 ? -1 : 1) * Player.HIT_TILT_MAX;
+    this.container.setVelocityX(knockbackX);
+    this.container.setVelocityY(knockbackY);
+  }
+
+  /** 动画状态机：物理状态（着地/速度/受击）→ 姿势 */
+  private updatePose(deltaMs: number): void {
+    if (this.hitTimer > 0) {
+      this.hitTimer -= deltaMs;
+      this.hitPhase += deltaMs * 0.025;
+      // 倾斜随剩余时间衰减，快速回正
+      this.hitTilt *= Math.max(0, 1 - deltaMs / 150);
+      this.pose = 'hit';
+      this.container.rotation = this.hitTilt;
+      return;
+    }
+
+    // 受击结束：回正姿态
+    this.container.rotation = 0;
+    const moving = Math.abs(this.body.velocity.x) > 0.5;
+    if (!this.isGrounded) {
+      this.pose = this.body.velocity.y < 0 ? 'jump' : 'fall';
+    } else if (moving) {
+      this.walkPhase += deltaMs * 0.015;
+      this.pose = 'walk';
+    } else {
+      this.pose = 'idle';
+    }
   }
 
   private tryJump(): void {
@@ -144,9 +189,12 @@ export class Player extends Entity {
   private draw(): void {
     StickmanRenderer.draw(this.graphics, {
       color: this.color,
-      walkPhase: this.walkPhase,
+      phase: this.walkPhase,
+      pose: this.pose,
       moving: Math.abs(this.body.velocity.x) > 0.5,
       grounded: this.isGrounded,
+      hitIntensity: this.hitTimer > 0 ? Math.min(1, this.hitTimer / Player.HIT_DURATION) : 0,
+      hitPhase: this.hitPhase,
     });
   }
 
