@@ -16,6 +16,7 @@ import { COLLISION_CATEGORY } from '../core/CollisionCategories';
 import type { MapData, MapJoint, MapObject } from './MapFormat';
 import type { PrefabData } from './PrefabFormat';
 import { expandPrefab } from './PrefabExpand';
+import { hasMaterialTexture, matTextureKey } from './TextureLoader';
 
 /** 地图物体的运行时记录（破坏系统 / 编辑器重建 需要） */
 export interface MapObjectRuntime {
@@ -103,6 +104,32 @@ export function buildMap(
   return runtime;
 }
 
+/**
+ * 创建矩形的视觉：材质有贴图且已加载时用贴图（tile=平铺 / stretch=拉伸），否则用纯色。
+ * 注：贴图目前只应用于矩形（圆/多边形仍用颜色，避免蒙版与旋转的复杂度）。
+ */
+function createRectVisual(
+  scene: Phaser.Scene,
+  cx: number,
+  cy: number,
+  w: number,
+  h: number,
+  mat: MaterialConfig,
+  color: number,
+  strokeAlpha: number,
+): Phaser.GameObjects.GameObject {
+  if (mat.texture && hasMaterialTexture(scene, mat.texture)) {
+    const key = matTextureKey(mat.texture);
+    if (mat.textureMode === 'stretch') {
+      return scene.add.image(cx, cy, key).setDisplaySize(w, h);
+    }
+    return scene.add.tileSprite(cx, cy, w, h, key);
+  }
+  const go = scene.add.rectangle(cx, cy, w, h, color, 1);
+  go.setStrokeStyle(2, 0x000000, strokeAlpha);
+  return go;
+}
+
 /** 创建一个地图物体（物理 + 视觉），decor 图层只创建视觉 */
 function createObject(
   scene: Phaser.Scene,
@@ -119,10 +146,9 @@ function createObject(
   if (layer === 'decor') {
     let visual: Phaser.GameObjects.GameObject;
     if (obj.type === 'rect') {
-      const go = scene.add.rectangle(obj.x + obj.w / 2, obj.y + obj.h / 2, obj.w, obj.h, color, 1);
-      go.setStrokeStyle(2, 0x000000, 0.4);
-      if (angleRad !== 0) go.setRotation(angleRad);
-      visual = go;
+      visual = createRectVisual(scene, obj.x + obj.w / 2, obj.y + obj.h / 2, obj.w, obj.h, mat, color, 0.4);
+      // decor 没有物理体，旋转需手动应用
+      if (angleRad !== 0) (visual as unknown as Phaser.GameObjects.Components.Transform).setRotation(angleRad);
     } else if (obj.type === 'circle') {
       const go = scene.add.circle(obj.x, obj.y, obj.radius, color, 1);
       go.setStrokeStyle(2, 0x000000, 0.4);
@@ -229,8 +255,7 @@ function createObject(
       const rect = obj as Extract<MapObject, { type: 'rect' }>;
       const cx = rect.x + rect.w / 2;
       const cy = rect.y + rect.h / 2;
-      const go = scene.add.rectangle(cx, cy, rect.w, rect.h, color, 1);
-      go.setStrokeStyle(2, 0x000000, 0.5);
+      const go = createRectVisual(scene, cx, cy, rect.w, rect.h, mat, color, 0.5);
       body = (
         scene.matter.add.gameObject(go, {
           ...commonBodyOptions,

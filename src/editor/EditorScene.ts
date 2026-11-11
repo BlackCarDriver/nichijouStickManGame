@@ -9,6 +9,8 @@
 import Phaser from 'phaser';
 import { buildMap, destroyMapRuntime } from '../map/MapLoader';
 import type { MapObjectRuntime } from '../map/MapLoader';
+import { ensureMaterialTextures, preloadMaterialTextures } from '../map/TextureLoader';
+import { MATERIALS } from '../config/materials';
 import { PLAYER_CONFIG } from '../entities/Player';
 import { editorStore } from './EditorStore';
 import type { EditorTab, ToolKind } from './EditorStore';
@@ -42,6 +44,13 @@ export class EditorScene extends Phaser.Scene {
 
   constructor() {
     super('EditorScene');
+  }
+
+  preload(): void {
+    preloadMaterialTextures(
+      this,
+      Object.values(MATERIALS).map((m) => m.texture),
+    );
   }
 
   create(): void {
@@ -95,6 +104,15 @@ export class EditorScene extends Phaser.Scene {
       this.lastTab = store.tab;
       this.fitToMap();
     }
+    // 贴图按需加载：新增/替换贴图后加载完再重建一次
+    ensureMaterialTextures(
+      this,
+      Object.values(MATERIALS).map((m) => ({
+        ref: m.texture,
+        override: m.texture ? store.textureOverrides.get(m.texture) : undefined,
+      })),
+      () => this.queueRebuild(),
+    );
     try {
       destroyMapRuntime(this, this.runtime);
     } catch {

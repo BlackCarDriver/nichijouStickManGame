@@ -3,6 +3,9 @@
   "materials": {
     "wall": {
       "name": "墙体",
+      "color": "#4a4a5a",
+      "texture": "textures/wall.png",
+      "textureMode": "tile",
       "durability": 0,
       "destructible": false,
       "fixed": true,
@@ -10,10 +13,15 @@
       "density": 5,
       "friction": 0,
       "frictionStatic": 0,
-      "color": "#4a4a5a"
+      "damageMultiplier": 1,
+      "bulletBounce": true,
+      "bulletPierce": false
     },
     "ground": {
       "name": "地面",
+      "color": "#3d5a3d",
+      "texture": "textures/ground.png",
+      "textureMode": "tile",
       "durability": 0,
       "destructible": false,
       "fixed": true,
@@ -21,10 +29,15 @@
       "density": 5,
       "friction": 0.5,
       "frictionStatic": 0.9,
-      "color": "#3d5a3d"
+      "damageMultiplier": 1,
+      "bulletBounce": false,
+      "bulletPierce": false
     },
     "wood": {
       "name": "木头",
+      "color": "#8b5a2b",
+      "texture": "textures/wood.png",
+      "textureMode": "tile",
       "durability": 60,
       "destructible": true,
       "fixed": false,
@@ -32,10 +45,15 @@
       "density": 0.002,
       "friction": 0.4,
       "frictionStatic": 0.8,
-      "color": "#8b5a2b"
+      "damageMultiplier": 1,
+      "bulletBounce": false,
+      "bulletPierce": false
     },
     "cardboard": {
       "name": "纸箱",
+      "color": "#c8a165",
+      "texture": "textures/cardboard.png",
+      "textureMode": "tile",
       "durability": 20,
       "destructible": true,
       "fixed": false,
@@ -43,10 +61,15 @@
       "density": 0.001,
       "friction": 0.3,
       "frictionStatic": 0.5,
-      "color": "#c8a165"
+      "damageMultiplier": 1.5,
+      "bulletBounce": false,
+      "bulletPierce": true
     },
     "metal": {
       "name": "金属",
+      "color": "#9aa5b1",
+      "texture": "textures/metal.png",
+      "textureMode": "tile",
       "durability": 200,
       "destructible": true,
       "fixed": false,
@@ -54,10 +77,15 @@
       "density": 0.008,
       "friction": 0.15,
       "frictionStatic": 0.3,
-      "color": "#9aa5b1"
+      "damageMultiplier": 0.7,
+      "bulletBounce": true,
+      "bulletPierce": false
     },
     "ice": {
       "name": "冰面",
+      "color": "#8fd0e8",
+      "texture": "textures/ice.png",
+      "textureMode": "tile",
       "durability": 0,
       "destructible": false,
       "fixed": true,
@@ -65,7 +93,9 @@
       "density": 5,
       "friction": 0.02,
       "frictionStatic": 0.02,
-      "color": "#8fd0e8"
+      "damageMultiplier": 1,
+      "bulletBounce": false,
+      "bulletPierce": false
     }
   }
 }

@@ -14,6 +14,7 @@ import { listMaps, listPrefabs } from '../map/MapRegistry';
 import type { Issue } from '../map/MapValidator';
 import type { MapObject } from '../map/MapFormat';
 import { setStatus, setStatusSink } from './status';
+import { textureUrl } from '../map/TextureLoader';
 import type { EditorScene } from './EditorScene';
 
 type Child = Node | string | null | undefined | false;
@@ -408,13 +409,25 @@ function renderLeft(): void {
             },
           },
           [
-            h('span', { class: 'ed-swatch', style: `background:${MATERIALS[id].colorHex}` }),
+            MATERIALS[id].texture
+              ? h('img', {
+                  class: 'ed-tex-thumb',
+                  src: materialTextureSrc(id),
+                  alt: '',
+                  style: `background:${MATERIALS[id].colorHex}`,
+                  onerror: (e: Event) => {
+                    (e.target as HTMLImageElement).style.opacity = '0';
+                  },
+                })
+              : h('span', { class: 'ed-swatch', style: `background:${MATERIALS[id].colorHex}` }),
             h('span', { class: 'ed-list-main' }, [MATERIALS[id].name]),
             h('span', { class: 'ed-list-sub' }, [id]),
           ],
         ),
       ),
     ),
+    h('div', { class: 'ed-row' }, [button('+ 新增材质', () => openNewMaterialModal())]),
+    h('p', { class: 'ed-help' }, ['导出 materials.json 后，把贴图文件放到 public/textures/ 下即可在游戏中使用。']),
   );
 }
 
@@ -662,32 +675,237 @@ function materialForm(): HTMLElement {
   const mat = MATERIALS[store.activeMaterialId];
   if (!mat) return h('div', {}, ['未选择材质']);
   const upd = (patch: Record<string, unknown>) => store.updateMaterial(mat.id, patch as never);
+  const usage = store.materialUsage(mat.id);
+  const previewSrc = materialTextureSrc(mat.id);
+  const hasOverride = !!mat.texture && store.textureOverrides.has(mat.texture);
+
   return h('div', {}, [
-    h('h3', { class: 'ed-h3' }, [`材质 ${mat.id}`]),
+    h('div', { class: 'ed-row ed-row-between' }, [
+      h('h3', { class: 'ed-h3', style: 'margin:0' }, [`材质 ${mat.id}`]),
+      h('div', { class: 'ed-row', style: 'margin:0' }, [
+        button('新建副本', () => openNewMaterialModal(mat.id)),
+        button(
+          '删除',
+          () => {
+            const r = store.deleteMaterial(mat.id);
+            if (!r.ok) {
+              store.message = r.reason ?? '删除失败';
+              store.touch();
+            }
+          },
+          'danger',
+        ),
+      ]),
+    ]),
+    h('p', { class: 'ed-help' }, [
+      `被引用：地图物体 ${usage.objects} · 预制件部件 ${usage.prefabParts} · 预制件实例 ${usage.instances}`,
+    ]),
+
+    // ---- 外观 ----
+    h('h3', { class: 'ed-h3' }, ['外观']),
+    field('名称', textInput(mat.name, (v) => upd({ name: v }))),
     h('div', { class: 'ed-row' }, [
       h('span', { class: 'ed-swatch big', style: `background:${mat.colorHex}` }),
-      colorInput(mat.colorHex, (v) => upd({ colorHex: v, color: parseInt(v.slice(1), 16) })),
+      colorInput(mat.colorHex, (v) => upd({ color: v })),
+      h('span', { class: 'ed-help', style: 'margin:0' }, ['兜底颜色（无贴图时的填充色）']),
     ]),
-    field('名称', textInput(mat.name, (v) => upd({ name: v }))),
-    h('div', { class: 'ed-grid2' }, [
-      field('耐受度', numberInput(mat.durability, (v) => upd({ durability: Math.max(0, v) }))),
-      field('反弹', numberInput(mat.bounce, (v) => upd({ bounce: v }), 0.01)),
+
+    // ---- 贴图 ----
+    h('h3', { class: 'ed-h3' }, ['贴图']),
+    previewSrc
+      ? h('img', {
+          class: 'ed-tex-preview',
+          src: previewSrc,
+          alt: '贴图预览',
+          onerror: (e: Event) => {
+            (e.target as HTMLImageElement).style.display = 'none';
+          },
+        })
+      : h('div', { class: 'ed-tex-empty' }, ['未设置贴图（使用纯色）']),
+    field(
+      '路径 / dataURL',
+      textInput(mat.texture ?? '', (v) => {
+        const next = v.trim();
+        upd({ texture: next === '' ? undefined : next });
+      }),
+    ),
+    field(
+      '铺图模式',
+      selectInput(
+        [
+          { value: 'tile', label: 'tile 平铺（可无缝重复）' },
+          { value: 'stretch', label: 'stretch 拉伸铺满' },
+        ],
+        mat.textureMode,
+        (v) => upd({ textureMode: v }),
+      ),
+    ),
+    h('div', { class: 'ed-row' }, [
+      button('选择贴图文件…', () => pickTextureFile(mat.id)),
+      button('下载贴图', () => downloadMaterialTexture(mat.id)),
+      button('内嵌 base64', () => embedTexture(mat.id)),
+      button('清除', () => {
+        if (mat.texture) store.setTextureOverride(mat.texture, null);
+        upd({ texture: undefined });
+      }),
     ]),
+    hasOverride
+      ? h('p', { class: 'ed-help warn' }, [
+          '当前是本地预览：点「下载贴图」把文件放到 public/textures/ 后，游戏里才会显示。',
+        ])
+      : null,
+    h('p', { class: 'ed-help' }, ['贴图目前只作用于矩形物体；圆形/多边形仍用纯色。']),
+
+    // ---- 物理 ----
+    h('h3', { class: 'ed-h3' }, ['物理']),
+    h('label', { class: 'ed-check' }, [checkbox(mat.fixed, (v) => upd({ fixed: v })), '默认固定（静态，不推不落）']),
     h('div', { class: 'ed-grid2' }, [
       field('密度', numberInput(mat.density, (v) => upd({ density: Math.max(0.0001, v) }), 0.001)),
-      field('动摩擦', numberInput(mat.friction, (v) => upd({ friction: v }), 0.01)),
+      field('反弹', numberInput(mat.bounce, (v) => upd({ bounce: clamp01(v) }), 0.01)),
     ]),
     h('div', { class: 'ed-grid2' }, [
-      field('静摩擦', numberInput(mat.frictionStatic, (v) => upd({ frictionStatic: v }), 0.01)),
-      h('div', {}, []),
+      field('动摩擦', numberInput(mat.friction, (v) => upd({ friction: clamp01(v) }), 0.01)),
+      field('静摩擦', numberInput(mat.frictionStatic, (v) => upd({ frictionStatic: clamp01(v) }), 0.01)),
     ]),
-    h('label', { class: 'ed-check' }, [checkbox(mat.destructible, (v) => upd({ destructible: v })), '可破坏']),
-    h('label', { class: 'ed-check' }, [checkbox(mat.fixed, (v) => upd({ fixed: v })), '默认固定']),
-    h('p', { class: 'ed-help' }, [
-      '密度决定质量：玩家约 6.9。箱子约 6、木板约 10 时才推得动/压得动。',
+    h('p', { class: 'ed-help' }, ['密度决定质量：玩家≈ 6.9；80×80 纸箱≈ 6.4；300×16 木板≈ 9.6。']),
+
+    // ---- 破坏 ----
+    h('h3', { class: 'ed-h3' }, ['破坏']),
+    h('label', { class: 'ed-check' }, [checkbox(mat.destructible, (v) => upd({ destructible: v })), '可被破坏']),
+    h('div', { class: 'ed-grid2' }, [
+      field('耐受度', numberInput(mat.durability, (v) => upd({ durability: Math.max(0, v) }))),
+      field('受伤倍率', numberInput(mat.damageMultiplier, (v) => upd({ damageMultiplier: Math.max(0, v) }), 0.1)),
     ]),
+
+    // ---- 子弹 ----
+    h('h3', { class: 'ed-h3' }, ['子弹交互']),
+    h('label', { class: 'ed-check' }, [checkbox(mat.bulletBounce, (v) => upd({ bulletBounce: v })), '子弹击中会反弹']),
+    h('label', { class: 'ed-check' }, [checkbox(mat.bulletPierce, (v) => upd({ bulletPierce: v })), '子弹可穿透']),
+
     h('div', { class: 'ed-row' }, [button('▶ 用此材质测试', () => startPlayTest(), 'primary')]),
   ]);
+}
+
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v));
+}
+
+/** 材质贴图的可显示地址（优先本地预览覆盖） */
+function materialTextureSrc(materialId: string): string {
+  const mat = MATERIALS[materialId];
+  if (!mat?.texture) return '';
+  return editorStore.textureOverrides.get(mat.texture) ?? textureUrl(mat.texture);
+}
+
+function sanitizeFileName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9._-]/g, '-');
+}
+
+/** 选本地图片 → 绑定为 textures/<文件名>，并在编辑器内即时预览 */
+function pickTextureFile(materialId: string): void {
+  const input = h('input', { type: 'file', accept: 'image/*' }) as HTMLInputElement;
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result ?? '');
+      if (!dataUrl) return;
+      const ref = `textures/${sanitizeFileName(file.name)}`;
+      editorStore.setTextureOverride(ref, dataUrl);
+      editorStore.updateMaterial(materialId, { texture: ref });
+      editorStore.message = `已绑定贴图 ${ref} — 点「下载贴图」把文件放进 public/textures/`;
+    };
+    reader.readAsDataURL(file);
+  });
+  input.click();
+}
+
+/** 导出贴图文件（供放入 public/textures/） */
+function downloadMaterialTexture(materialId: string): void {
+  const mat = MATERIALS[materialId];
+  if (!mat?.texture) {
+    editorStore.message = '该材质还没有贴图';
+    editorStore.touch();
+    return;
+  }
+  const src = editorStore.textureOverrides.get(mat.texture) ?? (mat.texture.startsWith('data:') ? mat.texture : null);
+  if (!src) {
+    editorStore.message = '贴图已是 public 下的文件，无需下载';
+    editorStore.touch();
+    return;
+  }
+  const fileName = mat.texture.startsWith('data:') ? `${materialId}.png` : (mat.texture.split('/').pop() ?? `${materialId}.png`);
+  const a = h('a', { href: src, download: fileName });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  editorStore.message = `已下载 ${fileName}，放到 public/textures/ 下即可`;
+  editorStore.touch();
+}
+
+/** 把本地预览的贴图内嵌成 base64（JSON 自包含，方便分享/单文件） */
+function embedTexture(materialId: string): void {
+  const mat = MATERIALS[materialId];
+  if (!mat?.texture) {
+    editorStore.message = '该材质还没有贴图';
+    editorStore.touch();
+    return;
+  }
+  const override = editorStore.textureOverrides.get(mat.texture);
+  if (!override) {
+    editorStore.message = '只有「选择贴图文件」选入的图片才能内嵌；已在 public 下的文件无需内嵌';
+    editorStore.touch();
+    return;
+  }
+  editorStore.setTextureOverride(mat.texture, null);
+  editorStore.updateMaterial(materialId, { texture: override });
+  editorStore.message = '已把贴图内嵌为 base64（materials.json 会变大）';
+}
+
+/** 新增材质弹窗 */
+function openNewMaterialModal(templateId?: string): void {
+  const idInput = h('input', { class: 'ed-input' }) as HTMLInputElement;
+  idInput.value = templateId ? `${templateId}_copy` : '';
+  idInput.placeholder = 'material_id（字母开头）';
+  const nameInput = h('input', { class: 'ed-input' }) as HTMLInputElement;
+  nameInput.value = templateId && MATERIALS[templateId] ? `${MATERIALS[templateId].name}副本` : '新材质';
+  const templateSelect = h('select', { class: 'ed-input' }, [
+    h('option', { value: '' }, ['从默认模板开始']),
+    ...materialIds().map((id) => h('option', { value: id, selected: id === templateId }, [MATERIALS[id].name])),
+  ]) as HTMLSelectElement;
+  templateSelect.value = templateId ?? '';
+  const errEl = h('div', { class: 'ed-help danger' });
+
+  const overlay = h('div', { class: 'ed-modal-overlay' }, [
+    h('div', { class: 'ed-modal narrow' }, [
+      h('h3', {}, ['新增材质']),
+      field('id', idInput),
+      field('名称', nameInput),
+      field('模板', templateSelect),
+      errEl,
+      h('div', { class: 'ed-modal-actions' }, [
+        button(
+          '创建',
+          () => {
+            const res = editorStore.addMaterial(idInput.value, nameInput.value, templateSelect.value || undefined);
+            if (!res.ok) {
+              errEl.textContent = res.reason ?? '创建失败';
+              return;
+            }
+            overlay.remove();
+          },
+          'primary',
+        ),
+        button('取消', () => overlay.remove()),
+      ]),
+    ]),
+  ]);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+  document.body.append(overlay);
+  idInput.focus();
 }
 
 function issuesPanel(title: string, issues: Issue[]): HTMLElement {

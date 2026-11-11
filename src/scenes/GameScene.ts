@@ -8,6 +8,8 @@ import { getDefaultMap, getPrefabTable } from '../map/MapRegistry';
 import type { MapData } from '../map/MapFormat';
 import { buildMap } from '../map/MapLoader';
 import type { MapObjectRuntime } from '../map/MapLoader';
+import { MATERIALS } from '../config/materials';
+import { preloadMaterialTextures } from '../map/TextureLoader';
 
 const PLAYER_COLORS = [0xe74c3c, 0x3498db];
 /** 镜头缩放（固定，聚焦单角色时画面清晰） */
@@ -57,6 +59,14 @@ export class GameScene extends Phaser.Scene {
     this.players = [];
     this.mapObjects = [];
     this.oneWayBodies = [];
+  }
+
+  /** 预加载材质贴图（纹理跨场景共享，因此每个场景启动时排一次队即可） */
+  preload(): void {
+    preloadMaterialTextures(
+      this,
+      Object.values(MATERIALS).map((m) => m.texture),
+    );
   }
 
   create(): void {

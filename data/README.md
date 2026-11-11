@@ -46,19 +46,40 @@ npm run validate
   "version": 1,
   "materials": {
     "wood": {
-      "name": "木头",          // 显示名
-      "durability": 60,        // 耐受度（0 = 不可破坏）
-      "destructible": true,    // 是否可被破坏
-      "fixed": false,          // 默认是否固定位置
-      "bounce": 0.1,           // 反弹系数 0~1
-      "density": 0.002,        // 密度（见上面的质量尺度）
-      "friction": 0.4,         // 动摩擦 0~1
-      "frictionStatic": 0.8,   // 静摩擦 0~1
-      "color": "#8b5a2b"       // hex 颜色（不是数字！）
+      "name": "木头",                 // 显示名
+      "color": "#8b5a2b",             // hex 颜色（不是数字！无贴图时的填充色）
+      "texture": "textures/wood.png", // 可选：public 下相对路径，或 data: 内联图
+      "textureMode": "tile",          // 可选：tile(平铺) | stretch(拉伸)，默认 tile
+
+      // ---- 物理 ----
+      "fixed": false,                 // 默认是否固定位置
+      "density": 0.002,               // 密度（见下面的质量尺度）
+      "friction": 0.4,                // 动摩擦 0~1
+      "frictionStatic": 0.8,          // 静摩擦 0~1
+      "bounce": 0.1,                  // 物理反弹系数 0~1
+
+      // ---- 破坏 ----
+      "destructible": true,           // 是否可被破坏
+      "durability": 60,               // 耐受度（HP，0 = 不可破坏）
+      "damageMultiplier": 1,          // 受伤倍率（>1 更脆）
+
+      // ---- 子弹交互（M3 武器系统使用）----
+      "bulletBounce": false,          // 子弹击中是否反弹（金属 = true）
+      "bulletPierce": false           // 子弹是否可穿透（纸箱 = true）
     }
   }
 }
 ```
+
+**贴图说明**
+
+- 路径相对 `public/`：`"textures/wood.png"` → 运行时 `/textures/wood.png`
+- 也可以写 `data:image/png;base64,...`（"内嵌到 JSON"，自包含但会撑大文件；>200KB 会有警告）
+- **贴图只作用于矩形物体**；圆形/多边形仍用 `color` 纯色
+- 贴图缺失时自动回退纯色，不会报错；`npm run validate` 会提示文件不存在
+- 占位贴图可重新生成：`node tools/gen-textures.mjs`
+
+**占位贴图**：`public/textures/{wood,metal,cardboard,ice,ground,wall}.png`（64×64，可平铺）
 
 ### maps/*.json
 
@@ -109,3 +130,17 @@ npm run validate
 
 1. **手写 / AI 编辑**：直接改 JSON → `npm run validate` → 刷新游戏
 2. **可视化编辑**：`npm run dev` 后打开 <http://localhost:5173/editor.html>
+
+## 在编辑器里管理材质
+
+材质 Tab 支持：
+
+- **新增材质**：左下「+ 新增材质」，可选择从某个现有材质复制（作为模板）
+- **删除材质**：被地图物体/预制件引用时会拒绝删除，并列出引用数量
+- **完整属性编辑**：外观（名称/颜色/贴图/铺图模式）、物理（固定/密度/摩擦/静摩擦/反弹）、
+  破坏（可破坏/耐受度/受伤倍率）、子弹交互（反弹/穿透）
+- **贴图工作流**：
+  1. 点「选择贴图文件…」选本地图片 → 编辑器内立即预览（此时还没落盘）
+  2. 点「下载贴图」把文件保存到 `public/textures/`（游戏里才会显示）
+  3. 或者点「内嵌 base64」直接把图写进 materials.json（单文件自包含）
+- **测试**：右下「▶ 用此材质测试」会在材质工作台（矩形/箱子/球/六边形）里试手感

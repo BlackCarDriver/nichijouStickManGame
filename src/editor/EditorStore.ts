@@ -19,11 +19,17 @@ import { getDefaultMap, getPrefabTable, listPrefabs } from '../map/MapRegistry';
 import { expandPrefab } from '../map/PrefabExpand';
 import {
   MATERIALS,
+  addMaterial as addMaterialToTable,
+  defaultMaterialJson,
   materialIds,
+  materialToJson,
+  patchMaterial,
+  removeMaterial as removeMaterialFromTable,
   serializeMaterials,
   replaceMaterials,
 } from '../config/materials';
-import type { MaterialConfig, MaterialsFile } from '../config/materials';
+import type { MaterialConfig, MaterialJson, MaterialsFile } from '../config/materials';
+import { forgetTextureFailures } from '../map/TextureLoader';
 import {
   makeContext,
   validateMap,
@@ -92,6 +98,12 @@ export class EditorStore {
   ruler: { from: Vec; to: Vec } | null = null;
   /** 状态栏消息 */
   message = '';
+  /**
+   * 编辑器内的贴图预览覆盖（贴图引用 → data URL）。
+   * 用于：选了本地图片但还没落到 public/textures 时，编辑器里也能立即看到效果。
+   * 不写入 JSON、不进 localStorage。
+   */
+  readonly textureOverrides = new Map<string, string>();
 
   private history: string[] = [];
   private index = -1;
@@ -478,11 +490,66 @@ export class EditorStore {
   }
 
   // ---------------- 材质编辑 ----------------
-  updateMaterial(id: string, patch: Partial<MaterialConfig>): void {
-    const mat = MATERIALS[id];
-    if (!mat) return;
-    Object.assign(mat, patch);
+  updateMaterial(id: string, patch: Partial<MaterialJson>): void {
+    if (!patchMaterial(id, patch)) return;
+    // 贴图变了就清掉失败缓存，允许重新尝试加载
+    if ('texture' in patch) forgetTextureFailures();
     this.commit();
+  }
+
+  /** 新增材质（id 重复则失败） */
+  addMaterial(id: string, name: string, templateId?: string): { ok: boolean; reason?: string } {
+    const clean = id.trim();
+    if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(clean)) {
+      return { ok: false, reason: 'id 只能包含字母/数字/下划线，且以字母开头' };
+    }
+    if (MATERIALS[clean]) return { ok: false, reason: `材质 "${clean}" 已存在` };
+    const base = templateId && MATERIALS[templateId] ? materialToJson(MATERIALS[templateId]) : defaultMaterialJson(clean);
+    addMaterialToTable(clean, { ...base, name: name.trim() || clean });
+    this.activeMaterialId = clean;
+    this.message = `已新增材质 ${clean}`;
+    this.commit();
+    return { ok: true };
+  }
+
+  /** 材质被多少地方引用 */
+  materialUsage(id: string): { objects: number; prefabParts: number; instances: number } {
+    const objects = (this.map.objects ?? []).filter((o) => o.material === id).length;
+    const prefabParts = this.prefabDraft.parts.filter((p) => p.material === id).length;
+    const instances = (this.map.prefabs ?? []).filter((inst) => {
+      const prefab = this.prefabTable()[inst.ref];
+      return !!prefab && prefab.parts.some((p) => p.material === id);
+    }).length;
+    return { objects, prefabParts, instances };
+  }
+
+  /** 删除材质（被引用时拒绝，避免地图出现空洞） */
+  deleteMaterial(id: string): { ok: boolean; reason?: string } {
+    if (materialIds().length <= 1) return { ok: false, reason: '至少要保留一个材质' };
+    const usage = this.materialUsage(id);
+    const used = usage.objects + usage.prefabParts + usage.instances;
+    if (used > 0) {
+      return {
+        ok: false,
+        reason: `该材质仍被引用（地图物体 ${usage.objects}、预制件部件 ${usage.prefabParts}、预制件实例 ${usage.instances}），请先改掉引用`,
+      };
+    }
+    removeMaterialFromTable(id);
+    if (this.activeMaterialId === id) this.activeMaterialId = materialIds()[0];
+    this.message = `已删除材质 ${id}`;
+    this.commit();
+    return { ok: true };
+  }
+
+  /** 记录编辑器内的贴图预览覆盖 */
+  setTextureOverride(ref: string, dataUrl: string | null): void {
+    if (dataUrl) this.textureOverrides.set(ref, dataUrl);
+    else this.textureOverrides.delete(ref);
+    forgetTextureFailures();
+  }
+
+  materialConfig(id: string): MaterialConfig | undefined {
+    return MATERIALS[id];
   }
 
   // ---------------- 渲染数据 ----------------

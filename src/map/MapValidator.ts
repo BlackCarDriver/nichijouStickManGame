@@ -292,7 +292,10 @@ export function validatePrefab(prefab: unknown, ctx: ValidateContext): Issue[] {
 }
 
 /** 校验 materials.json */
-export function validateMaterialsFile(file: unknown): Issue[] {
+export function validateMaterialsFile(
+  file: unknown,
+  opts: { textureExists?: (path: string) => boolean } = {},
+): Issue[] {
   const issues: Issue[] = [];
   if (!file || typeof file !== 'object') return [err('materials', '不是对象')];
   const f = file as Partial<MaterialsFile>;
@@ -333,6 +336,33 @@ export function validateMaterialsFile(file: unknown): Issue[] {
     }
     if (typeof def.color !== 'string' || !/^#?[0-9a-fA-F]{6}$/.test(def.color)) {
       issues.push(err(`${path}.color`, '颜色必须是 hex 字符串，如 "#8b5a2b"'));
+    }
+
+    // ---- 贴图 ----
+    if (def.texture !== undefined) {
+      if (typeof def.texture !== 'string' || def.texture.trim() === '') {
+        issues.push(err(`${path}.texture`, '贴图必须是非空字符串（路径或 data: URL）'));
+      } else if (def.texture.startsWith('data:')) {
+        if (def.texture.length > 200_000) {
+          issues.push(warn(`${path}.texture`, `内联贴图约 ${Math.round(def.texture.length / 1024)}KB，会明显撑大 JSON，建议改用文件路径`));
+        }
+      } else if (opts.textureExists && !opts.textureExists(def.texture)) {
+        issues.push(err(`${path}.texture`, `贴图文件不存在于 public/ 下：${def.texture}`));
+      }
+    }
+    if (def.textureMode !== undefined && def.textureMode !== 'tile' && def.textureMode !== 'stretch') {
+      issues.push(err(`${path}.textureMode`, '只能是 "tile" 或 "stretch"'));
+    }
+    if (def.damageMultiplier !== undefined) {
+      if (!isFiniteNumber(def.damageMultiplier) || def.damageMultiplier < 0) {
+        issues.push(err(`${path}.damageMultiplier`, '受伤倍率必须 >= 0 的数字'));
+      }
+    }
+    for (const key of ['bulletBounce', 'bulletPierce', 'destructible', 'fixed'] as const) {
+      const v = def[key];
+      if (v !== undefined && typeof v !== 'boolean') {
+        issues.push(err(`${path}.${key}`, '必须是 true / false'));
+      }
     }
   }
   return issues;

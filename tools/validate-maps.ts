@@ -52,7 +52,12 @@ function main(): void {
     errorCount++;
   } else {
     const raw = readJson<MaterialsFile>(materialsPath);
-    errorCount += printIssues('data/materials.json', validateMaterialsFile(raw));
+    // 贴图文件是否真的存在于 public/ 下（浏览器校验做不到，CLI 可以）
+    const textureExists = (rel: string): boolean => {
+      const clean = rel.replace(/^\/+/, '');
+      return existsSync(join(ROOT, 'public', clean)) || existsSync(join(ROOT, clean));
+    };
+    errorCount += printIssues('data/materials.json', validateMaterialsFile(raw, { textureExists }));
     materialIds = Object.keys(raw.materials ?? {});
   }
 
