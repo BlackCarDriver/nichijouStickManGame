@@ -61,6 +61,13 @@ interface SavedState {
   materials: MaterialsFile;
 }
 
+/** 预制件工作台布局（场景与 store 共用，保证坐标一致） */
+export const PREFAB_RIG = {
+  width: 1600,
+  height: 900,
+  groundY: 700,
+} as const;
+
 export function emptyPrefabDraft(): PrefabData {
   return {
     version: PREFAB_FORMAT_VERSION,
@@ -552,6 +559,62 @@ export class EditorStore {
     return MATERIALS[id];
   }
 
+  // ---------------- 预制件工作台几何 ----------------
+  /** 工作台原点（预制件局部坐标 0,0 对应的世界坐标） */
+  prefabRigOrigin(): Vec {
+    return { x: PREFAB_RIG.width / 2, y: PREFAB_RIG.groundY - 120 };
+  }
+
+  /** 世界坐标 → 预制件局部坐标 */
+  worldToPartLocal(world: Vec): Vec {
+    const o = this.prefabRigOrigin();
+    return { x: world.x - o.x, y: world.y - o.y };
+  }
+
+  /** 命中测试预制件部件（后添加的在上层） */
+  hitTestPart(world: Vec): number | null {
+    const local = this.worldToPartLocal(world);
+    const parts = this.prefabDraft.parts;
+    for (let i = parts.length - 1; i >= 0; i--) {
+      if (pointInObject(parts[i], local)) return i;
+    }
+    return null;
+  }
+
+  /** 部件在世界中的包围盒 */
+  partWorldBounds(index: number): Bounds | null {
+    const part = this.prefabDraft.parts[index];
+    if (!part) return null;
+    const b = objectBounds(part);
+    const o = this.prefabRigOrigin();
+    return { minX: b.minX + o.x, minY: b.minY + o.y, maxX: b.maxX + o.x, maxY: b.maxY + o.y };
+  }
+
+  /** 部件在世界中的中心（旋转枢轴） */
+  partWorldCenter(index: number): Vec | null {
+    const part = this.prefabDraft.parts[index];
+    if (!part) return null;
+    const c = objectCenter(part);
+    const o = this.prefabRigOrigin();
+    return { x: c.x + o.x, y: c.y + o.y };
+  }
+
+  /** 当前选中的部件索引（selection 里形如 "part:3"） */
+  selectedPartIndex(): number | null {
+    const sel = this.selection.find((s) => s.startsWith('part:'));
+    if (!sel) return null;
+    const i = Number(sel.slice(5));
+    return Number.isInteger(i) && i >= 0 && i < this.prefabDraft.parts.length ? i : null;
+  }
+
+  /** 拖动中的即时修改（不记历史，松手时 commit） */
+  patchPartLive(index: number, patch: Record<string, unknown>): void {
+    const part = this.prefabDraft.parts[index];
+    if (!part) return;
+    Object.assign(part as unknown as Record<string, unknown>, patch);
+    this.touch();
+  }
+
   // ---------------- 渲染数据 ----------------
   /** 当前 Tab 下编辑器画布应渲染的地图 */
   renderMap(): MapData {
@@ -562,13 +625,14 @@ export class EditorStore {
 
   /** 预制件工作台：地面 + 预制件展开 */
   private prefabRig(): MapData {
-    const W = 1600;
-    const H = 900;
-    const groundY = 700;
+    const W = PREFAB_RIG.width;
+    const H = PREFAB_RIG.height;
+    const groundY = PREFAB_RIG.groundY;
+    const origin = this.prefabRigOrigin();
     const parts = expandPrefab(this.prefabDraft, {
       ref: this.prefabDraft.id,
-      x: W / 2,
-      y: groundY - 120,
+      x: origin.x,
+      y: origin.y,
     });
     return {
       version: MAP_FORMAT_VERSION,

@@ -18,6 +18,8 @@ export interface MaterialJson {
   name: string;
   /** 颜色（hex 字符串）。无贴图时作为填充色；有贴图时作为编辑器色板/兜底色 */
   color: string;
+  /** 不透明度 0~1（1 = 完全不透明）。影响渲染，不影响物理 */
+  opacity?: number;
   /** 贴图：public 下的相对路径（如 "textures/wood.png"）或 data: 内联图像 */
   texture?: string;
   textureMode?: TextureMode;
@@ -49,6 +51,7 @@ export interface MaterialsFile {
 /** 运行时材质（解析后的形态） */
 export interface MaterialConfig extends Omit<MaterialJson, 'color' | 'textureMode' | 'damageMultiplier' | 'bulletBounce' | 'bulletPierce'> {
   id: string;
+  opacity: number;
   /** 解析后的颜色（Phaser number） */
   color: number;
   /** 原始 hex 字符串（编辑器显示/导出用） */
@@ -79,6 +82,7 @@ export function defaultMaterialJson(id: string, base: Partial<MaterialJson> = {}
   return {
     name: id,
     color: '#8b5a2b',
+    opacity: 1,
     textureMode: 'tile',
     fixed: false,
     density: 0.002,
@@ -101,6 +105,7 @@ export function toMaterialConfig(id: string, def: MaterialJson): MaterialConfig 
     name: def.name ?? id,
     color: parseColor(def.color),
     colorHex: def.color ?? '#ffffff',
+    opacity: def.opacity ?? 1,
     texture: def.texture,
     textureMode: def.textureMode === 'stretch' ? 'stretch' : 'tile',
     fixed: def.fixed ?? false,
@@ -121,6 +126,7 @@ export function materialToJson(m: MaterialConfig): MaterialJson {
   return {
     name: m.name,
     color: m.colorHex,
+    opacity: m.opacity,
     texture: m.texture,
     textureMode: m.textureMode,
     fixed: m.fixed,

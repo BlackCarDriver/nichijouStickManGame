@@ -350,6 +350,13 @@ export function validateMaterialsFile(
         issues.push(err(`${path}.texture`, `贴图文件不存在于 public/ 下：${def.texture}`));
       }
     }
+    if (def.opacity !== undefined) {
+      if (!isFiniteNumber(def.opacity)) {
+        issues.push(err(`${path}.opacity`, '透明度必须是数字'));
+      } else if (def.opacity < 0 || def.opacity > 1) {
+        issues.push(warn(`${path}.opacity`, `${def.opacity} 超出范围 0~1`));
+      }
+    }
     if (def.textureMode !== undefined && def.textureMode !== 'tile' && def.textureMode !== 'stretch') {
       issues.push(err(`${path}.textureMode`, '只能是 "tile" 或 "stretch"'));
     }

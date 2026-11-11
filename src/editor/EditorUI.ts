@@ -388,6 +388,9 @@ function renderLeft(): void {
         button('+ 圆形', () => store.addPart({ type: 'circle', x: 0, y: 0, radius: 30, material: store.activeMaterialId })),
         button('+ 多边形', () => store.addPart({ type: 'polygon', x: 0, y: 0, sides: 3, radius: 40, material: store.activeMaterialId })),
       ]),
+      h('p', { class: 'ed-help' }, [
+        '画布操作：点部件=选中 · 拖动=移动 · 右下角绿点=拖拽改大小 · 上方蓝点=拖拽旋转（按住 Shift 吸附 15°）。',
+      ]),
     );
     return;
   }
@@ -456,7 +459,8 @@ function renderRight(): void {
         h('h3', { class: 'ed-h3' }, ['预制件说明']),
         h('p', { class: 'ed-help' }, [
           '部件坐标是相对预制件中心的局部坐标。放置到地图时由锚点（中心）定位。',
-          '左侧可载入已有预制件、增删部件；选中部件的属性在此编辑。',
+          '左侧可载入已有预制件、增删部件；选中部件后可在此精确填写属性。',
+          '画布左侧的灰色火柴人 ≈ 111px 高，用来对比预制件实际大小。',
         ]),
       );
     }
@@ -676,14 +680,29 @@ function materialForm(): HTMLElement {
   if (!mat) return h('div', {}, ['未选择材质']);
   const upd = (patch: Record<string, unknown>) => store.updateMaterial(mat.id, patch as never);
   const usage = store.materialUsage(mat.id);
-  const previewSrc = materialTextureSrc(mat.id);
-  const hasOverride = !!mat.texture && store.textureOverrides.has(mat.texture);
+
+  // 透明度滑杆（带实时数值显示）
+  const opacityVal = h('span', { class: 'ed-slider-val' }, [mat.opacity.toFixed(2)]);
+  const opacitySlider = h('input', {
+    class: 'ed-slider',
+    type: 'range',
+    min: '0',
+    max: '1',
+    step: '0.05',
+    value: String(mat.opacity),
+  }) as HTMLInputElement;
+  opacitySlider.addEventListener('input', () => {
+    const v = Number(opacitySlider.value);
+    opacityVal.textContent = v.toFixed(2);
+    upd({ opacity: v });
+  });
 
   return h('div', {}, [
     h('div', { class: 'ed-row ed-row-between' }, [
       h('h3', { class: 'ed-h3', style: 'margin:0' }, [`材质 ${mat.id}`]),
       h('div', { class: 'ed-row', style: 'margin:0' }, [
         button('新建副本', () => openNewMaterialModal(mat.id)),
+        button('▶ 测试', () => startPlayTest(), 'primary'),
         button(
           '删除',
           () => {
@@ -709,9 +728,52 @@ function materialForm(): HTMLElement {
       colorInput(mat.colorHex, (v) => upd({ color: v })),
       h('span', { class: 'ed-help', style: 'margin:0' }, ['兜底颜色（无贴图时的填充色）']),
     ]),
+    h('div', { class: 'ed-row' }, [
+      h('span', { class: 'ed-field-label' }, ['透明度']),
+      opacitySlider,
+      opacityVal,
+    ]),
 
-    // ---- 贴图 ----
+    // ---- 物理 ----
+    h('h3', { class: 'ed-h3' }, ['物理']),
+    h('label', { class: 'ed-check' }, [checkbox(mat.fixed, (v) => upd({ fixed: v })), '默认固定（静态，不推不落）']),
+    h('div', { class: 'ed-grid2' }, [
+      field('密度', numberInput(mat.density, (v) => upd({ density: Math.max(0.0001, v) }), 0.001)),
+      field('反弹', numberInput(mat.bounce, (v) => upd({ bounce: clamp01(v) }), 0.01)),
+    ]),
+    h('div', { class: 'ed-grid2' }, [
+      field('动摩擦', numberInput(mat.friction, (v) => upd({ friction: clamp01(v) }), 0.01)),
+      field('静摩擦', numberInput(mat.frictionStatic, (v) => upd({ frictionStatic: clamp01(v) }), 0.01)),
+    ]),
+    h('p', { class: 'ed-help' }, ['密度决定质量：玩家≈ 6.9；80×80 纸箱≈ 6.4；300×16 木板≈ 9.6。']),
+
+    // ---- 破坏 ----
+    h('h3', { class: 'ed-h3' }, ['破坏']),
+    h('label', { class: 'ed-check' }, [checkbox(mat.destructible, (v) => upd({ destructible: v })), '可被破坏']),
+    h('div', { class: 'ed-grid2' }, [
+      field('耐受度', numberInput(mat.durability, (v) => upd({ durability: Math.max(0, v) }))),
+      field('受伤倍率', numberInput(mat.damageMultiplier, (v) => upd({ damageMultiplier: Math.max(0, v) }), 0.1)),
+    ]),
+
+    // ---- 子弹 ----
+    h('h3', { class: 'ed-h3' }, ['子弹交互']),
+    h('label', { class: 'ed-check' }, [checkbox(mat.bulletBounce, (v) => upd({ bulletBounce: v })), '子弹击中会反弹']),
+    h('label', { class: 'ed-check' }, [checkbox(mat.bulletPierce, (v) => upd({ bulletPierce: v })), '子弹可穿透']),
+
+    // ---- 贴图（放在最底部）----
     h('h3', { class: 'ed-h3' }, ['贴图']),
+    ...textureSection(mat.id, upd),
+  ]);
+}
+
+/** 材质贴图区（放在表单最底部） */
+function textureSection(materialId: string, upd: (patch: Record<string, unknown>) => void): Child[] {
+  const store = editorStore;
+  const mat = MATERIALS[materialId];
+  const previewSrc = materialTextureSrc(materialId);
+  const hasOverride = !!mat.texture && store.textureOverrides.has(mat.texture);
+
+  return [
     previewSrc
       ? h('img', {
           class: 'ed-tex-preview',
@@ -741,9 +803,9 @@ function materialForm(): HTMLElement {
       ),
     ),
     h('div', { class: 'ed-row' }, [
-      button('选择贴图文件…', () => pickTextureFile(mat.id)),
-      button('下载贴图', () => downloadMaterialTexture(mat.id)),
-      button('内嵌 base64', () => embedTexture(mat.id)),
+      button('选择贴图文件…', () => pickTextureFile(materialId)),
+      button('下载贴图', () => downloadMaterialTexture(materialId)),
+      button('内嵌 base64', () => embedTexture(materialId)),
       button('清除', () => {
         if (mat.texture) store.setTextureOverride(mat.texture, null);
         upd({ texture: undefined });
@@ -755,35 +817,7 @@ function materialForm(): HTMLElement {
         ])
       : null,
     h('p', { class: 'ed-help' }, ['贴图目前只作用于矩形物体；圆形/多边形仍用纯色。']),
-
-    // ---- 物理 ----
-    h('h3', { class: 'ed-h3' }, ['物理']),
-    h('label', { class: 'ed-check' }, [checkbox(mat.fixed, (v) => upd({ fixed: v })), '默认固定（静态，不推不落）']),
-    h('div', { class: 'ed-grid2' }, [
-      field('密度', numberInput(mat.density, (v) => upd({ density: Math.max(0.0001, v) }), 0.001)),
-      field('反弹', numberInput(mat.bounce, (v) => upd({ bounce: clamp01(v) }), 0.01)),
-    ]),
-    h('div', { class: 'ed-grid2' }, [
-      field('动摩擦', numberInput(mat.friction, (v) => upd({ friction: clamp01(v) }), 0.01)),
-      field('静摩擦', numberInput(mat.frictionStatic, (v) => upd({ frictionStatic: clamp01(v) }), 0.01)),
-    ]),
-    h('p', { class: 'ed-help' }, ['密度决定质量：玩家≈ 6.9；80×80 纸箱≈ 6.4；300×16 木板≈ 9.6。']),
-
-    // ---- 破坏 ----
-    h('h3', { class: 'ed-h3' }, ['破坏']),
-    h('label', { class: 'ed-check' }, [checkbox(mat.destructible, (v) => upd({ destructible: v })), '可被破坏']),
-    h('div', { class: 'ed-grid2' }, [
-      field('耐受度', numberInput(mat.durability, (v) => upd({ durability: Math.max(0, v) }))),
-      field('受伤倍率', numberInput(mat.damageMultiplier, (v) => upd({ damageMultiplier: Math.max(0, v) }), 0.1)),
-    ]),
-
-    // ---- 子弹 ----
-    h('h3', { class: 'ed-h3' }, ['子弹交互']),
-    h('label', { class: 'ed-check' }, [checkbox(mat.bulletBounce, (v) => upd({ bulletBounce: v })), '子弹击中会反弹']),
-    h('label', { class: 'ed-check' }, [checkbox(mat.bulletPierce, (v) => upd({ bulletPierce: v })), '子弹可穿透']),
-
-    h('div', { class: 'ed-row' }, [button('▶ 用此材质测试', () => startPlayTest(), 'primary')]),
-  ]);
+  ];
 }
 
 function clamp01(v: number): number {

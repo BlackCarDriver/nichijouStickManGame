@@ -139,6 +139,8 @@ function createObject(
 ): MapObjectRuntime | null {
   const layer = obj.layer ?? 'solid';
   const color = obj.color ? parseHex(obj.color, mat.color) : mat.color;
+  /** 材质不透明度（<1 时半透明显示） */
+  const alpha = mat.opacity ?? 1;
   const angleRad = obj.angle ? Phaser.Math.DegToRad(obj.angle) : 0;
   const oneWay = obj.oneWay === true;
 
@@ -149,9 +151,11 @@ function createObject(
       visual = createRectVisual(scene, obj.x + obj.w / 2, obj.y + obj.h / 2, obj.w, obj.h, mat, color, 0.4);
       // decor 没有物理体，旋转需手动应用
       if (angleRad !== 0) (visual as unknown as Phaser.GameObjects.Components.Transform).setRotation(angleRad);
+      applyAlpha(visual, alpha);
     } else if (obj.type === 'circle') {
       const go = scene.add.circle(obj.x, obj.y, obj.radius, color, 1);
       go.setStrokeStyle(2, 0x000000, 0.4);
+      applyAlpha(go, alpha);
       visual = go;
     } else {
       const verts = resolvePolygonVertices(obj);
@@ -167,6 +171,7 @@ function createObject(
       g.lineStyle(2, 0x000000, 0.4);
       g.fillPoints(verts.map((v) => new Phaser.Geom.Point(v.x, v.y)), true);
       g.strokePoints(verts.map((v) => new Phaser.Geom.Point(v.x, v.y)), true);
+      applyAlpha(container, alpha);
       visual = container;
     }
     return { id, visual, material: obj.material, durability: -1, oneWay: false, layer: 'decor' };
@@ -205,6 +210,7 @@ function createObject(
     case 'circle': {
       const go = scene.add.circle(obj.x, obj.y, obj.radius, color, 1);
       go.setStrokeStyle(2, 0x000000, 0.5);
+      applyAlpha(go, alpha);
       body = (
         scene.matter.add.gameObject(go, {
           ...commonBodyOptions,
@@ -246,6 +252,7 @@ function createObject(
       g.lineStyle(2, 0x000000, 0.5);
       g.fillPoints(localPts, true);
       g.strokePoints(localPts, true);
+      applyAlpha(container, alpha);
       visual = container;
       break;
     }
@@ -256,6 +263,7 @@ function createObject(
       const cx = rect.x + rect.w / 2;
       const cy = rect.y + rect.h / 2;
       const go = createRectVisual(scene, cx, cy, rect.w, rect.h, mat, color, 0.5);
+      applyAlpha(go, alpha);
       body = (
         scene.matter.add.gameObject(go, {
           ...commonBodyOptions,
@@ -366,6 +374,12 @@ function resolvePolygonVertices(
     return result;
   }
   return null;
+}
+
+/** 应用材质不透明度（Graphics/Container/Image/TileSprite 都有 alpha） */
+function applyAlpha(go: Phaser.GameObjects.GameObject, alpha: number): void {
+  if (alpha >= 1) return;
+  (go as unknown as Phaser.GameObjects.Components.Alpha).setAlpha(alpha);
 }
 
 function parseHex(hex: string, fallback: number): number {
