@@ -12,6 +12,10 @@ export interface MaterialConfig {
   bounce: number;
   /** 密度，影响重量（跷跷板/可推动物体） */
   density: number;
+  /** 动摩擦力（0~1，越小越滑；影响物体滑动/玩家行走手感） */
+  friction: number;
+  /** 静摩擦力（0~1，越小越容易被推动） */
+  frictionStatic: number;
   /** 渲染颜色 */
   color: number;
 }
@@ -25,6 +29,9 @@ export const MATERIALS: Record<string, MaterialConfig> = {
     fixed: true,
     bounce: 0,
     density: 5,
+    // 墙体无摩擦：贴墙下落不会被摩擦减速（玩家 friction 与它取 min → 0）
+    friction: 0,
+    frictionStatic: 0,
     color: 0x4a4a5a,
   },
   ground: {
@@ -35,6 +42,8 @@ export const MATERIALS: Record<string, MaterialConfig> = {
     fixed: true,
     bounce: 0,
     density: 5,
+    friction: 0.5,
+    frictionStatic: 0.9,
     color: 0x3d5a3d,
   },
   wood: {
@@ -45,6 +54,8 @@ export const MATERIALS: Record<string, MaterialConfig> = {
     fixed: false,
     bounce: 0.1,
     density: 1,
+    friction: 0.4,
+    frictionStatic: 0.8,
     color: 0x8b5a2b,
   },
   cardboard: {
@@ -55,6 +66,9 @@ export const MATERIALS: Record<string, MaterialConfig> = {
     fixed: false,
     bounce: 0.05,
     density: 0.3,
+    // 纸箱粗糙、易被推动
+    friction: 0.3,
+    frictionStatic: 0.5,
     color: 0xc8a165,
   },
   metal: {
@@ -65,6 +79,9 @@ export const MATERIALS: Record<string, MaterialConfig> = {
     fixed: false,
     bounce: 0.8,
     density: 4,
+    // 金属光滑：更容易滑动
+    friction: 0.15,
+    frictionStatic: 0.3,
     color: 0x9aa5b1,
   },
 };

@@ -2,8 +2,11 @@ import Phaser from 'phaser';
 import { InputManager } from '../core/InputManager';
 import type { InputCommand } from '../core/InputCommand';
 import { Player } from '../entities/Player';
+import { CameraRig } from '../camera/CameraRig';
+import { GameFeel } from '../feel/GameFeel';
 import { ARENA } from '../map/ArenaData';
 import { buildMap } from '../map/MapLoader';
+import type { MapObjectRuntime } from '../map/MapLoader';
 
 const PLAYER_COLORS = [0xe74c3c, 0x3498db];
 /** 镜头缩放（固定，聚焦单角色时画面清晰） */
@@ -13,13 +16,21 @@ const CAMERA_ZOOM = 0.9;
  * 主游戏场景。
  * - 构建竞技场（物理 + 渲染）
  * - 创建两个本地玩家（单机双人，为联机铺路的输入抽象已就绪）
- * - 镜头跟随"最后有输入的玩家"（你操作哪个角色，镜头就跟随谁）
+ * - 镜头通过 CameraRig 平滑跟随"最后有输入的玩家"
  */
 export class GameScene extends Phaser.Scene {
   private inputManager!: InputManager;
   private players: Player[] = [];
   /** 镜头跟随目标（最后活跃输入的玩家） */
   private cameraTarget: Player | null = null;
+  /** 镜头刚体：平滑跟随 + 预判 + 边界 clamp（camera-systems 技能） */
+  private cameraRig!: CameraRig;
+  /** 游戏手感：屏幕震动（game-feel 技能） */
+  private gameFeel!: GameFeel;
+  /** 地图物体运行时列表（单向平台处理/后续破坏系统使用） */
+  private mapObjects: MapObjectRuntime[] = [];
+  /** 单向平台 body 缓存（每帧判断穿越用） */
+  private oneWayBodies: MatterJS.BodyType[] = [];
 
   constructor() {
     super('GameScene');
@@ -27,7 +38,8 @@ export class GameScene extends Phaser.Scene {
 
   create(): void {
     this.inputManager = new InputManager(this);
-    buildMap(this, ARENA);
+    this.mapObjects = buildMap(this, ARENA);
+    this.oneWayBodies = this.mapObjects.filter((o) => o.oneWay).map((o) => o.body);
 
     const spawn = ARENA.spawnPoints;
     this.players = spawn.map((p, i) => new Player(this, p.x, p.y, PLAYER_COLORS[i]));
@@ -36,6 +48,14 @@ export class GameScene extends Phaser.Scene {
     const cam = this.cameras.main;
     cam.setBackgroundColor('#1a1a2e');
     cam.setBounds(0, 0, ARENA.width, ARENA.height);
+
+    this.cameraRig = new CameraRig(cam, ARENA.width, ARENA.height, CAMERA_ZOOM);
+    this.gameFeel = new GameFeel();
+
+    // 受击反馈：屏幕震动
+    this.events.on('player-hit', () => {
+      this.gameFeel.addTrauma(0.35);
+    });
   }
 
   update(_time: number, delta: number): void {
@@ -43,8 +63,51 @@ export class GameScene extends Phaser.Scene {
     const cmd2 = this.inputManager.readP2();
     this.players[0]?.update(cmd1, delta);
     this.players[1]?.update(cmd2, delta);
+    this.updateOneWayCollisions();
     this.updateCameraTarget(cmd1, cmd2);
-    this.updateFollowCamera();
+    if (this.cameraTarget && this.cameraRig) {
+      this.cameraRig.update(this.cameraTarget, delta);
+    }
+    // 屏幕震动（在跟随之后叠加，避免跟随与震动打架）
+    this.gameFeel.update(this.cameras.main, this.cameraRig.shakeOffset, delta);
+  }
+
+  /**
+   * 单向平台：玩家在平台下方或上升中时忽略碰撞（可穿过）；
+   * 脚底贴着平台顶部时视为站立（可站立、可跳）。
+   */
+  private updateOneWayCollisions(): void {
+    if (this.oneWayBodies.length === 0) return;
+    for (const player of this.players) {
+      let ignore = false;
+      let standing = false;
+      const feetY = player.feetY;
+      const rising = player.body.velocity.y < -0.5;
+
+      for (const body of this.oneWayBodies) {
+        const platformTop = body.bounds.min.y;
+        const dx = player.container.x;
+        const withinX = dx >= body.bounds.min.x - 6 && dx <= body.bounds.max.x + 6;
+
+        if (!withinX) continue;
+
+        // 脚底贴着平台顶部（±8px 容差）且未上升 → 站在平台上
+        if (Math.abs(feetY - platformTop) <= 8 && !rising) {
+          standing = true;
+        }
+        // 只有"明确在平台下方"（脚底深于平台顶部一个身位）或"上升中"才忽略碰撞；
+        // 下落时脚底接近平台顶部不忽略 → 平台能挡住玩家
+        if (feetY > platformTop + 12 || rising) {
+          ignore = true;
+        }
+      }
+
+      // 站立时不能忽略碰撞（否则会掉下去）
+      if (standing) {
+        ignore = false;
+      }
+      player.setOneWayState(ignore, standing);
+    }
   }
 
   /** 镜头跟随最后有输入的玩家（输入优先：移动/跳跃/攻击等） */
@@ -56,27 +119,21 @@ export class GameScene extends Phaser.Scene {
     const hasInput1 = this.hasInput(cmd1);
     const hasInput2 = this.hasInput(cmd2);
     if (hasInput1 && !hasInput2) {
-      this.cameraTarget = p1;
+      this.switchCameraTarget(p1);
     } else if (hasInput2 && !hasInput1) {
-      this.cameraTarget = p2;
+      this.switchCameraTarget(p2);
     }
     // 两人同时输入时保持当前跟随目标（不来回切换）
   }
 
-  private hasInput(cmd: InputCommand): boolean {
-    return cmd.moveX !== 0 || cmd.jump || cmd.attack || cmd.kick || cmd.swap;
+  /** 切换镜头目标时立即复位焦点，避免镜头横穿地图 */
+  private switchCameraTarget(target: Player): void {
+    if (this.cameraTarget === target) return;
+    this.cameraTarget = target;
+    this.cameraRig.snapTo(target.container.x, target.container.y);
   }
 
-  /** 镜头跟随目标玩家，固定在视野中心，限制不出地图边界 */
-  private updateFollowCamera(): void {
-    if (!this.cameraTarget) return;
-    const cam = this.cameras.main;
-    cam.setZoom(CAMERA_ZOOM);
-    cam.centerOn(this.cameraTarget.container.x, this.cameraTarget.container.y);
-
-    const viewW = cam.width / CAMERA_ZOOM;
-    const viewH = cam.height / CAMERA_ZOOM;
-    cam.scrollX = Phaser.Math.Clamp(cam.scrollX, 0, ARENA.width - viewW);
-    cam.scrollY = Phaser.Math.Clamp(cam.scrollY, 0, ARENA.height - viewH);
+  private hasInput(cmd: InputCommand): boolean {
+    return cmd.moveX !== 0 || cmd.jump || cmd.attack || cmd.kick || cmd.swap;
   }
 }

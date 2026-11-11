@@ -10,6 +10,10 @@ export interface InputCommand {
   moveX: number;
   /** 跳跃请求（仅在按下瞬间为 true，由输入层做下降沿检测） */
   jump: boolean;
+  /** 跳跃键是否按住（可变跳跃高度：松开提前切短跳跃） */
+  jumpHeld: boolean;
+  /** 蹲下（P1: S / P2: 下方向键） */
+  crouch: boolean;
   /** 攻击（P1 鼠标左键 / P2 空格）—— M0 预留 */
   attack: boolean;
   /** 踢（P1 鼠标右键 / P2 Shift）—— M2 实现 */
@@ -19,5 +23,5 @@ export interface InputCommand {
 }
 
 export function emptyInput(): InputCommand {
-  return { moveX: 0, jump: false, attack: false, kick: false, swap: false };
+  return { moveX: 0, jump: false, jumpHeld: false, crouch: false, attack: false, kick: false, swap: false };
 }

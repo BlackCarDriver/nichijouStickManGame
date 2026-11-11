@@ -3,61 +3,115 @@ import { Entity } from '../core/Entity';
 import type { InputCommand } from '../core/InputCommand';
 import { StickmanRenderer } from '../render/StickmanRenderer';
 import type { StickmanPose } from '../render/StickmanRenderer';
+import { GameFeel } from '../feel/GameFeel';
+import { COLLISION_CATEGORY, PLAYER_MASK_ALL } from '../core/CollisionCategories';
 
 export const PLAYER_CONFIG = {
-  /** 碰撞体尺寸（火柴人约高 111px，碰撞体略小于视觉） */
+  /** 碰撞体尺寸（火柴人总高约 111px，碰撞体略小于视觉） */
+  /** 碰撞体宽度（站立） */
   bodyWidth: 36,
+  /**
+   * 蹲下时碰撞体横向缩放（36 → 90px，半宽 45）。
+   * 蹲下姿态「矮而宽」：躯干前倾 45° 使头右缘到 x≈47.6，
+   * 站立宽 36（半宽 18）包不住 → 推箱子时身体穿进去。
+   * 只加宽不改高，因此不影响 feetY / 射线探测 / 单向平台判定。
+   */
+  crouchBodyScaleX: 2.5,
   bodyHeight: 96,
   moveSpeed: 5,
-  /** 跳跃初速度（负值向上；配合重力 1.6，形成明显抛物线） */
+  /** 跳跃初速度（负值向上） */
   jumpVelocity: -17,
-} as const;
+  /** 最大下落速度：防穿透 */
+  maxFallSpeed: 26,
+  /** 最大水平速度（含被击飞冲量）：防穿透 */
+  maxHorizontalSpeed: 18,
 
-/** 碰撞分类（Matter collisionFilter） */
-const CATEGORY = {
-  /** 玩家火柴人主体 */
-  player: 0x0002,
-  /** 脚下传感器（不与玩家主体碰撞，但检测其他物体） */
-  feetSensor: 0x0004,
+  // ---- 跳跃手感（platformer + input-systems 技能）----
+  /** 土狼时间（秒）：离开平台边缘后仍可跳的宽限窗口 */
+  coyoteTime: 0.1,
+  /** 跳跃缓冲（秒）：落地前提前按跳被记住的窗口 */
+  jumpBuffer: 0.12,
+  /** 可变跳跃：松开跳键时上升速度的保留比例 */
+  jumpCutMultiplier: 0.45,
+  /** 非对称重力：下落时的重力倍数 */
+  fallGravityMultiplier: 1.8,
+  /** 起跳后的土狼锁定（秒）：防止同一着地段内重复起跳（伪二段跳） */
+  jumpLockout: 0.15,
+  /** 脚下射线探测深度（像素）。斜面需要更大的探测深度 */
+  groundProbeDepth: 10,
 } as const;
 
 /** matter.add.gameObject 返回的容器（运行时带 Matter body 与组件方法） */
 interface MatterContainer extends Phaser.GameObjects.Container {
   body: MatterJS.BodyType;
-  /** Matter 组件注入：设置速度（同时同步 positionPrev，适配 Verlet 积分） */
   setVelocity(x: number, y?: number): void;
   setVelocityX(x: number): void;
   setVelocityY(y: number): void;
 }
 
+/** Phaser 的 MatterJS 类型定义不完整，这里声明运行时实际可用的字段 */
+interface PhysicsWorldLike {
+  bodies: MatterJS.BodyType[];
+}
+
 /**
  * 火柴人实体。
  * - 消费 InputCommand（输入来源无关，联机时来自网络队列）
- * - Matter 刚体 + 脚下传感器（判断是否着地）
+ * - Matter 刚体（主体） + 射线脚下检测（比 sensor body 可靠）
  * - 骨骼渲染（StickmanRenderer）
  */
 export class Player extends Entity {
   private readonly scene: Phaser.Scene;
+  /** 物理容器（位置与 Matter body 同步） */
   readonly container: MatterContainer;
+  /** 内层视觉容器：面向翻转（与物理/挤压分离） */
+  private readonly visual: Phaser.GameObjects.Container;
   private readonly graphics: Phaser.GameObjects.Graphics;
   readonly body: MatterJS.BodyType;
-  private readonly feetRect: Phaser.GameObjects.Rectangle;
-  private readonly feetBody: MatterJS.BodyType;
-  private groundedContacts = 0;
-  private walkPhase = 0;
-  private facing: 1 | -1 = 1;
   readonly color: number;
 
-  // ---- 动画状态机（混合驱动：物理状态 → 程序化姿态） ----
+  /** 面向（1=右 -1=左）；镜头 look-ahead 使用 */
+  facing: 1 | -1 = 1;
+
+  // ---- 着地状态 ----
+  /** 脚下射线检测结果 */
+  private rayGrounded = false;
+  /** 是否站在单向平台上（由场景每帧设置） */
+  private standingOnOneWay = false;
+  /** 地面法线（由碰撞事件更新）：用于斜面时左右脚的高度差 */
+  private readonly groundNormal = { x: 0, y: -1 };
+  /** 蹲下中（本帧输入） */
+  private crouching = false;
+  /** 当前碰撞体宽度（跟随蹲下缩放，避免累积缩放算错） */
+  private currentBodyWidth: number = PLAYER_CONFIG.bodyWidth;
+  /** 持续离地时长（ms）：用于判断是否真的离开地面（避免斜坡滑动时抖动重置法线） */
+  private airborneTime = 0;
+
+  // ---- 跳跃手感计时器 ----
+  private coyoteTimer = 0;
+  private jumpBufferTimer = 0;
+  private jumpCutArmed = false;
+  private jumpLockout = 0;
+
+  // ---- 动画状态机 ----
   private pose: StickmanPose = 'idle';
-  /** 受击剩余时间（>0 时处于受击乱舞状态） */
+  /** 步态时间（秒）：行走时按速度累加，驱动确定性步态 */
+  private gaitTime = 0;
   private hitTimer = 0;
-  /** 受击乱舞相位（快速变化，让四肢乱舞） */
   private hitPhase = 0;
-  /** 受击身体倾斜角（由 Container rotation 实现旋转，随时间衰减） */
   private hitTilt = 0;
   private static readonly HIT_DURATION = 600;
   private static readonly HIT_TILT_MAX = 0.5;
+
+  // ---- 动作细节（spine-animation 技能：冲击吸收/预备/跟随）----
+  /** 落地冲击剩余毫秒（>0 时处于落地压缩→恢复阶段） */
+  private landImpact = 0;
+  /** 落地冲击强度 0~1（按下落速度决定，驱动下蹲深度） */
+  private landImpactStrength = 0;
+  /** 起跳预备剩余毫秒（纯视觉前摇，不延迟物理跳跃） */
+  private jumpAnticipation = 0;
+  private static readonly LAND_IMPACT_DURATION = 220;
+  private static readonly JUMP_ANTICIPATION_DURATION = 100;
 
   constructor(scene: Phaser.Scene, x: number, y: number, color: number) {
     super();
@@ -65,8 +119,10 @@ export class Player extends Entity {
     this.color = color;
 
     this.container = scene.add.container(x, y) as MatterContainer;
+    this.visual = scene.add.container(0, 0);
     this.graphics = scene.add.graphics();
-    this.container.add(this.graphics);
+    this.visual.add(this.graphics);
+    this.container.add(this.visual);
 
     // 主碰撞体
     const playerBody = scene.matter.add.gameObject(this.container, {
@@ -75,64 +131,92 @@ export class Player extends Entity {
         width: PLAYER_CONFIG.bodyWidth,
         height: PLAYER_CONFIG.bodyHeight,
       },
+      // 摩擦：取 pair.friction = min(玩家, 物体)。
+      // 墙体材质 friction=0 → 贴墙时摩擦为 0，下落不会被减速（修复贴墙下落变慢）。
+      // 保持小量摩擦：让玩家能稳稳站在斜面/地面上。
       friction: 0.1,
       frictionStatic: 0.5,
       restitution: 0,
       density: 0.002,
       label: 'player',
-      // 锁定旋转：火柴人站立不应翻转（Matter 矩形与地面完美接触时的数值不稳定）
+      // 锁定旋转：火柴人站立不应翻转
       inertia: Infinity,
       collisionFilter: {
-        category: CATEGORY.player,
-        mask: 0xffff,
+        category: COLLISION_CATEGORY.player,
+        mask: PLAYER_MASK_ALL,
       },
     }) as unknown as MatterContainer;
     this.body = playerBody.body;
 
-    // 脚下传感器：判断着地状态。位于主体正下方外侧，且与玩家主体互不碰撞
-    this.feetRect = scene.add.rectangle(0, 0, 28, 10, 0xffffff, 0);
-    const feetObj = scene.matter.add.gameObject(this.feetRect, {
-      isSensor: true,
-      shape: { type: 'rectangle', width: 28, height: 10 },
-      label: 'feet-sensor',
-      collisionFilter: {
-        category: CATEGORY.feetSensor,
-        mask: 0xffff ^ CATEGORY.player, // 排除玩家主体
-      },
-    }) as unknown as MatterContainer;
-    this.feetBody = feetObj.body;
+    // 监听碰撞，缓存地面法线（用于斜面脚底贴合）
+    scene.matter.world.on('collisionactive', this.handleCollisionActive, this);
 
-    scene.matter.world.on('collisionstart', this.handleCollisionStart, this);
-    scene.matter.world.on('collisionend', this.handleCollisionEnd, this);
-
-    this.syncFeet();
     this.draw();
   }
 
   get isGrounded(): boolean {
-    return this.groundedContacts > 0;
+    return this.rayGrounded || this.standingOnOneWay;
   }
 
-  /** 每帧由场景调用：消费输入指令并更新物理与渲染 */
-  update(cmd: InputCommand, deltaMs: number): void {
-    // 水平速度：每帧直接控制（坦克式操控，松开键自然停）
-    // 注意：Matter 为 Verlet 积分，必须用 setVelocityX（同步 positionPrev）
-    const vx = cmd.moveX !== 0 ? cmd.moveX * PLAYER_CONFIG.moveSpeed : this.body.velocity.x * 0.85;
-    this.container.setVelocityX(vx);
+  /** 玩家脚底 y（世界）：直接取碰撞盒实际底部，自动适应趴下时的压缩体 */
+  get feetY(): number {
+    return this.container.y + PLAYER_CONFIG.bodyHeight / 2;
+  }
 
-    // 垂直速度：完全交给物理（重力），仅在跳跃瞬间设置，避免每帧干扰抛物线
-    if (cmd.jump) {
-      this.tryJump();
+  /**
+   * 切换蹲下碰撞体宽度：蹲下时横向拉宽，包住前倾的躯干/头/手臂，
+   * 避免推箱子时身体穿进去。
+   */
+  private setCrouchBody(active: boolean): void {
+    // matter.body.scale 是**累积**缩放，用自维护的当前宽度反算比例（不读 bounds，避免滞后值算错）。
+    //
+    // 重要：**斜面上不加宽**。90px 宽的扁盒子放在陡坡上，一侧会深插进斜面，
+    // Matter 求解器反复推挤 → 物理位置抖动（实测 X 抖 10px / Y 抖 7px）→ 屏闪。
+    // 斜面本来也没有箱子可推，窄体即可。
+    const onSlope = Math.abs(this.groundNormal.x) > 0.25;
+    // 前方有上升地形（斜坡/台阶）时不加宽：宽盒子的前下角会顶住斜面起点，导致爬不上去
+    const uphillAhead = active && this.hasUphillAhead();
+    const wantWide = active && !onSlope && !uphillAhead;
+    const base = PLAYER_CONFIG.bodyWidth;
+    const targetW = wantWide ? base * PLAYER_CONFIG.crouchBodyScaleX : base;
+    if (Math.abs(this.currentBodyWidth - targetW) < 0.25) return;
+    this.scene.matter.body.scale(this.body, targetW / this.currentBodyWidth, 1);
+    this.currentBodyWidth = targetW;
+  }
+
+  /**
+   * 前方是否有「上升地形」（斜坡/台阶）。
+   * 做法：在面向前方 32px 处，从脚底上方 20px 到上方 3px 打一条短射线；
+   * 命中非自身实体即说明前方地面高于脚下 —— 加宽碰撞体会被此地形顶住。
+   */
+  private hasUphillAhead(): boolean {
+    const bodies = (this.scene.matter.world.localWorld as unknown as PhysicsWorldLike).bodies;
+    const px = this.container.x + this.facing * 32;
+    const feetY = this.feetY;
+    const results = this.scene.matter.query.ray(
+      bodies,
+      { x: px, y: feetY - 20 },
+      { x: px, y: feetY - 3 },
+    );
+    for (const r of results) {
+      const a = r.bodyA as unknown as MatterJS.BodyType;
+      const b = r.bodyB as unknown as MatterJS.BodyType;
+      const target = a === this.body && b === this.body ? null : a === this.body ? b : a;
+      if (target && target !== this.body && !target.isSensor) return true;
     }
+    return false;
+  }
 
-    if (cmd.moveX !== 0) {
-      this.facing = cmd.moveX > 0 ? 1 : -1;
-    }
-
-    this.updatePose(deltaMs);
-    this.syncFeet();
-    this.container.scaleX = this.facing;
-    this.draw();
+  /**
+   * 单向平台状态（由场景每帧调用）：
+   * @param ignore 是否忽略单向平台碰撞（在平台下方或上升中 → 可穿过）
+   * @param standing 是否站在单向平台上（脚底贴平台顶部 → 可站立/可跳）
+   */
+  setOneWayState(ignore: boolean, standing: boolean): void {
+    this.standingOnOneWay = standing;
+    this.body.collisionFilter.mask = ignore
+      ? PLAYER_MASK_ALL & ~COLLISION_CATEGORY.oneWayPlatform
+      : PLAYER_MASK_ALL;
   }
 
   /**
@@ -145,75 +229,256 @@ export class Player extends Entity {
     this.hitTilt = (Math.random() < 0.5 ? -1 : 1) * Player.HIT_TILT_MAX;
     this.container.setVelocityX(knockbackX);
     this.container.setVelocityY(knockbackY);
+    this.scene.events.emit('player-hit', this);
+  }
+
+  /** 每帧由场景调用：消费输入指令并更新物理与渲染 */
+  update(cmd: InputCommand, deltaMs: number): void {
+    const dt = deltaMs / 1000;
+
+    // 持续离地超过 150ms 才把地面法线重置为平地（短暂滑动/抖动不重置，避免闪烁）
+    if (this.isGrounded) {
+      this.airborneTime = 0;
+    } else {
+      this.airborneTime += deltaMs;
+      if (this.airborneTime > 150) {
+        this.groundNormal.x = 0;
+        this.groundNormal.y = -1;
+      }
+    }
+
+    // 先记录「上一帧」着地状态（必须在射线刷新前），用于检测「刚落地」瞬间
+    const wasGrounded = this.isGrounded;
+
+    // 射线着地检测（先于跳跃判定，保证当帧状态最新）
+    this.updateRayGrounded();
+
+    // ===== 跳跃手感计时器 =====
+    this.jumpLockout = Math.max(0, this.jumpLockout - dt);
+    // 土狼时间：着地刷新；锁定期间不刷新（否则起跳当帧着地会刷满 → 可重复起跳）
+    if (this.isGrounded && this.jumpLockout <= 0) {
+      this.coyoteTimer = PLAYER_CONFIG.coyoteTime;
+    } else {
+      this.coyoteTimer = Math.max(0, this.coyoteTimer - dt);
+    }
+    // 跳跃缓冲
+    if (cmd.jump) {
+      this.jumpBufferTimer = PLAYER_CONFIG.jumpBuffer;
+    } else {
+      this.jumpBufferTimer = Math.max(0, this.jumpBufferTimer - dt);
+    }
+
+    // ===== 水平速度：每帧直接控制（Matter 为 Verlet 积分，必须用 setVelocityX）=====
+    // 蹲下：**只看按键**（不依赖 isGrounded）。
+    // 若依赖着地状态，斜坡上滑动导致 grounded 抖动 → 碰撞体宽度每帧 36↔72 反复切换 → 屏闪。
+    this.crouching = cmd.crouch;
+    this.setCrouchBody(this.crouching);
+    const speedMul = this.crouching ? 0.45 : 1;
+    // 着地且无输入 → 精确归零（避免在斜面上因碰撞法线推力而缓慢滑落）
+    const targetVx =
+      cmd.moveX !== 0
+        ? cmd.moveX * PLAYER_CONFIG.moveSpeed * speedMul
+        : this.isGrounded
+          ? 0
+          : this.body.velocity.x * 0.85;
+    const cappedVx = Phaser.Math.Clamp(targetVx, -PLAYER_CONFIG.maxHorizontalSpeed, PLAYER_CONFIG.maxHorizontalSpeed);
+    this.container.setVelocityX(cappedVx);
+
+    // ===== 跳跃求解：缓冲 + 土狼时间同时满足才跳（一起消耗，防二段跳）=====
+    if (this.jumpBufferTimer > 0 && this.coyoteTimer > 0) {
+      this.container.setVelocityY(PLAYER_CONFIG.jumpVelocity);
+      this.jumpBufferTimer = 0;
+      this.coyoteTimer = 0;
+      this.jumpLockout = PLAYER_CONFIG.jumpLockout;
+      this.jumpCutArmed = true;
+      this.jumpAnticipation = Player.JUMP_ANTICIPATION_DURATION; // 起跳前摇（下一帧起显示压缩姿态）
+      GameFeel.pop(this.graphics, 0.85, 1.15, 200);
+    }
+
+    // ===== 可变跳跃高度：上升中松开跳键，切短跳跃（只切一次）=====
+    if (this.jumpCutArmed && !cmd.jumpHeld && this.body.velocity.y < 0) {
+      this.container.setVelocityY(this.body.velocity.y * PLAYER_CONFIG.jumpCutMultiplier);
+      this.jumpCutArmed = false;
+    }
+    if (this.isGrounded && this.body.velocity.y >= 0) {
+      this.jumpCutArmed = false;
+    }
+
+    // ===== 垂直方向：最小干预（每帧强行改 vy 会破坏 Matter 碰撞平衡）=====
+    if (this.body.velocity.y > PLAYER_CONFIG.maxFallSpeed) {
+      this.container.setVelocityY(PLAYER_CONFIG.maxFallSpeed);
+    }
+    // 非对称重力：下落时用 force 施加额外重力（交给引擎积分）
+    if (this.body.velocity.y > 0) {
+      const extraGravityRatio = 1.6 * 0.001 * (PLAYER_CONFIG.fallGravityMultiplier - 1);
+      this.body.force.y += this.body.mass * extraGravityRatio;
+    }
+
+    // ===== 反弹抑制：着地后向上速度归零（避免在铁球/弹性物体上反复弹跳）=====
+    // 注意：起跳后的短暂锁定期（jumpLockout）内保留向上速度，否则会吃掉跳跃
+    if (this.isGrounded && this.body.velocity.y < 0 && this.jumpLockout <= 0) {
+      this.container.setVelocityY(0);
+    }
+
+    if (cmd.moveX !== 0) {
+      this.facing = cmd.moveX > 0 ? 1 : -1;
+    }
+
+    this.updatePose(deltaMs, wasGrounded);
+    this.visual.scaleX = this.facing;
+    this.draw();
+  }
+
+  /** 缓存地面法线：斜面时用它算左右脚高度差，让脚底贴合斜面 */
+  private handleCollisionActive(event: Phaser.Physics.Matter.Events.CollisionActiveEvent): void {
+    for (const pair of event.pairs) {
+      if (pair.bodyA !== this.body && pair.bodyB !== this.body) continue;
+      const normal = pair.collision && pair.collision.normal;
+      if (!normal) continue;
+      let nx = normal.x;
+      let ny = normal.y;
+      // 统一为“朝上”的法线（屏幕坐标 y 向下，所以朝上的法线 ny < 0）
+      if (ny > 0) {
+        nx = -nx;
+        ny = -ny;
+      }
+      // 只采纳“地面型”接触（法线以垂直为主），忽略墙面
+      if (Math.abs(ny) > Math.abs(nx) * 1.2) {
+        this.groundNormal.x = nx;
+        this.groundNormal.y = ny;
+      }
+    }
+  }
+
+  /**
+   * 当前地面坡度导致的脚底高度偏移（相对主体底部）。
+   * 矩形盒平放在斜面上只有**一个角接触**，所以表面是一条斜线：
+   *   y(dx) = bodyBottom + nx * (cornerX - dx) / ny
+   * 其中 cornerX = -sign(nx)*半宽（最低角）。
+   */
+  private surfaceOffsetAt(localDx: number): number {
+    // 注意：这里**不**判断 isGrounded。斜坡上滑动会让 grounded 短暂为 false，
+    // 若因此返回 0，目标值会在 0↔12px 间跳变 → 视觉闪烁。
+    // 改由「持续离地超过阈值才重置法线」来收敛（见 update）。
+    const nx = this.groundNormal.x;
+    const ny = this.groundNormal.y;
+    if (ny > -0.05) return 0;
+    // 固定用站立宽度作参考：若跟随蹲下加宽会形成"加宽→目标位移跳变→视觉抖动"的反馈回路
+    const halfW = PLAYER_CONFIG.bodyWidth / 2;
+    const cornerX = nx === 0 ? 0 : -Math.sign(nx) * halfW;
+    return (nx * (cornerX - localDx)) / ny;
+  }
+
+  /** 平滑后的表面偏移（中心 / 左脚 / 右脚）：避免斜坡上法线抖动导致视觉闪烁 */
+  private smSurfCenter = 0;
+  private smSurfLeft = 0;
+  private smSurfRight = 0;
+
+  /** 脚下射线检测（5 条：更宽范围，适应斜坡与边缘） */
+  private updateRayGrounded(): void {
+    // 起点必须在主体底部外侧（否则射线会击中自己）
+    const startY = this.feetY + 1;
+    const endY = this.feetY + PLAYER_CONFIG.groundProbeDepth;
+    const bodies = (this.scene.matter.world.localWorld as unknown as PhysicsWorldLike).bodies;
+    let hit = false;
+    for (const dx of [-14, -7, 0, 7, 14]) {
+      const results = this.scene.matter.query.ray(
+        bodies,
+        { x: this.container.x + dx, y: startY },
+        { x: this.container.x + dx, y: endY },
+      );
+      for (const r of results) {
+        // Query.ray 返回「被射线击中的 body」（bodyA = 被检测体，bodyB = 其 part）
+        const a = r.bodyA as unknown as MatterJS.BodyType;
+        const b = r.bodyB as unknown as MatterJS.BodyType;
+        const target = a === this.body && b === this.body ? null : a === this.body ? b : a;
+        if (target && target !== this.body && !target.isSensor) {
+          hit = true;
+          break;
+        }
+      }
+      if (hit) break;
+    }
+    this.rayGrounded = hit;
   }
 
   /** 动画状态机：物理状态（着地/速度/受击）→ 姿势 */
-  private updatePose(deltaMs: number): void {
+  private updatePose(deltaMs: number, wasGrounded: boolean): void {
+    // 动作细节计时器递减（spine-animation：冲击吸收/预备都需要“衰减恢复”）
+    this.landImpact = Math.max(0, this.landImpact - deltaMs);
+    this.jumpAnticipation = Math.max(0, this.jumpAnticipation - deltaMs);
+
     if (this.hitTimer > 0) {
       this.hitTimer -= deltaMs;
       this.hitPhase += deltaMs * 0.025;
-      // 倾斜随剩余时间衰减，快速回正
       this.hitTilt *= Math.max(0, 1 - deltaMs / 150);
       this.pose = 'hit';
       this.container.rotation = this.hitTilt;
       return;
     }
 
-    // 受击结束：回正姿态
     this.container.rotation = 0;
-    const moving = Math.abs(this.body.velocity.x) > 0.5;
+    const speed = Math.abs(this.body.velocity.x);
+    const moving = speed > 0.5;
+
     if (!this.isGrounded) {
       this.pose = this.body.velocity.y < 0 ? 'jump' : 'fall';
+    } else if (this.crouching) {
+      // 蹲下：保留步态时间推进（便于呼吸/微动）
+      this.gaitTime += deltaMs / 1000;
+      this.pose = 'crouch';
     } else if (moving) {
-      this.walkPhase += deltaMs * 0.015;
+      // 步态时间按速度推进（秒）；速度已由渲染器用于步态幅度
+      this.gaitTime += deltaMs / 1000;
       this.pose = 'walk';
     } else {
       this.pose = 'idle';
+      // 站立时缓慢推进（呼吸动画）
+      this.gaitTime += deltaMs / 1000;
+    }
+
+    // 落地冲击（spine-animation：冲击吸收 → 稳定恢复，而非弹一下就完）
+    if (!wasGrounded && this.isGrounded) {
+      const fallSpeed = this.body.velocity.y;
+      // 下落速度 → 冲击强度（力的大小决定吸收深度）
+      this.landImpactStrength = Phaser.Math.Clamp(fallSpeed / 18, 0.15, 1);
+      this.landImpact = Player.LAND_IMPACT_DURATION;
+      const intensity = Phaser.Math.Clamp(fallSpeed / 15, 0.15, 0.45);
+      GameFeel.pop(this.graphics, 1 + intensity, 1 - intensity, 160);
     }
   }
 
-  private tryJump(): void {
-    if (!this.isGrounded) return;
-    // 只设置垂直速度，保留当前水平速度
-    this.container.setVelocityY(PLAYER_CONFIG.jumpVelocity);
-  }
-
-  private syncFeet(): void {
-    // 传感器中心 = 主体中心 + 主体半高 + 传感器半高（位于主体正下方外侧）
-    this.feetRect.setPosition(
-      this.container.x,
-      this.container.y + PLAYER_CONFIG.bodyHeight / 2 + 5,
-    );
-  }
-
   private draw(): void {
+    // 平滑逼近目标：斜坡上 grounded 可能抖动（目标在 0↔24px 间跳），
+    // 直接赋值会导致视觉剧烈跳动（屏闪），所以做指数平滑。
+    // 三处表面偏移统一做**慢速**指数平滑（约 0.5s 收敛）。
+    // 斜坡上 groundNormal 可能在"斜坡/平地"间抖动，慢平滑可让任何跳变都不可见。
+    const K = 0.08;
+    this.smSurfCenter += (this.surfaceOffsetAt(0) - this.smSurfCenter) * K;
+    this.smSurfLeft += (this.surfaceOffsetAt(-10) - this.smSurfLeft) * K;
+    this.smSurfRight += (this.surfaceOffsetAt(10) - this.smSurfRight) * K;
+
     StickmanRenderer.draw(this.graphics, {
       color: this.color,
-      phase: this.walkPhase,
+      gaitTime: this.gaitTime,
       pose: this.pose,
       moving: Math.abs(this.body.velocity.x) > 0.5,
       grounded: this.isGrounded,
       hitIntensity: this.hitTimer > 0 ? Math.min(1, this.hitTimer / Player.HIT_DURATION) : 0,
       hitPhase: this.hitPhase,
+      velocityX: this.body.velocity.x,
+      velocityY: this.body.velocity.y,
+      landImpact: this.landImpact > 0 ? this.landImpact / Player.LAND_IMPACT_DURATION : 0,
+      landImpactStrength: this.landImpactStrength,
+      jumpAnticipation: this.jumpAnticipation > 0 ? this.jumpAnticipation / Player.JUMP_ANTICIPATION_DURATION : 0,
+      // 斜面：整体视觉下移 + 双脚相对偏移（全部使用平滑值，脚仍贴合斜面）
+      groundYL: this.smSurfLeft - this.smSurfCenter,
+      groundYR: this.smSurfRight - this.smSurfCenter,
+      crouching: this.crouching,
     });
-  }
 
-  private handleCollisionStart(event: Phaser.Physics.Matter.Events.CollisionStartEvent): void {
-    for (const pair of event.pairs) {
-      if (pair.bodyA === this.feetBody || pair.bodyB === this.feetBody) {
-        this.groundedContacts++;
-        break;
-      }
-    }
-  }
-
-  private handleCollisionEnd(event: Phaser.Physics.Matter.Events.CollisionEndEvent): void {
-    for (const pair of event.pairs) {
-      if (pair.bodyA === this.feetBody || pair.bodyB === this.feetBody) {
-        this.groundedContacts--;
-        break;
-      }
-    }
+    // 斜面时整体下移视觉（平滑值，避免抖动闪烁）
+    this.visual.y = this.smSurfCenter;
   }
 
   /** 联机预留：状态快照 */
@@ -224,14 +489,17 @@ export class Player extends Entity {
       y: this.container.y,
       vx: this.body.velocity.x,
       vy: this.body.velocity.y,
+      facing: this.facing,
+      pose: this.pose,
+      grounded: this.isGrounded,
     };
   }
 
   override destroy(): void {
     super.destroy();
-    this.scene.matter.world.off('collisionstart', this.handleCollisionStart, this);
-    this.scene.matter.world.off('collisionend', this.handleCollisionEnd, this);
-    this.feetRect.destroy();
+    this.scene.matter.world.off('collisionactive', this.handleCollisionActive, this);
+    this.scene.matter.world.remove(this.body);
+    this.visual.destroy();
     this.container.destroy();
   }
 }

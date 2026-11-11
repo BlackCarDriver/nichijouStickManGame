@@ -18,14 +18,16 @@ export class InputManager {
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
     const kb = scene.input.keyboard!;
-    this.p1 = kb.addKeys('W,A,D') as Record<string, Phaser.Input.Keyboard.Key>;
-    this.p2 = kb.addKeys('UP,LEFT,RIGHT,SPACE,SHIFT,E') as Record<string, Phaser.Input.Keyboard.Key>;
+    this.p1 = kb.addKeys('W,A,S,D') as Record<string, Phaser.Input.Keyboard.Key>;
+    this.p2 = kb.addKeys('UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,E') as Record<string, Phaser.Input.Keyboard.Key>;
   }
 
   readP1(): InputCommand {
     const c = emptyInput();
     c.moveX = (this.p1.D.isDown ? 1 : 0) - (this.p1.A.isDown ? 1 : 0);
     c.jump = Phaser.Input.Keyboard.JustDown(this.p1.W);
+    c.jumpHeld = this.p1.W.isDown;
+    c.crouch = this.p1.S.isDown;
 
     const pointer = this.scene.input.activePointer;
     const attack = pointer.leftButtonDown();
@@ -42,6 +44,8 @@ export class InputManager {
     const c = emptyInput();
     c.moveX = (this.p2.RIGHT.isDown ? 1 : 0) - (this.p2.LEFT.isDown ? 1 : 0);
     c.jump = Phaser.Input.Keyboard.JustDown(this.p2.UP);
+    c.jumpHeld = this.p2.UP.isDown;
+    c.crouch = this.p2.DOWN.isDown;
     c.attack = Phaser.Input.Keyboard.JustDown(this.p2.SPACE);
     c.kick = Phaser.Input.Keyboard.JustDown(this.p2.SHIFT);
     c.swap = Phaser.Input.Keyboard.JustDown(this.p2.E);
