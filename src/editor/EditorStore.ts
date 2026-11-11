@@ -46,6 +46,15 @@ import {
   type Bounds,
   type Vec,
 } from './geometry';
+import {
+  convexHull,
+  currentVertices,
+  insertVertex,
+  isConvex,
+  moveVertex,
+  removeVertex,
+  worldVertices,
+} from './polygonEdit';
 
 export type EditorTab = 'map' | 'prefab' | 'material';
 export type ToolKind = 'select' | 'rect' | 'circle' | 'polygon' | 'spawn' | 'prefab' | 'joint' | 'ruler';
@@ -557,6 +566,149 @@ export class EditorStore {
 
   materialConfig(id: string): MaterialConfig | undefined {
     return MATERIALS[id];
+  }
+
+  // ---------------- 多边形顶点编辑 ----------------
+  /** 当前可做顶点编辑的目标（单选的多边形：地图物体 或 预制件部件） */
+  polygonTarget(): { scope: 'map'; id: string } | { scope: 'prefab'; index: number } | null {
+    if (this.tab === 'prefab') {
+      const idx = this.selectedPartIndex();
+      if (idx === null) return null;
+      const part = this.prefabDraft.parts[idx];
+      return part?.type === 'polygon' ? { scope: 'prefab', index: idx } : null;
+    }
+    if (this.tab !== 'map' || this.selection.length !== 1) return null;
+    const obj = this.getObject(this.selection[0]);
+    return obj?.type === 'polygon' ? { scope: 'map', id: this.selection[0] } : null;
+  }
+
+  private polygonOf(target: { scope: 'map'; id: string } | { scope: 'prefab'; index: number }) {
+    if (target.scope === 'map') {
+      const obj = this.getObject(target.id);
+      return obj?.type === 'polygon' ? obj : null;
+    }
+    const part = this.prefabDraft.parts[target.index];
+    return part?.type === 'polygon' ? part : null;
+  }
+
+  /** 多边形中心在世界中的坐标（旋转枢轴） */
+  polygonOriginWorld(target: { scope: 'map'; id: string } | { scope: 'prefab'; index: number }): Vec | null {
+    const poly = this.polygonOf(target);
+    if (!poly) return null;
+    if (target.scope === 'map') return { x: poly.x, y: poly.y };
+    const o = this.prefabRigOrigin();
+    return { x: o.x + poly.x, y: o.y + poly.y };
+  }
+
+  /** 当前选中多边形的世界顶点（供画布画手柄/命中） */
+  polygonWorldVertices(): Vec[] {
+    const t = this.polygonTarget();
+    if (!t) return [];
+    const poly = this.polygonOf(t);
+    const origin = this.polygonOriginWorld(t);
+    if (!poly || !origin) return [];
+    return worldVertices(poly, origin);
+  }
+
+  /** 当前多边形是否为凹形（Matter 会按凸包处理） */
+  polygonIsConcave(): boolean {
+    const t = this.polygonTarget();
+    const poly = t ? this.polygonOf(t) : null;
+    return !!poly && !isConvex(currentVertices(poly));
+  }
+
+  /** 当前多边形的凸包（世界坐标，用于提示"物理实际形状"） */
+  polygonConvexHullWorld(): Vec[] {
+    const t = this.polygonTarget();
+    if (!t) return [];
+    const poly = this.polygonOf(t);
+    const origin = this.polygonOriginWorld(t);
+    if (!poly || !origin) return [];
+    const local = convexHull(currentVertices(poly));
+    const rot = ((poly.angle ?? 0) * Math.PI) / 180;
+    const cos = Math.cos(rot);
+    const sin = Math.sin(rot);
+    return local.map((v) => ({
+      x: origin.x + v.x * cos - v.y * sin,
+      y: origin.y + v.x * sin + v.y * cos,
+    }));
+  }
+
+  private applyPolygonResult(
+    target: { scope: 'map'; id: string } | { scope: 'prefab'; index: number },
+    res: { vertices: Vec[]; shift: Vec },
+  ): void {
+    const poly = this.polygonOf(target);
+    if (!poly) return;
+    poly.vertices = res.vertices;
+    poly.x += res.shift.x;
+    poly.y += res.shift.y;
+    // 转成自定义顶点后，正多边形简写不再适用
+    delete (poly as { sides?: number }).sides;
+    delete (poly as { radius?: number }).radius;
+  }
+
+  /** 拖动顶点（过程中调用，不记历史） */
+  polygonMoveVertex(index: number, world: Vec): void {
+    const t = this.polygonTarget();
+    if (!t) return;
+    const poly = this.polygonOf(t);
+    const origin = this.polygonOriginWorld(t);
+    if (!poly || !origin) return;
+    const res = moveVertex(poly, index, world, origin);
+    if (!res) return;
+    this.applyPolygonResult(t, res);
+    this.touch();
+  }
+
+  /** 在边上插入顶点 */
+  polygonInsertVertex(edgeIndex: number, world: Vec): void {
+    const t = this.polygonTarget();
+    if (!t) return;
+    const poly = this.polygonOf(t);
+    const origin = this.polygonOriginWorld(t);
+    if (!poly || !origin) return;
+    const res = insertVertex(poly, edgeIndex, world, origin);
+    if (!res) return;
+    this.applyPolygonResult(t, res);
+    this.message = `已插入顶点（共 ${res.vertices.length} 个）`;
+    this.commit();
+  }
+
+  /** 删除顶点（至少保留 3 个） */
+  polygonDeleteVertex(index: number): boolean {
+    const t = this.polygonTarget();
+    if (!t) return false;
+    const poly = this.polygonOf(t);
+    if (!poly) return false;
+    const res = removeVertex(poly, index);
+    if (!res) {
+      this.message = '多边形至少需要 3 个顶点';
+      this.touch();
+      return false;
+    }
+    this.applyPolygonResult(t, res);
+    this.message = `已删除顶点（剩 ${res.vertices.length} 个）`;
+    this.commit();
+    return true;
+  }
+
+  /** 顶点数量（供属性面板显示） */
+  polygonVertexCount(): number {
+    const t = this.polygonTarget();
+    if (!t) return 0;
+    const poly = this.polygonOf(t);
+    return poly ? currentVertices(poly).length : 0;
+  }
+
+  /** 把正多边形简写固化成显式顶点（不改形状） */
+  polygonMakeEditable(): void {
+    const t = this.polygonTarget();
+    if (!t) return;
+    const poly = this.polygonOf(t);
+    if (!poly || (poly.vertices && poly.vertices.length >= 3)) return;
+    this.applyPolygonResult(t, { vertices: currentVertices(poly).map((v) => ({ ...v })), shift: { x: 0, y: 0 } });
+    this.commit();
   }
 
   // ---------------- 预制件工作台几何 ----------------

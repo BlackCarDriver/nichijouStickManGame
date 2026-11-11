@@ -16,6 +16,7 @@ import { StickmanRenderer } from '../render/StickmanRenderer';
 import { editorStore, PREFAB_RIG } from './EditorStore';
 import type { EditorTab, ToolKind } from './EditorStore';
 import { jumpMetrics, type Vec } from './geometry';
+import { nearestEdge } from './polygonEdit';
 import { setStatus } from './status';
 
 /** 预制件工作台上的鼠标操作（移动 / 改大小 / 旋转） */
@@ -48,6 +49,11 @@ export class EditorScene extends Phaser.Scene {
   private suppressRebuild = false;
   /** 预制件工作台的鼠标操作状态 */
   private prefabDrag: PrefabDrag | null = null;
+  /** 多边形顶点拖动状态 */
+  private vertexDrag: { index: number } | null = null;
+  /** 双击检测 */
+  private lastDownTime = 0;
+  private lastDownPos: Vec | null = null;
   /** 火柴人参照（尺寸对比用） */
   private refFigure!: Phaser.GameObjects.Graphics;
   private refGuide!: Phaser.GameObjects.Graphics;
@@ -206,9 +212,70 @@ export class EditorScene extends Phaser.Scene {
     guide.lineBetween(bx - 60, feet, bx + 160, feet);
   }
 
-  // ---------------- 预制件工作台交互 ----------------
-  private prefabPointerDown(p: Vec): void {
+  /** 虚线（Graphics 没有原生 dash） */
+  private drawDashed(g: Phaser.GameObjects.Graphics, a: Vec, b: Vec, dash: number): void {
+    const total = Math.hypot(b.x - a.x, b.y - a.y);
+    if (total < 1e-6) return;
+    const ux = (b.x - a.x) / total;
+    const uy = (b.y - a.y) / total;
+    const steps = Math.max(1, Math.floor(total / (dash * 2)));
+    for (let i = 0; i < steps; i++) {
+      const from = i * dash * 2;
+      const to = Math.min(from + dash, total);
+      g.lineBetween(a.x + ux * from, a.y + uy * from, a.x + ux * to, a.y + uy * to);
+    }
+  }
+
+  /** 双击检测（320ms 内 + 同位置附近） */
+  private detectDoubleClick(p: Vec): boolean {
+    const now = performance.now();
+    const close = this.lastDownPos
+      ? Math.hypot(p.x - this.lastDownPos.x, p.y - this.lastDownPos.y) < 12 / this.cameras.main.zoom
+      : false;
+    const isDouble = now - this.lastDownTime < 320 && close;
+    this.lastDownTime = now;
+    this.lastDownPos = p;
+    return isDouble;
+  }
+
+  /**
+   * 顶点编辑交互（优先于物体拖动）：
+   * - 拖动顶点 = 移动；Alt + 点击顶点 = 删除；双击边 = 插入顶点
+   */
+  private tryVertexEdit(p: Vec, altKey: boolean, doubleClick: boolean): boolean {
     const store = editorStore;
+    const verts = store.polygonWorldVertices();
+    if (verts.length < 3) return false;
+    const z = this.cameras.main.zoom;
+    const hs = 9 / z;
+
+    const vi = verts.findIndex((v) => Math.hypot(p.x - v.x, p.y - v.y) <= hs);
+    if (vi >= 0) {
+      if (altKey) {
+        store.polygonDeleteVertex(vi);
+        return true;
+      }
+      this.vertexDrag = { index: vi };
+      return true;
+    }
+
+    // 点在边附近：双击=插点，否则"吃掉"这次点击保持选中（避免点边时把物体取消选中）
+    const edge = nearestEdge(verts, p, 14 / z);
+    if (edge >= 0) {
+      if (doubleClick) {
+        store.polygonInsertVertex(edge, p);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  // ---------------- 预制件工作台交互 ----------------
+  private prefabPointerDown(p: Vec, altKey = false, doubleClick = false): void {
+    const store = editorStore;
+    // 顶点手柄优先级最高（选中多边形部件时）
+    if (this.tryVertexEdit(p, altKey, doubleClick)) return;
+
     const z = this.cameras.main.zoom;
     const hs = 9 / z;
     const idx = store.selectedPartIndex();
@@ -368,6 +435,28 @@ export class EditorScene extends Phaser.Scene {
       }
     }
 
+    // 多边形顶点手柄（地图 / 预制件两种 Tab 通用）
+    const polyVerts = store.polygonWorldVertices();
+    if (polyVerts.length >= 3) {
+      const z = this.cameras.main.zoom;
+      const hs = 4.5 / z;
+      // 凹形提示：Matter 会按凸包处理，用红色虚线画出"物理实际形状"
+      if (store.polygonIsConcave()) {
+        const hull = store.polygonConvexHullWorld();
+        g.lineStyle(1.5, 0xff6b6b, 0.9);
+        for (let i = 0; i < hull.length; i++) {
+          this.drawDashed(g, hull[i], hull[(i + 1) % hull.length], 6 / z);
+        }
+      }
+      for (const v of polyVerts) {
+        const pad = 1.5 / z;
+        g.fillStyle(0x0a0a12, 0.9);
+        g.fillRect(v.x - hs - pad, v.y - hs - pad, (hs + pad) * 2, (hs + pad) * 2);
+        g.fillStyle(0x48dbfb, 1);
+        g.fillRect(v.x - hs, v.y - hs, hs * 2, hs * 2);
+      }
+    }
+
     // 选中框
     const b = store.selectionBounds();
     if (b) {
@@ -469,8 +558,17 @@ export class EditorScene extends Phaser.Scene {
       return;
     }
 
+    const doubleClick = this.detectDoubleClick(p);
+    const altKey = (pointer.event as MouseEvent | undefined)?.altKey === true;
+
     if (store.tab === 'prefab') {
-      this.prefabPointerDown(p);
+      this.prefabPointerDown(p, altKey, doubleClick);
+      this.drawOverlay();
+      return;
+    }
+
+    // 地图 Tab：选择工具下优先响应多边形顶点手柄
+    if (store.tool === 'select' && this.tryVertexEdit(p, altKey, doubleClick)) {
       this.drawOverlay();
       return;
     }
@@ -553,6 +651,13 @@ export class EditorScene extends Phaser.Scene {
       return;
     }
 
+    if (this.vertexDrag) {
+      const target = editorStore.snapToGrid ? editorStore.snapPoint(p) : p;
+      editorStore.polygonMoveVertex(this.vertexDrag.index, target);
+      this.queueRebuild();
+      return;
+    }
+
     if (this.prefabDrag) {
       const shift = (pointer.event as MouseEvent | undefined)?.shiftKey === true;
       this.prefabPointerMove(p, shift);
@@ -596,6 +701,11 @@ export class EditorScene extends Phaser.Scene {
     const store = editorStore;
     if (this.panning) {
       this.panning = null;
+      return;
+    }
+    if (this.vertexDrag) {
+      this.vertexDrag = null;
+      editorStore.commit();
       return;
     }
     if (this.prefabPointerUp()) return;

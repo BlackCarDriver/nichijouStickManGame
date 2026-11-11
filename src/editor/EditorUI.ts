@@ -241,6 +241,10 @@ function renderStatus(): void {
     `选中：${store.selection.length}`,
   ];
   if (store.tool === 'joint') parts.push(store.jointHint());
+  const vcount = store.polygonVertexCount();
+  if (vcount >= 3) {
+    parts.push(`多边形顶点 ${vcount}：拖顶点=移动 · 双击边=加点 · Alt+点击=删点`);
+  }
   statusTextEl.classList.remove('ed-status-active');
   statusTextEl.textContent = parts.join('　·　');
 }
@@ -512,8 +516,18 @@ function objectForm(obj: MapObject): HTMLElement {
         ]),
       );
     } else {
+      const vcount = obj.vertices?.length ?? 0;
       rows.push(
-        h('p', { class: 'ed-help' }, [`自定义顶点（${obj.vertices?.length ?? 0} 个）— 请直接编辑 JSON`]),
+        h('p', { class: 'ed-help' }, [
+          vcount > 0 ? `自定义顶点 ${vcount} 个 — 画布上直接拖拽顶点编辑` : '正多边形',
+        ]),
+        h('div', { class: 'ed-row' }, [
+          button('转为可编辑顶点', () => {
+            store.polygonMakeEditable();
+            store.message = '已转为自定义顶点，可在画布上拖拽';
+            store.touch();
+          }),
+        ]),
         field('半径（正多边形用）', numberInput(obj.radius ?? 40, (v) => patch({ radius: Math.max(2, v) }))),
       );
     }
@@ -660,10 +674,16 @@ function partForm(index: number): HTMLElement {
   } else if (part.type === 'circle') {
     rows.push(field('半径', numberInput(part.radius, (v) => store.updatePart(index, { radius: Math.max(2, v) }))));
   } else {
+    const vcount = part.vertices?.length ?? 0;
     rows.push(
       h('div', { class: 'ed-grid2' }, [
         field('边数', numberInput(part.sides ?? 3, (v) => store.updatePart(index, { sides: Math.max(3, Math.round(v)) }))),
         field('半径', numberInput(part.radius ?? 40, (v) => store.updatePart(index, { radius: Math.max(2, v) }))),
+      ]),
+      h('p', { class: 'ed-help' }, [
+        vcount > 0
+          ? `自定义顶点 ${vcount} 个 — 画布上拖顶点=移动 · 双击边=加点 · Alt+点击=删点`
+          : '画布上拖动蓝色顶点即可转为自定义形状（边数/半径随后失效）',
       ]),
     );
   }
