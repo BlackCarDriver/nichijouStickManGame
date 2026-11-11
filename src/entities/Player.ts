@@ -8,7 +8,8 @@ export const PLAYER_CONFIG = {
   bodyWidth: 36,
   bodyHeight: 96,
   moveSpeed: 5,
-  jumpVelocity: -13.5,
+  /** 跳跃初速度（负值向上；配合重力 1.6，形成明显抛物线） */
+  jumpVelocity: -17,
 } as const;
 
 /** 碰撞分类（Matter collisionFilter） */
@@ -24,6 +25,8 @@ interface MatterContainer extends Phaser.GameObjects.Container {
   body: MatterJS.BodyType;
   /** Matter 组件注入：设置速度（同时同步 positionPrev，适配 Verlet 积分） */
   setVelocity(x: number, y?: number): void;
+  setVelocityX(x: number): void;
+  setVelocityY(y: number): void;
 }
 
 /**
@@ -100,13 +103,15 @@ export class Player extends Entity {
 
   /** 每帧由场景调用：消费输入指令并更新物理与渲染 */
   update(cmd: InputCommand, deltaMs: number): void {
+    // 水平速度：每帧直接控制（坦克式操控，松开键自然停）
+    // 注意：Matter 为 Verlet 积分，必须用 setVelocityX（同步 positionPrev）
+    const vx = cmd.moveX !== 0 ? cmd.moveX * PLAYER_CONFIG.moveSpeed : this.body.velocity.x * 0.85;
+    this.container.setVelocityX(vx);
+
+    // 垂直速度：完全交给物理（重力），仅在跳跃瞬间设置，避免每帧干扰抛物线
     if (cmd.jump) {
       this.tryJump();
     }
-
-    // 水平速度直接控制（M2 踢飞机制接入后需改为"仅在地面时受控"）
-    // 注意：Matter 为 Verlet 积分，直接改 body.velocity 会被覆盖，必须用 setVelocity（同步 positionPrev）
-    this.container.setVelocity(cmd.moveX * PLAYER_CONFIG.moveSpeed, this.body.velocity.y);
 
     if (cmd.moveX !== 0) {
       this.facing = cmd.moveX > 0 ? 1 : -1;
@@ -124,7 +129,8 @@ export class Player extends Entity {
 
   private tryJump(): void {
     if (!this.isGrounded) return;
-    this.container.setVelocity(this.body.velocity.x, PLAYER_CONFIG.jumpVelocity);
+    // 只设置垂直速度，保留当前水平速度
+    this.container.setVelocityY(PLAYER_CONFIG.jumpVelocity);
   }
 
   private syncFeet(): void {

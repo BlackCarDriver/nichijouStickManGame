@@ -9,8 +9,9 @@ export const ARENA: MapData = {
   width: 2400,
   height: 1200,
   spawnPoints: [
-    { x: 300, y: 1072 },
-    { x: 2100, y: 1072 },
+    // 避开平台正下方：玩家1 在左墙边，玩家2 在右墙边
+    { x: 150, y: 1072 },
+    { x: 2250, y: 1072 },
   ],
   objects: [
     // 地面
@@ -18,11 +19,11 @@ export const ARENA: MapData = {
     // 左右边界墙
     { type: 'rect', x: 0, y: 0, w: 40, h: 1200, material: 'wall' },
     { type: 'rect', x: 2360, y: 0, w: 40, h: 1200, material: 'wall' },
-    // 木头平台
-    { type: 'rect', x: 240, y: 940, w: 260, h: 24, material: 'wood' },
-    { type: 'rect', x: 900, y: 800, w: 320, h: 24, material: 'wood' },
-    { type: 'rect', x: 1250, y: 620, w: 320, h: 24, material: 'wood' },
-    { type: 'rect', x: 1900, y: 940, w: 260, h: 24, material: 'wood' },
+    // 木头平台（静态承载物，可跳上；破坏系统 M2 再做可破坏平台）
+    { type: 'rect', x: 240, y: 940, w: 260, h: 24, material: 'wood', fixed: true },
+    { type: 'rect', x: 900, y: 800, w: 320, h: 24, material: 'wood', fixed: true },
+    { type: 'rect', x: 1250, y: 620, w: 320, h: 24, material: 'wood', fixed: true },
+    { type: 'rect', x: 1900, y: 940, w: 260, h: 24, material: 'wood', fixed: true },
     // 可破坏箱子（纸箱轻、易碎）
     { type: 'rect', x: 600, y: 1040, w: 80, h: 80, material: 'cardboard' },
     { type: 'rect', x: 1720, y: 1040, w: 80, h: 80, material: 'cardboard' },
