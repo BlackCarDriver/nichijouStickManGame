@@ -50,7 +50,7 @@ tools/validate-maps.ts  CLI 校验
 
 1. **手写 / AI 编辑 JSON**：改 `data/maps/*.json` → `npm run validate` → 刷新游戏
 2. **可视化编辑器**：`editor.html`，三个 Tab
-   - **地图**：画网格、放置形状/预制件、出生点、关节、空投区
+   - **地图**：画网格、放置形状/预制件、**拖拽移动/改大小/旋转**、顶点编辑、出生点、关节、空投区
    - **预制件**：组合部件 → 导出为 `data/prefabs/*.json`
    - **材质**：调物理参数 + 实时测试 → 导出 `materials.json`
 

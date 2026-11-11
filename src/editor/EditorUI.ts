@@ -279,6 +279,9 @@ function renderStatus(): void {
     `选中：${store.selection.length}`,
   ];
   if (store.tool === 'joint') parts.push(store.jointHint());
+  if (store.tab === 'map' && store.selection.length === 1) {
+    parts.push('绿方块=拖拽改大小 · 橙圆点=拖拽旋转 · Shift=不吸附');
+  }
   const vcount = store.polygonVertexCount();
   if (vcount >= 3) {
     parts.push(`多边形顶点 ${vcount}：拖顶点=移动 · 双击边=加点 · Alt+点击=删点`);

@@ -436,6 +436,22 @@ export class EditorStore {
     this.commit();
   }
 
+  /** 拖动中的即时修改（不记历史，只有节流通知） */
+  patchObjectLive(id: string, patch: Record<string, unknown>): void {
+    const obj = this.getObject(id);
+    if (!obj) return;
+    Object.assign(obj as unknown as Record<string, unknown>, patch);
+    this.touchLive();
+  }
+
+  /** 预制件实例的即时修改 */
+  patchInstanceLive(id: string, patch: Record<string, unknown>): void {
+    const inst = this.getInstance(id);
+    if (!inst) return;
+    Object.assign(inst as unknown as Record<string, unknown>, patch);
+    this.touchLive();
+  }
+
   /** 平移选中物体（拖动过程中调用，不记历史） */
   translateSelected(dx: number, dy: number): void {
     for (const obj of this.selectedObjects()) {
@@ -507,6 +523,29 @@ export class EditorStore {
     if (dx === 0 && dy === 0) return false;
     this.translateSelected(dx, dy);
     return true;
+  }
+
+  /** 松手时把选中对象的尺寸/角度吸附到规范值 */
+  snapSelectedShape(): void {
+    if (this.selection.length !== 1) return;
+    const obj = this.getObject(this.selection[0]);
+    if (!obj || this.gridSize <= 0) return;
+    if (!this.snapToGrid) return;
+    const g = this.gridSize;
+    if (obj.type === 'rect') {
+      const cx = obj.x + obj.w / 2;
+      const cy = obj.y + obj.h / 2;
+      const w = Math.max(g, this.snapValue(obj.w));
+      const h = Math.max(g, this.snapValue(obj.h));
+      obj.x = cx - w / 2;
+      obj.y = cy - h / 2;
+      obj.w = w;
+      obj.h = h;
+    } else if (obj.type === 'circle') {
+      obj.radius = Math.max(g / 2, this.snapValue(obj.radius));
+    } else if (obj.sides !== undefined) {
+      obj.radius = Math.max(g / 2, this.snapValue(obj.radius ?? 40));
+    }
   }
 
   /** 预制件部件吸附到网格（松手时调用） */

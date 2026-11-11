@@ -20,6 +20,28 @@ import { jumpMetrics, objectCenter, type Vec } from './geometry';
 import { centroidOf, currentVertices, nearestEdge } from './polygonEdit';
 import { setStatus } from './status';
 
+/** 地图 Tab 中对象的 gizmo 操作（改大小 / 旋转） */
+interface MapGizmoDrag {
+  kind: 'resize' | 'rotate';
+  targetKind: 'object' | 'prefab';
+  id: string;
+  /** 旋转/缩放枢轴（世界坐标） */
+  pivot: Vec;
+  /** 起始角度（度） */
+  startAngle: number;
+  /** 上一次的角度（旋转用增量） */
+  lastAngle: number;
+  startW: number;
+  startH: number;
+  startRadius: number;
+  /** 自定义多边形顶点快照 */
+  startVerts: Vec[] | null;
+  startHalfW: number;
+  startHalfH: number;
+  /** 按下时指针相对枢轴的局部坐标（用于按位移增量缩放，避免抓取瞬间跳变） */
+  grabLocal: Vec;
+}
+
 /** 预制件工作台上的鼠标操作（移动 / 改大小 / 旋转） */
 type PrefabDrag =
   | { kind: 'move'; index: number; last: Vec }
@@ -52,6 +74,8 @@ export class EditorScene extends Phaser.Scene {
   private prefabDrag: PrefabDrag | null = null;
   /** 多边形顶点拖动状态 */
   private vertexDrag: { index: number } | null = null;
+  /** 地图 Tab 的 gizmo 拖动状态 */
+  private mapGizmoDrag: MapGizmoDrag | null = null;
   /** 双击检测 */
   private lastDownTime = 0;
   private lastDownPos: Vec | null = null;
@@ -119,12 +143,42 @@ export class EditorScene extends Phaser.Scene {
   /** 每帧最多重建一次（在 update 早期处理） */
   update(): void {
     // 兜底：鼠标已松开但拖动状态残留（例如在画布外松开、窗口失焦）
-    if ((this.prefabDrag || this.vertexDrag || this.drag) && !this.input.activePointer.isDown) {
+    if ((this.prefabDrag || this.vertexDrag || this.mapGizmoDrag || this.drag) && !this.input.activePointer.isDown) {
       this.onPointerUp();
+    }
+    if (!this.prefabDrag && !this.vertexDrag && !this.mapGizmoDrag && !this.drag && !this.panning) {
+      this.updateHoverCursor();
     }
     if (!this.rebuildQueued) return;
     this.rebuildQueued = false;
     this.rebuildAll();
+  }
+
+  /** 悬停在手柄上时给出正确的鼠标指针 */
+  private updateHoverCursor(): void {
+    const store = editorStore;
+    const canvas = this.input.manager.canvas;
+    if (!canvas) return;
+    let cursor = 'default';
+    const p = this.worldPoint(this.input.activePointer);
+    const z = this.cameras.main.zoom;
+    const hs = 10 / z;
+
+    if (store.tab === 'map' && store.tool === 'select') {
+      const giz = this.mapGizmoHandles();
+      if (giz) {
+        if (giz.canResize && Math.hypot(p.x - giz.resize.x, p.y - giz.resize.y) <= hs) cursor = 'nwse-resize';
+        else if (Math.hypot(p.x - giz.rotate.x, p.y - giz.rotate.y) <= hs) cursor = 'grab';
+      }
+    } else if (store.tab === 'prefab') {
+      const idx = store.selectedPartIndex();
+      const b = idx === null ? null : store.partWorldBounds(idx);
+      if (b) {
+        if (Math.hypot(p.x - b.maxX, p.y - b.maxY) <= hs) cursor = 'nwse-resize';
+        else if (Math.hypot(p.x - (b.minX + b.maxX) / 2, p.y - b.minY - 30 / z) <= hs) cursor = 'grab';
+      }
+    }
+    if (canvas.style.cursor !== cursor) canvas.style.cursor = cursor;
   }
 
   private rebuildAll(): void {
@@ -245,6 +299,217 @@ export class EditorScene extends Phaser.Scene {
     this.lastDownTime = now;
     this.lastDownPos = p;
     return isDouble;
+  }
+
+  /** 单选的地图对象 / 预制件实例（多选时不给 gizmo） */
+  private singleTarget(): { kind: 'object' | 'prefab'; id: string } | null {
+    const store = editorStore;
+    if (store.tab !== 'map' || store.selection.length !== 1) return null;
+    const id = store.selection[0];
+    if (store.getObject(id)) return { kind: 'object', id };
+    if (store.getInstance(id)) return { kind: 'prefab', id };
+    return null;
+  }
+
+  /** 选中对象的旋转/缩放枢轴 */
+  private pivotOf(target: { kind: 'object' | 'prefab'; id: string }): Vec | null {
+    const store = editorStore;
+    if (target.kind === 'prefab') {
+      const inst = store.getInstance(target.id);
+      return inst ? { x: inst.x, y: inst.y } : null;
+    }
+    const obj = store.getObject(target.id);
+    if (!obj) return null;
+    if (obj.type === 'rect') return { x: obj.x + obj.w / 2, y: obj.y + obj.h / 2 };
+    if (obj.type === 'circle') return { x: obj.x, y: obj.y };
+    const cen = centroidOf(currentVertices(obj));
+    return { x: obj.x + cen.x, y: obj.y + cen.y };
+  }
+
+  /** 地图 Tab 的 gizmo 手柄位置 */
+  private mapGizmoHandles(): {
+    bounds: { minX: number; minY: number; maxX: number; maxY: number };
+    center: Vec;
+    resize: Vec;
+    rotate: Vec;
+    canResize: boolean;
+  } | null {
+    const target = this.singleTarget();
+    if (!target) return null;
+    const b = editorStore.selectionBounds();
+    const pivot = this.pivotOf(target);
+    if (!b || !pivot) return null;
+    const z = this.cameras.main.zoom;
+    return {
+      bounds: b,
+      center: pivot,
+      resize: { x: b.maxX + 12 / z, y: b.maxY + 12 / z },
+      rotate: { x: pivot.x, y: b.minY - 30 / z },
+      canResize: target.kind === 'object',
+    };
+  }
+
+  /** 命中 gizmo 手柄 → 开始拖动 */
+  private tryMapGizmo(p: Vec, shiftKey: boolean): boolean {
+    const giz = this.mapGizmoHandles();
+    if (!giz) return false;
+    const store = editorStore;
+    const target = this.singleTarget();
+    if (!target) return false;
+    const z = this.cameras.main.zoom;
+    const hs = 10 / z;
+
+    const startDrag = (kind: 'resize' | 'rotate'): void => {
+      const obj = target.kind === 'object' ? store.getObject(target.id) : null;
+      const inst = target.kind === 'prefab' ? store.getInstance(target.id) : null;
+      const b = store.selectionBounds();
+      const angle = (obj?.angle ?? inst?.angle ?? 0) as number;
+      const verts = obj?.type === 'polygon' && obj.vertices ? obj.vertices.map((v) => ({ ...v })) : null;
+      const rad0 = (angle * Math.PI) / 180;
+      const cos0 = Math.cos(rad0);
+      const sin0 = Math.sin(rad0);
+      const dx0 = p.x - giz.center.x;
+      const dy0 = p.y - giz.center.y;
+      this.mapGizmoDrag = {
+        kind,
+        targetKind: target.kind,
+        id: target.id,
+        pivot: giz.center,
+        grabLocal: { x: dx0 * cos0 + dy0 * sin0, y: -dx0 * sin0 + dy0 * cos0 },
+        startAngle: angle,
+        lastAngle: angle,
+        startW: obj?.type === 'rect' ? obj.w : 0,
+        startH: obj?.type === 'rect' ? obj.h : 0,
+        startRadius: obj && obj.type !== 'rect' ? (obj.radius ?? 40) : 0,
+        startVerts: verts,
+        startHalfW: b ? Math.max(1, (b.maxX - b.minX) / 2) : 1,
+        startHalfH: b ? Math.max(1, (b.maxY - b.minY) / 2) : 1,
+      };
+      this.lastShift = shiftKey;
+      this.suppressRebuild = true;
+    };
+
+    if (giz.canResize && Math.hypot(p.x - giz.resize.x, p.y - giz.resize.y) <= hs) {
+      startDrag('resize');
+      return true;
+    }
+    if (Math.hypot(p.x - giz.rotate.x, p.y - giz.rotate.y) <= hs) {
+      startDrag('rotate');
+      return true;
+    }
+    return false;
+  }
+
+  /** gizmo 拖动中 */
+  private mapGizmoMove(p: Vec, shiftKey: boolean): void {
+    const d = this.mapGizmoDrag;
+    if (!d) return;
+    const store = editorStore;
+
+    // 相对枢轴的局部坐标（反旋转）
+    const rad = (d.startAngle * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const dx = p.x - d.pivot.x;
+    const dy = p.y - d.pivot.y;
+    const lx = dx * cos + dy * sin;
+    const ly = -dx * sin + dy * cos;
+
+    if (d.kind === 'rotate') {
+      let deg = (Math.atan2(dy, dx) * 180) / Math.PI + 90;
+      while (deg > 180) deg -= 360;
+      while (deg < -180) deg += 360;
+      if (shiftKey) deg = Math.round(deg / 15) * 15;
+      const delta = deg - d.lastAngle;
+      d.lastAngle = deg;
+      if (d.targetKind === 'object') {
+        const obj = store.getObject(d.id);
+        if (!obj) return;
+        store.patchObjectLive(d.id, { angle: Math.round(deg * 10) / 10 });
+        this.applyLiveVisual(d.id, obj, { x: 0, y: 0 });
+      } else {
+        // 预制件实例：整体绕 anchor 旋转（增量变换每个部件的视觉）
+        store.patchInstanceLive(d.id, { angle: Math.round(deg * 10) / 10 });
+        this.rotateRuntimeInstance(d.id, d.pivot, delta);
+      }
+      this.drawOverlay();
+      return;
+    }
+
+    // resize：用"指针位移增量"改包围盒半尺寸（抓取瞬间不跳变）
+    const halfW = Math.max(2, d.startHalfW + (lx - d.grabLocal.x));
+    const halfH = Math.max(2, d.startHalfH + (ly - d.grabLocal.y));
+    if (d.targetKind === 'object') {
+      const obj = store.getObject(d.id);
+      if (!obj) return;
+      if (obj.type === 'rect') {
+        const w = Math.max(4, halfW * 2);
+        const h = Math.max(4, halfH * 2);
+        store.patchObjectLive(d.id, {
+          w,
+          h,
+          x: d.pivot.x - w / 2,
+          y: d.pivot.y - h / 2,
+        });
+      } else if (obj.type === 'circle' || obj.sides !== undefined) {
+        store.patchObjectLive(d.id, { radius: Math.max(3, Math.max(halfW, halfH)) });
+      } else {
+        // 自定义顶点多边形：按起始顶点整体缩放
+        const sx = Math.max(0.05, halfW / d.startHalfW);
+        const sy = Math.max(0.05, halfH / d.startHalfH);
+        const verts = (d.startVerts ?? []).map((v) => ({ x: v.x * sx, y: v.y * sy }));
+        store.patchObjectLive(d.id, { vertices: verts });
+      }
+      const fresh = store.getObject(d.id);
+      if (fresh) this.applyLiveVisual(d.id, fresh, { x: 0, y: 0 });
+      this.drawOverlay();
+    }
+  }
+
+  /** 预制件实例整体绕枢轴旋转（拖动中增量更新视觉，不重建） */
+  private rotateRuntimeInstance(instId: string, pivot: Vec, deltaDeg: number): void {
+    if (deltaDeg === 0) return;
+    const delta = (deltaDeg * Math.PI) / 180;
+    const cos = Math.cos(delta);
+    const sin = Math.sin(delta);
+    const prefix = `${instId}#`;
+    for (const item of this.runtime) {
+      if (!item.id.startsWith(prefix)) continue;
+      const v = item.visual as unknown as {
+        x: number;
+        y: number;
+        rotation: number;
+        setPosition: (x: number, y: number) => void;
+        setRotation: (r: number) => void;
+        setAlpha: (a: number) => void;
+      };
+      const px = v.x - pivot.x;
+      const py = v.y - pivot.y;
+      v.setPosition(pivot.x + px * cos - py * sin, pivot.y + px * sin + py * cos);
+      v.setRotation(v.rotation + delta);
+    }
+  }
+
+  /** gizmo 松手：吸附 + 提交 */
+  private mapGizmoUp(shiftKey: boolean): boolean {
+    const d = this.mapGizmoDrag;
+    if (!d) return false;
+    this.mapGizmoDrag = null;
+    const store = editorStore;
+    if (!shiftKey) {
+      if (d.kind === 'resize') {
+        store.snapSelectedShape();
+      } else {
+        const obj = store.getObject(d.id);
+        const inst = store.getInstance(d.id);
+        const angle = Math.round(obj?.angle ?? inst?.angle ?? d.lastAngle);
+        if (obj) store.patchObjectLive(d.id, { angle });
+        else if (inst) store.patchInstanceLive(d.id, { angle });
+      }
+    }
+    this.suppressRebuild = false;
+    store.commit();
+    return true;
   }
 
   /**
@@ -471,6 +736,28 @@ export class EditorScene extends Phaser.Scene {
       }
     }
 
+    // 地图 Tab：选中对象的旋转 / 缩放手柄
+    if (store.tab === 'map') {
+      const giz = this.mapGizmoHandles();
+      if (giz) {
+        const z = this.cameras.main.zoom;
+        const hs = 6 / z;
+        // 旋转手柄（包围盒顶边中点上方）
+        g.lineStyle(2, 0xffc048, 0.85);
+        g.lineBetween(giz.rotate.x, giz.bounds.minY, giz.rotate.x, giz.rotate.y);
+        g.fillStyle(0xffc048, 1);
+        g.fillCircle(giz.rotate.x, giz.rotate.y, hs);
+        // 缩放手柄（包围盒右下外侧）
+        if (giz.canResize) {
+          g.fillStyle(0x2ecc71, 1);
+          g.fillRect(giz.resize.x - hs, giz.resize.y - hs, hs * 2, hs * 2);
+        }
+        // 枢轴
+        g.fillStyle(0xffffff, 0.65);
+        g.fillCircle(giz.center.x, giz.center.y, hs * 0.45);
+      }
+    }
+
     // 多边形顶点手柄（地图 / 预制件两种 Tab 通用）
     const polyVerts = store.polygonWorldVertices();
     if (polyVerts.length >= 3) {
@@ -605,12 +892,17 @@ export class EditorScene extends Phaser.Scene {
       return;
     }
 
-    // 地图 Tab：选择工具下优先响应多边形顶点手柄
+    const shiftKey = (pointer.event as MouseEvent | undefined)?.shiftKey === true;
+    // 地图 Tab：选择工具下优先响应多边形顶点手柄 / gizmo 手柄
     if (store.tool === 'select' && this.tryVertexEdit(p, altKey, doubleClick)) {
       this.drawOverlay();
       return;
     }
-    this.lastShift = (pointer.event as MouseEvent | undefined)?.shiftKey === true;
+    if (store.tool === 'select' && this.tryMapGizmo(p, shiftKey)) {
+      this.drawOverlay();
+      return;
+    }
+    this.lastShift = shiftKey;
 
     switch (store.tool) {
       case 'select': {
@@ -710,6 +1002,13 @@ export class EditorScene extends Phaser.Scene {
       return;
     }
 
+    if (this.mapGizmoDrag) {
+      const shift = (pointer.event as MouseEvent | undefined)?.shiftKey === true;
+      this.lastShift = shift;
+      this.mapGizmoMove(p, shift);
+      return;
+    }
+
     if (this.prefabDrag) {
       const shift = (pointer.event as MouseEvent | undefined)?.shiftKey === true;
       this.lastShift = shift;
@@ -755,6 +1054,12 @@ export class EditorScene extends Phaser.Scene {
     const store = editorStore;
     if (this.panning) {
       this.panning = null;
+      return;
+    }
+    if (this.mapGizmoDrag) {
+      const shift = this.lastShift;
+      this.lastShift = false;
+      this.mapGizmoUp(shift);
       return;
     }
     if (this.vertexDrag) {
