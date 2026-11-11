@@ -651,3 +651,15 @@ body.testing .ed-actions {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+
+.ed-status-fps {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  color: #6a6a85;
+  font-variant-numeric: tabular-nums;
+  margin-right: 8px;
+}
+
+.ed-status-fps.warn {
+  color: var(--warn);
+}

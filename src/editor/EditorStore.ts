@@ -123,6 +123,11 @@ export class EditorStore {
 
   private history: string[] = [];
   private index = -1;
+  /** 数据版本号：每次 commit / undo / redo 自增，UI 用它判断是否需要重建面板 */
+  private rev = 0;
+  private issuesCache: Issue[] | null = null;
+  private issuesCacheRev = -1;
+  private issuesCacheTab: EditorTab | null = null;
   private listeners = new Set<() => void>();
   private idSeq = 1;
   private silent = false;
@@ -156,6 +161,10 @@ export class EditorStore {
     this.index = 0;
   }
 
+  get revision(): number {
+    return this.rev;
+  }
+
   canUndo(): boolean {
     return this.index > 0;
   }
@@ -173,6 +182,7 @@ export class EditorStore {
       if (this.history.length > HISTORY_LIMIT) this.history.shift();
       this.index = this.history.length - 1;
     }
+    this.rev++;
     this.autosave();
     this.notify();
   }
@@ -193,7 +203,7 @@ export class EditorStore {
     this.liveTimer = window.setTimeout(() => {
       this.liveTimer = 0;
       this.notify();
-    }, 90);
+    }, 250);
   }
 
   undo(): void {
@@ -213,6 +223,7 @@ export class EditorStore {
     this.map = data.map;
     this.prefabDraft = data.prefabDraft;
     this.selection = this.selection.filter((id) => this.exists(id));
+    this.rev++;
     this.autosave();
     this.notify();
   }
@@ -473,6 +484,48 @@ export class EditorStore {
       this.selection = newIds;
       this.commit();
     }
+  }
+
+  /**
+   * 把当前选中对象整体吸附到网格（松手时调用）。
+   * 以第一个选中对象的"参考点"为基准：rect 用左上角，circle/polygon/预制件实例用中心。
+   */
+  snapSelectedToGrid(): boolean {
+    if (!this.snapToGrid || this.gridSize <= 0 || this.selection.length === 0) return false;
+    const firstId = this.selection[0];
+    let ref: Vec | null = null;
+    const obj = this.getObject(firstId);
+    if (obj) {
+      ref = obj.type === 'rect' ? { x: obj.x, y: obj.y } : { x: obj.x, y: obj.y };
+    } else {
+      const inst = this.getInstance(firstId);
+      if (inst) ref = { x: inst.x, y: inst.y };
+    }
+    if (!ref) return false;
+    const dx = this.snapValue(ref.x) - ref.x;
+    const dy = this.snapValue(ref.y) - ref.y;
+    if (dx === 0 && dy === 0) return false;
+    this.translateSelected(dx, dy);
+    return true;
+  }
+
+  /** 预制件部件吸附到网格（松手时调用） */
+  snapPartToGrid(index: number): boolean {
+    if (!this.snapToGrid || this.gridSize <= 0) return false;
+    const part = this.prefabDraft.parts[index];
+    if (!part) return false;
+    const c = objectCenter(part);
+    const dx = this.snapValue(c.x) - c.x;
+    const dy = this.snapValue(c.y) - c.y;
+    if (dx === 0 && dy === 0) return false;
+    if (part.type === 'rect') {
+      part.x += dx;
+      part.y += dy;
+    } else {
+      part.x += dx;
+      part.y += dy;
+    }
+    return true;
   }
 
   nudge(dx: number, dy: number): void {
@@ -851,10 +904,20 @@ export class EditorStore {
 
   // ---------------- 校验 ----------------
   validateCurrent(): Issue[] {
+    if (this.issuesCache && this.issuesCacheRev === this.rev && this.issuesCacheTab === this.tab) {
+      return this.issuesCache;
+    }
     const ctx = makeContext(materialIds(), Object.values(this.prefabTable()));
-    if (this.tab === 'prefab') return validatePrefab(this.prefabDraft, ctx);
-    if (this.tab === 'material') return validateMaterialsFile(serializeMaterials());
-    return validateMap(this.map, ctx);
+    const issues =
+      this.tab === 'prefab'
+        ? validatePrefab(this.prefabDraft, ctx)
+        : this.tab === 'material'
+          ? validateMaterialsFile(serializeMaterials())
+          : validateMap(this.map, ctx);
+    this.issuesCache = issues;
+    this.issuesCacheRev = this.rev;
+    this.issuesCacheTab = this.tab;
+    return issues;
   }
 
   // ---------------- 导入 / 导出 ----------------

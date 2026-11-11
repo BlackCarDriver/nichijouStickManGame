@@ -99,6 +99,7 @@ let headerEl!: HTMLElement;
 let leftEl!: HTMLElement;
 let rightEl!: HTMLElement;
 let statusTextEl!: HTMLElement;
+let fpsEl!: HTMLElement;
 let canvasHostEl!: HTMLElement;
 let toastEl!: HTMLElement;
 
@@ -119,6 +120,7 @@ export function createShell(): void {
   leftEl = h('aside', { class: 'ed-left' });
   rightEl = h('aside', { class: 'ed-right' });
   statusTextEl = h('span', { class: 'ed-status-text' });
+  fpsEl = h('span', { class: 'ed-status-fps' }, ['— fps']);
   toastEl = h('div', { class: 'ed-toast' });
   canvasHostEl = h('div', { class: 'ed-canvas', id: 'canvas-host' }, [
     h('div', { class: 'ed-testing-hint' }, ['测试运行中 — 按 Esc 返回编辑器']),
@@ -130,6 +132,7 @@ export function createShell(): void {
     h('div', { class: 'ed-body' }, [leftEl, canvasHostEl, rightEl]),
     h('footer', { class: 'ed-status' }, [
       statusTextEl,
+      fpsEl,
       h('span', { class: 'ed-status-keys' }, [
         '拖动=移动 · 中键/右键/空格=平移 · 滚轮=缩放 · 0=适配 · G=网格 · Del=删除 · Ctrl+Z/Y · Ctrl+D · Ctrl+S',
       ]),
@@ -151,6 +154,12 @@ export function bindUI(phaserGame: Phaser.Game): void {
   });
   editorStore.subscribe(render);
   window.addEventListener('keydown', onKeyDown);
+  // FPS 指示（每 500ms 刷新一次，不参与面板重建）
+  window.setInterval(() => {
+    const fps = phaserGame.loop.actualFps;
+    fpsEl.textContent = `${Math.round(fps)} fps`;
+    fpsEl.classList.toggle('warn', fps < 45);
+  }, 500);
   render();
 }
 
@@ -158,10 +167,39 @@ function scene(): EditorScene | null {
   return (game?.scene.getScene('EditorScene') as EditorScene | undefined) ?? null;
 }
 
+let headerSig = '';
+let leftSig = '';
+let rightSig = '';
+
+/**
+ * 渲染调度：给每个面板算一个"内容签名"，只有签名变了才重建 DOM。
+ * 拖动过程中数据在连续变化但 UI 无需每帧重建（松手 commit 时 revision 变化 → 重建一次）。
+ */
 function render(): void {
-  renderHeader();
-  if (!isEditingPanel(leftEl)) renderLeft();
-  if (!isEditingPanel(rightEl)) renderRight();
+  const store = editorStore;
+  const issues = store.validateCurrent();
+  const errors = issues.filter((i) => i.level === 'error').length;
+  const warns = issues.length - errors;
+
+  const hSig = `${store.tab}|${errors}|${warns}|${store.map.name}|${listMaps().length}|${testing}`;
+  if (hSig !== headerSig) {
+    headerSig = hSig;
+    renderHeader();
+  }
+
+  const selection = store.selection.join(',');
+  const lSig = `${store.tab}|${store.revision}|${selection}|${store.activePrefabId}|${store.activeMaterialId}|${store.tool}|${store.gridSize}|${store.snapToGrid}|${store.showGrid}|${store.prefabDraft.parts.length}|${materialIds().length}|${(store.map.objects ?? []).length}|${(store.map.prefabs ?? []).length}`;
+  if (lSig !== leftSig && !isEditingPanel(leftEl)) {
+    leftSig = lSig;
+    renderLeft();
+  }
+
+  const rSig = `${store.tab}|${store.revision}|${selection}|${store.activeMaterialId}`;
+  if (rSig !== rightSig && !isEditingPanel(rightEl)) {
+    rightSig = rSig;
+    renderRight();
+  }
+
   renderStatus();
   renderToast();
 }

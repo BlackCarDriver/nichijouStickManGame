@@ -16,7 +16,7 @@ import { PLAYER_CONFIG } from '../entities/Player';
 import { StickmanRenderer } from '../render/StickmanRenderer';
 import { editorStore, PREFAB_RIG } from './EditorStore';
 import type { EditorTab, ToolKind } from './EditorStore';
-import { jumpMetrics, type Vec } from './geometry';
+import { jumpMetrics, objectCenter, type Vec } from './geometry';
 import { centroidOf, currentVertices, nearestEdge } from './polygonEdit';
 import { setStatus } from './status';
 
@@ -55,6 +55,8 @@ export class EditorScene extends Phaser.Scene {
   /** 双击检测 */
   private lastDownTime = 0;
   private lastDownPos: Vec | null = null;
+  /** 最近一次移动时是否按住 Shift（Shift = 不吸附） */
+  private lastShift = false;
   /** 火柴人参照（尺寸对比用） */
   private refFigure!: Phaser.GameObjects.Graphics;
   private refGuide!: Phaser.GameObjects.Graphics;
@@ -328,8 +330,9 @@ export class EditorScene extends Phaser.Scene {
     if (d.kind === 'move') {
       const center = store.partWorldCenter(d.index);
       if (!center) return;
+      // 拖动过程中不吸附（像素级跟手），松手时再对齐网格
       const raw = { x: center.x + (p.x - d.last.x), y: center.y + (p.y - d.last.y) };
-      const target = shiftKey ? raw : store.snapPoint(raw);
+      const target = raw;
       d.last = p;
       const lc = store.worldToPartLocal(target);
       if (part.type === 'rect') {
@@ -347,14 +350,12 @@ export class EditorScene extends Phaser.Scene {
       if (part.type === 'rect') {
         const halfW = Math.abs(local.x - cLocal.x);
         const halfH = Math.abs(local.y - cLocal.y);
-        const snap = store.snapToGrid && !shiftKey;
-        const w = Math.max(4, snap ? store.snapValue(halfW * 2) : halfW * 2);
-        const h = Math.max(4, snap ? store.snapValue(halfH * 2) : halfH * 2);
+        const w = Math.max(4, halfW * 2);
+        const h = Math.max(4, halfH * 2);
         store.patchPartLive(d.index, { x: cLocal.x - w / 2, y: cLocal.y - h / 2, w, h });
       } else {
         const r = Math.hypot(local.x - cLocal.x, local.y - cLocal.y);
-        const snapR = store.snapToGrid && !shiftKey;
-        store.patchPartLive(d.index, { radius: Math.max(3, snapR ? store.snapValue(r) : r) });
+        store.patchPartLive(d.index, { radius: Math.max(3, r) });
       }
       this.applyLiveVisual(this.partRuntimeId(d.index), part, store.prefabRigOrigin());
       this.drawOverlay();
@@ -374,10 +375,32 @@ export class EditorScene extends Phaser.Scene {
   }
 
   private prefabPointerUp(): boolean {
-    if (!this.prefabDrag) return false;
+    const d = this.prefabDrag;
+    if (!d) return false;
     this.prefabDrag = null;
+    const store = editorStore;
+    // 松手时吸附到网格（按住 Shift 则不吸附）
+    if (!this.lastShift) {
+      if (d.kind === 'move') store.snapPartToGrid(d.index);
+      else if (d.kind === 'resize') {
+        const part = store.prefabDraft.parts[d.index];
+        if (part?.type === 'rect' && store.snapToGrid) {
+          const c = objectCenter(part);
+          const w = Math.max(4, store.snapValue(part.w));
+          const h = Math.max(4, store.snapValue(part.h));
+          store.patchPartLive(d.index, { x: c.x - w / 2, y: c.y - h / 2, w, h });
+        } else if (part && store.snapToGrid) {
+          const r = (part as { radius?: number }).radius;
+          if (typeof r === 'number') store.patchPartLive(d.index, { radius: Math.max(3, store.snapValue(r)) });
+        }
+      } else if (d.kind === 'rotate') {
+        const part = store.prefabDraft.parts[d.index];
+        if (part) store.patchPartLive(d.index, { angle: Math.round(part.angle ?? 0) });
+      }
+    }
+    this.lastShift = false;
     this.suppressRebuild = false; // 松手后完整重建一次，保证物理体与数据一致
-    editorStore.commit();
+    store.commit();
     return true;
   }
 
@@ -587,6 +610,7 @@ export class EditorScene extends Phaser.Scene {
       this.drawOverlay();
       return;
     }
+    this.lastShift = (pointer.event as MouseEvent | undefined)?.shiftKey === true;
 
     switch (store.tool) {
       case 'select': {
@@ -688,6 +712,7 @@ export class EditorScene extends Phaser.Scene {
 
     if (this.prefabDrag) {
       const shift = (pointer.event as MouseEvent | undefined)?.shiftKey === true;
+      this.lastShift = shift;
       this.prefabPointerMove(p, shift);
       return;
     }
@@ -695,7 +720,8 @@ export class EditorScene extends Phaser.Scene {
     if (!this.drag) return;
 
     if (this.drag.kind === 'move') {
-      const target = store.snapPoint(p);
+      // 拖动过程中用原始坐标（像素级跟手），松手时再吸附
+      const target = p;
       const dx = target.x - this.drag.start.x - this.drag.lastApplied.x;
       const dy = target.y - this.drag.start.y - this.drag.lastApplied.y;
       if (dx === 0 && dy === 0) return;
@@ -743,6 +769,8 @@ export class EditorScene extends Phaser.Scene {
     if (!drag) return;
 
     if (drag.kind === 'move') {
+      if (!this.lastShift) store.snapSelectedToGrid();
+      this.lastShift = false;
       this.suppressRebuild = false;
       store.commit();
       return;
@@ -829,15 +857,15 @@ export class EditorScene extends Phaser.Scene {
     if (v instanceof Phaser.GameObjects.TileSprite) {
       const r = obj as MapObjectRect;
       v.setPosition(offset.x + r.x + r.w / 2, offset.y + r.y + r.h / 2);
-      v.setSize(r.w, r.h);
-      v.setRotation(rot);
-      v.setAlpha(alpha);
+      if (v.width !== r.w || v.height !== r.h) v.setSize(r.w, r.h);
+      if (v.rotation !== rot) v.setRotation(rot);
+      if (v.alpha !== alpha) v.setAlpha(alpha);
     } else if (v instanceof Phaser.GameObjects.Image) {
       const r = obj as MapObjectRect;
       v.setPosition(offset.x + r.x + r.w / 2, offset.y + r.y + r.h / 2);
-      v.setDisplaySize(r.w, r.h);
-      v.setRotation(rot);
-      v.setAlpha(alpha);
+      if (v.displayWidth !== r.w || v.displayHeight !== r.h) v.setDisplaySize(r.w, r.h);
+      if (v.rotation !== rot) v.setRotation(rot);
+      if (v.alpha !== alpha) v.setAlpha(alpha);
     } else if (v instanceof Phaser.GameObjects.Rectangle) {
       const r = obj as MapObjectRect;
       v.setPosition(offset.x + r.x + r.w / 2, offset.y + r.y + r.h / 2);
