@@ -4,13 +4,22 @@ import type { InputCommand } from '../core/InputCommand';
 import { Player } from '../entities/Player';
 import { CameraRig } from '../camera/CameraRig';
 import { GameFeel } from '../feel/GameFeel';
-import { ARENA } from '../map/ArenaData';
+import { getDefaultMap, getPrefabTable } from '../map/MapRegistry';
+import type { MapData } from '../map/MapFormat';
 import { buildMap } from '../map/MapLoader';
 import type { MapObjectRuntime } from '../map/MapLoader';
 
 const PLAYER_COLORS = [0xe74c3c, 0x3498db];
 /** 镜头缩放（固定，聚焦单角色时画面清晰） */
 const CAMERA_ZOOM = 0.9;
+
+/** 启动场景时可传入的数据（编辑器 Play test 用） */
+export interface GameSceneData {
+  /** 要加载的地图；不传则用默认地图 */
+  map?: MapData;
+  /** 返回编辑器等外部回调（Esc 键触发） */
+  onExit?: () => void;
+}
 
 /**
  * 主游戏场景。
@@ -31,31 +40,50 @@ export class GameScene extends Phaser.Scene {
   private mapObjects: MapObjectRuntime[] = [];
   /** 单向平台 body 缓存（每帧判断穿越用） */
   private oneWayBodies: MatterJS.BodyType[] = [];
+  /** 当前地图数据 */
+  private mapData!: MapData;
+  /** 外部退出回调（编辑器 Play test → Esc 返回） */
+  private onExit?: () => void;
 
   constructor() {
     super('GameScene');
   }
 
+  /** 每次 start 都会调用：地图可由外部传入（编辑器测试），否则用默认地图 */
+  init(data: GameSceneData = {}): void {
+    this.mapData = data.map ?? getDefaultMap();
+    this.onExit = data.onExit;
+    // 场景可能被重复 start，清空上一轮的引用
+    this.players = [];
+    this.mapObjects = [];
+    this.oneWayBodies = [];
+  }
+
   create(): void {
     this.inputManager = new InputManager(this);
-    this.mapObjects = buildMap(this, ARENA);
-    this.oneWayBodies = this.mapObjects.filter((o) => o.oneWay).map((o) => o.body);
+    this.mapObjects = buildMap(this, this.mapData, getPrefabTable());
+    this.oneWayBodies = this.mapObjects.filter((o) => o.oneWay && o.body).map((o) => o.body!);
 
-    const spawn = ARENA.spawnPoints;
+    const spawn = this.mapData.spawnPoints;
     this.players = spawn.map((p, i) => new Player(this, p.x, p.y, PLAYER_COLORS[i]));
     this.cameraTarget = this.players[0];
 
     const cam = this.cameras.main;
     cam.setBackgroundColor('#1a1a2e');
-    cam.setBounds(0, 0, ARENA.width, ARENA.height);
+    cam.setBounds(0, 0, this.mapData.width, this.mapData.height);
 
-    this.cameraRig = new CameraRig(cam, ARENA.width, ARENA.height, CAMERA_ZOOM);
+    this.cameraRig = new CameraRig(cam, this.mapData.width, this.mapData.height, CAMERA_ZOOM);
     this.gameFeel = new GameFeel();
 
     // 受击反馈：屏幕震动
     this.events.on('player-hit', () => {
       this.gameFeel.addTrauma(0.35);
     });
+
+    // 编辑器测试模式：Esc 返回
+    if (this.onExit) {
+      this.input.keyboard?.once('keydown-ESC', () => this.onExit?.());
+    }
   }
 
   update(_time: number, delta: number): void {

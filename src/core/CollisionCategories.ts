@@ -11,6 +11,8 @@ export const COLLISION_CATEGORY = {
   feetSensor: 0x0004,
   /** 单向平台（从上可站、从下可穿过） */
   oneWayPlatform: 0x0008,
+  /** 关节锚点（不与任何东西碰撞） */
+  jointAnchor: 0x0010,
 } as const;
 
 /** 玩家主体默认 mask：与所有物体碰撞 */

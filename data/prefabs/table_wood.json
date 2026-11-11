@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "id": "table_wood",
+  "name": "木桌",
+  "anchor": "center",
+  "bodyMode": "loose",
+  "parts": [
+    { "type": "rect", "x": -60, "y": -10, "w": 120, "h": 10, "material": "wood" },
+    { "type": "rect", "x": -54, "y": 0, "w": 8, "h": 40, "material": "wood" },
+    { "type": "rect", "x": 46, "y": 0, "w": 8, "h": 40, "material": "wood" },
+    { "type": "rect", "x": -30, "y": 0, "w": 6, "h": 40, "material": "wood" }
+  ]
+}

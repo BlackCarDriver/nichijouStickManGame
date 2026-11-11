@@ -1,4 +1,15 @@
-/** 物体材质属性表（数据驱动：新增材质只需加配置） */
+/**
+ * 材质表加载（数据源：data/materials.json）。
+ *
+ * JSON 是唯一真源：游戏、编辑器、校验脚本共用同一份数据。
+ * color 在 JSON 里是 hex 字符串（"#8b5a2b"，人和 AI 都读得懂），
+ * 加载时解析成 Phaser 需要的 number，同时保留 colorHex 供编辑器使用。
+ *
+ * MATERIALS 是**可变单例**：编辑器调参时就地替换（replaceMaterials），
+ * 因此所有消费方都应通过 getMaterial() / MATERIALS 读取，不要缓存副本。
+ */
+import rawMaterials from '../../data/materials.json';
+
 export interface MaterialConfig {
   id: string;
   name: string;
@@ -8,80 +19,103 @@ export interface MaterialConfig {
   destructible: boolean;
   /** 是否固定位置（不掉落/不可推动） */
   fixed: boolean;
-  /** 反弹系数（restitution），决定子弹/物体反弹行为 */
+  /** 反弹系数（restitution） */
   bounce: number;
-  /** 密度，影响重量（跷跷板/可推动物体） */
+  /** 密度，影响重量 */
   density: number;
-  /** 动摩擦力（0~1，越小越滑；影响物体滑动/玩家行走手感） */
+  /** 动摩擦力（0~1） */
   friction: number;
-  /** 静摩擦力（0~1，越小越容易被推动） */
+  /** 静摩擦力（0~1） */
   frictionStatic: number;
-  /** 渲染颜色 */
+  /** 解析后的颜色（Phaser number） */
   color: number;
+  /** 原始 hex 字符串（编辑器显示/导出用） */
+  colorHex: string;
 }
 
-export const MATERIALS: Record<string, MaterialConfig> = {
-  wall: {
-    id: 'wall',
-    name: '墙体',
-    durability: 0,
-    destructible: false,
-    fixed: true,
-    bounce: 0,
-    density: 5,
-    // 墙体无摩擦：贴墙下落不会被摩擦减速（玩家 friction 与它取 min → 0）
-    friction: 0,
-    frictionStatic: 0,
-    color: 0x4a4a5a,
-  },
-  ground: {
-    id: 'ground',
-    name: '地面',
-    durability: 0,
-    destructible: false,
-    fixed: true,
-    bounce: 0,
-    density: 5,
-    friction: 0.5,
-    frictionStatic: 0.9,
-    color: 0x3d5a3d,
-  },
-  wood: {
-    id: 'wood',
-    name: '木头',
-    durability: 60,
-    destructible: true,
-    fixed: false,
-    bounce: 0.1,
-    density: 1,
-    friction: 0.4,
-    frictionStatic: 0.8,
-    color: 0x8b5a2b,
-  },
-  cardboard: {
-    id: 'cardboard',
-    name: '纸箱',
-    durability: 20,
-    destructible: true,
-    fixed: false,
-    bounce: 0.05,
-    density: 0.3,
-    // 纸箱粗糙、易被推动
-    friction: 0.3,
-    frictionStatic: 0.5,
-    color: 0xc8a165,
-  },
-  metal: {
-    id: 'metal',
-    name: '金属',
-    durability: 200,
-    destructible: true,
-    fixed: false,
-    bounce: 0.8,
-    density: 4,
-    // 金属光滑：更容易滑动
-    friction: 0.15,
-    frictionStatic: 0.3,
-    color: 0x9aa5b1,
-  },
-};
+/** materials.json 中的单条材质 */
+export interface MaterialJson {
+  name: string;
+  durability: number;
+  destructible: boolean;
+  fixed: boolean;
+  bounce: number;
+  density: number;
+  friction: number;
+  frictionStatic: number;
+  color: string;
+}
+
+export interface MaterialsFile {
+  version: number;
+  materials: Record<string, MaterialJson>;
+}
+
+/** 当前生效的材质表（就地可变） */
+export const MATERIALS: Record<string, MaterialConfig> = {};
+
+/** "#8b5a2b" → 0x8b5a2b */
+export function parseColor(hex: string, fallback = 0xffffff): number {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex).trim());
+  if (!m) return fallback;
+  return parseInt(m[1], 16);
+}
+
+/** "0x8b5a2b"/9140779 → "#8b5a2b" */
+export function toHex(color: number): string {
+  return `#${color.toString(16).padStart(6, '0')}`;
+}
+
+/** 用给定数据整体替换当前材质表（清空后就地写入，保持对象引用不变） */
+export function replaceMaterials(file: MaterialsFile): void {
+  for (const key of Object.keys(MATERIALS)) delete MATERIALS[key];
+  for (const [id, def] of Object.entries(file.materials ?? {})) {
+    MATERIALS[id] = {
+      id,
+      name: def.name ?? id,
+      durability: def.durability ?? 0,
+      destructible: def.destructible ?? false,
+      fixed: def.fixed ?? false,
+      bounce: def.bounce ?? 0,
+      density: def.density ?? 1,
+      friction: def.friction ?? 0.4,
+      frictionStatic: def.frictionStatic ?? 0.6,
+      color: parseColor(def.color),
+      colorHex: def.color ?? '#ffffff',
+    };
+  }
+}
+
+export function getMaterial(id: string): MaterialConfig | undefined {
+  return MATERIALS[id];
+}
+
+export function materialIds(): string[] {
+  return Object.keys(MATERIALS);
+}
+
+/** 导出当前材质表为 JSON 结构（编辑器保存用） */
+export function serializeMaterials(): MaterialsFile {
+  const materials: Record<string, MaterialJson> = {};
+  for (const [id, m] of Object.entries(MATERIALS)) {
+    materials[id] = {
+      name: m.name,
+      durability: m.durability,
+      destructible: m.destructible,
+      fixed: m.fixed,
+      bounce: m.bounce,
+      density: m.density,
+      friction: m.friction,
+      frictionStatic: m.frictionStatic,
+      color: m.colorHex,
+    };
+  }
+  return { version: rawMaterialsJson().version, materials };
+}
+
+function rawMaterialsJson(): MaterialsFile {
+  return rawMaterials as MaterialsFile;
+}
+
+// 初始化（模块加载即生效）
+replaceMaterials(rawMaterialsJson());
