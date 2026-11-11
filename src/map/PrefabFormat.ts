@@ -10,8 +10,13 @@ export const PREFAB_FORMAT_VERSION = 1;
 
 /** 锚点位置。center = 部件包围盒中心 */
 export type PrefabAnchor = 'center';
-/** 物理形态：loose = 每个部件独立刚体（当前唯一实现，便于逐块破坏） */
-export type PrefabBodyMode = 'loose';
+/**
+ * 物理形态：
+ * - loose    每个部件是独立刚体（可逐块破坏，但整体受力时可能散架/错位）
+ * - compound 所有部件焊接成一个复合刚体（整体被推/被炸飞，整体掉耐久；
+ *            物理属性统一取自「面积最大的部件」的材质）
+ */
+export type PrefabBodyMode = 'loose' | 'compound';
 
 export interface PrefabData {
   version: number;

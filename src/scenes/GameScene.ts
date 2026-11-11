@@ -5,8 +5,9 @@ import { Player } from '../entities/Player';
 import { CameraRig } from '../camera/CameraRig';
 import { GameFeel } from '../feel/GameFeel';
 import { getDefaultMap, getPrefabTable } from '../map/MapRegistry';
+import type { PrefabData } from '../map/PrefabFormat';
 import type { MapData } from '../map/MapFormat';
-import { buildMap } from '../map/MapLoader';
+import { buildMap, syncCompoundVisuals } from '../map/MapLoader';
 import type { MapObjectRuntime } from '../map/MapLoader';
 import { MATERIALS } from '../config/materials';
 import { preloadMaterialTextures } from '../map/TextureLoader';
@@ -19,6 +20,8 @@ const CAMERA_ZOOM = 0.9;
 export interface GameSceneData {
   /** 要加载的地图；不传则用默认地图 */
   map?: MapData;
+  /** 预制件表；编辑器测试时传入"含未保存草稿"的表，不传则读 data/prefabs */
+  prefabs?: Record<string, PrefabData>;
   /** 返回编辑器等外部回调（Esc 键触发） */
   onExit?: () => void;
 }
@@ -44,6 +47,8 @@ export class GameScene extends Phaser.Scene {
   private oneWayBodies: MatterJS.BodyType[] = [];
   /** 当前地图数据 */
   private mapData!: MapData;
+  /** 预制件表（编辑器测试时含草稿） */
+  private prefabTable!: Record<string, PrefabData>;
   /** 外部退出回调（编辑器 Play test → Esc 返回） */
   private onExit?: () => void;
 
@@ -54,6 +59,7 @@ export class GameScene extends Phaser.Scene {
   /** 每次 start 都会调用：地图可由外部传入（编辑器测试），否则用默认地图 */
   init(data: GameSceneData = {}): void {
     this.mapData = data.map ?? getDefaultMap();
+    this.prefabTable = data.prefabs ?? getPrefabTable();
     this.onExit = data.onExit;
     // 场景可能被重复 start，清空上一轮的引用
     this.players = [];
@@ -71,7 +77,7 @@ export class GameScene extends Phaser.Scene {
 
   create(): void {
     this.inputManager = new InputManager(this);
-    this.mapObjects = buildMap(this, this.mapData, getPrefabTable());
+    this.mapObjects = buildMap(this, this.mapData, this.prefabTable);
     this.oneWayBodies = this.mapObjects.filter((o) => o.oneWay && o.body).map((o) => o.body!);
 
     const spawn = this.mapData.spawnPoints;
@@ -102,6 +108,8 @@ export class GameScene extends Phaser.Scene {
     this.players[0]?.update(cmd1, delta);
     this.players[1]?.update(cmd2, delta);
     this.updateOneWayCollisions();
+    // 焊接体：把一个刚体同步到它的 Container 视觉上
+    syncCompoundVisuals(this.mapObjects);
     this.updateCameraTarget(cmd1, cmd2);
     if (this.cameraTarget && this.cameraRig) {
       this.cameraRig.update(this.cameraTarget, delta);

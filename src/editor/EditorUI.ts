@@ -404,6 +404,22 @@ function renderLeft(): void {
       h('h3', { class: 'ed-h3' }, ['元信息']),
       field('id（= 文件名）', textInput(store.prefabDraft.id, (v) => store.updatePrefabMeta({ id: v.trim() || 'new_prefab' }))),
       field('名称', textInput(store.prefabDraft.name, (v) => store.updatePrefabMeta({ name: v }))),
+      field(
+        '物理形态',
+        selectInput(
+          [
+            { value: 'loose', label: '松件 loose（部件各自独立）' },
+            { value: 'compound', label: '焊接 compound（整体一个刚体）' },
+          ],
+          store.prefabDraft.bodyMode ?? 'loose',
+          (v) => store.updatePrefabMeta({ bodyMode: v as 'loose' | 'compound' }),
+        ),
+      ),
+      h('p', { class: 'ed-help' }, [
+        store.prefabDraft.bodyMode === 'compound'
+          ? '焊接：所有部件合并成一个刚体，整体被推/踢飞，整体掉耐久；物理属性取「面积最大部件」的材质。'
+          : '松件：每个部件独立刚体，可逐块破坏；动态时整体受力可能散架。',
+      ]),
       h('h3', { class: 'ed-h3' }, [`部件（${store.prefabDraft.parts.length}）`]),
       h(
         'div',
@@ -619,7 +635,9 @@ function instanceForm(): HTMLElement {
   if (!inst) return h('div');
   return h('div', {}, [
     h('h3', { class: 'ed-h3' }, ['预制件实例']),
-    h('p', { class: 'ed-help' }, [`id: ${inst.id} · ref: ${inst.ref}`]),
+    h('p', { class: 'ed-help' }, [
+      `id: ${inst.id} · ref: ${inst.ref} · 形态: ${listPrefabs().find((p) => p.id === inst.ref)?.bodyMode === 'compound' ? '焊接' : '松件'}`,
+    ]),
     h('div', { class: 'ed-grid2' }, [
       field('x（中心）', numberInput(inst.x, (v) => store.patchSelected({ x: v }))),
       field('y（中心）', numberInput(inst.y, (v) => store.patchSelected({ y: v }))),
@@ -1118,6 +1136,8 @@ function startPlayTest(): void {
   game.scene.stop('EditorScene');
   game.scene.start('GameScene', {
     map,
+    // 用编辑器内的预制件表（含未保存的焊接开关等改动）
+    prefabs: JSON.parse(JSON.stringify(store.prefabTable())),
     onExit: () => stopPlayTest(),
   });
   setStatus('测试中：WASD/方向键 移动，W/↑ 跳跃，Esc 返回编辑器');

@@ -127,7 +127,7 @@ npm run validate
   "id": "table_wood",       // 必须与文件名一致（地图用 ref 引用 id）
   "name": "木桌",
   "anchor": "center",
-  "bodyMode": "loose",      // loose = 每个部件独立刚体
+  "bodyMode": "loose",      // loose = 每个部件独立刚体 / compound = 焊接成一个复合刚体
   "parts": [
     { "type": "rect", "x": -60, "y": -10, "w": 120, "h": 10, "material": "wood" }
   ]
@@ -138,6 +138,20 @@ npm run validate
 
 1. **手写 / AI 编辑**：直接改 JSON → `npm run validate` → 刷新游戏
 2. **可视化编辑**：`npm run dev` 后打开 <http://localhost:5173/editor.html>
+
+## 预制件的两种物理形态（bodyMode）
+
+| 值 | 行为 | 适用 | 代价 |
+|----|------|------|------|
+| `loose` | 每个部件一个独立刚体 | 可逐块破坏；静态家具（`fixed: true`）也没问题 | 动态时整体受力可能散架/错位 |
+| `compound` | 所有部件焊接成**一个复合刚体** | 桌子/箱子这类"一个整体"的物体：能被整体推动、踢飞、爆炸抛飞 | ① 物理属性只能取**面积最大部件**的材质 ② 整体掉耐久，无法逐块破坏 |
+
+实现说明（`MapLoader.buildCompoundPrefab`）：
+
+- 各部件先用 `Bodies.*` 建"离线刚体"，再用 `Body.create({ parts })` 合成复合体（Matter 会自动生成父体凸包）
+- 视觉上是**一个 Container + 各部件为子对象**（本地坐标），每帧只把 Container 同步到刚体位置/角度
+  → 不需要逐部件同步，性能与部件数量无关
+- `inst.fixed` 优先级高于材质默认值；焊接体静态时同样会重新应用材质摩擦/反弹
 
 ## 画布上的直接编辑（地图 / 预制件 通用）
 

@@ -474,7 +474,7 @@ export class EditorScene extends Phaser.Scene {
     const sin = Math.sin(delta);
     const prefix = `${instId}#`;
     for (const item of this.runtime) {
-      if (!item.id.startsWith(prefix)) continue;
+      if (item.id !== instId && !item.id.startsWith(prefix)) continue;
       const v = item.visual as unknown as {
         x: number;
         y: number;
@@ -487,6 +487,20 @@ export class EditorScene extends Phaser.Scene {
       const py = v.y - pivot.y;
       v.setPosition(pivot.x + px * cos - py * sin, pivot.y + px * sin + py * cos);
       v.setRotation(v.rotation + delta);
+
+      // 焊接体还要把刚体转过去（编辑器暂停物理，否则松手重建前物理与视觉不一致）
+      if (item.compound && item.body) {
+        const b = item.body;
+        const bx = b.position.x - pivot.x;
+        const by = b.position.y - pivot.y;
+        this.matter.body.setPosition(b, {
+          x: pivot.x + bx * cos - by * sin,
+          y: pivot.y + bx * sin + by * cos,
+        });
+        this.matter.body.setAngle(b, b.angle + delta);
+        v.setPosition(b.position.x, b.position.y);
+        v.setRotation(b.angle);
+      }
     }
   }
 
@@ -561,14 +575,15 @@ export class EditorScene extends Phaser.Scene {
       if (b && c) {
         const resizeHandle = { x: b.maxX, y: b.maxY };
         const rotateHandle = { x: (b.minX + b.maxX) / 2, y: b.minY - 30 / z };
+        const welded = store.prefabDraft.bodyMode === 'compound';
         if (Math.hypot(p.x - resizeHandle.x, p.y - resizeHandle.y) <= hs) {
           this.prefabDrag = { kind: 'resize', index: idx, center: c };
-          this.suppressRebuild = true;
+          this.suppressRebuild = welded;
           return;
         }
         if (Math.hypot(p.x - rotateHandle.x, p.y - rotateHandle.y) <= hs) {
           this.prefabDrag = { kind: 'rotate', index: idx, center: c };
-          this.suppressRebuild = true;
+          this.suppressRebuild = welded;
           return;
         }
       }
@@ -581,7 +596,8 @@ export class EditorScene extends Phaser.Scene {
     }
     store.select([`part:${hit}`]);
     this.prefabDrag = { kind: 'move', index: hit, last: p };
-    this.suppressRebuild = true;
+    // 焊接体只有一个刚体，无法局部移动 → 走重建路径（部件数量少，开销可接受）
+    this.suppressRebuild = store.prefabDraft.bodyMode !== 'compound';
   }
 
   private prefabPointerMove(p: Vec, shiftKey: boolean): void {
@@ -605,7 +621,8 @@ export class EditorScene extends Phaser.Scene {
       } else {
         store.patchPartLive(d.index, { x: lc.x, y: lc.y });
       }
-      this.applyLiveVisual(this.partRuntimeId(d.index), part, store.prefabRigOrigin());
+      if (store.prefabDraft.bodyMode === 'compound') this.queueRebuild();
+      else this.applyLiveVisual(this.partRuntimeId(d.index), part, store.prefabRigOrigin());
       this.drawOverlay();
       return;
     }
@@ -622,7 +639,8 @@ export class EditorScene extends Phaser.Scene {
         const r = Math.hypot(local.x - cLocal.x, local.y - cLocal.y);
         store.patchPartLive(d.index, { radius: Math.max(3, r) });
       }
-      this.applyLiveVisual(this.partRuntimeId(d.index), part, store.prefabRigOrigin());
+      if (store.prefabDraft.bodyMode === 'compound') this.queueRebuild();
+      else this.applyLiveVisual(this.partRuntimeId(d.index), part, store.prefabRigOrigin());
       this.drawOverlay();
       return;
     }
@@ -1215,6 +1233,14 @@ export class EditorScene extends Phaser.Scene {
     for (const item of this.runtime) {
       const match = sel.has(item.id) || prefixes.some((pre) => item.id.startsWith(pre));
       if (!match) continue;
+      if (item.compound && item.body) {
+        // 焊接体：Container 没有物理绑定，必须移动刚体再同步视觉
+        const b = item.body;
+        this.matter.body.setPosition(b, { x: b.position.x + dx, y: b.position.y + dy });
+        const v = item.visual as unknown as Phaser.GameObjects.Components.Transform;
+        v.setPosition(b.position.x, b.position.y);
+        continue;
+      }
       if (item.body) {
         this.matter.body.setPosition(item.body, {
           x: item.body.position.x + dx,

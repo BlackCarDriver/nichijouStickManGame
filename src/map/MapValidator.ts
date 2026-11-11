@@ -278,8 +278,8 @@ export function validatePrefab(prefab: unknown, ctx: ValidateContext): Issue[] {
   }
   if (typeof p.id !== 'string' || p.id.trim() === '') issues.push(err('id', '预制件 id 不能为空'));
   if (typeof p.name !== 'string' || p.name.trim() === '') issues.push(warn('name', '建议填写可读名称'));
-  if (p.bodyMode !== undefined && p.bodyMode !== 'loose') {
-    issues.push(warn('bodyMode', `bodyMode "${String(p.bodyMode)}" 暂未实现，当前按 loose 处理`));
+  if (p.bodyMode !== undefined && p.bodyMode !== 'loose' && p.bodyMode !== 'compound') {
+    issues.push(err('bodyMode', `bodyMode 只能是 "loose" 或 "compound"（当前 "${String(p.bodyMode)}"）`));
   }
 
   const parts = p.parts;
@@ -287,6 +287,19 @@ export function validatePrefab(prefab: unknown, ctx: ValidateContext): Issue[] {
     issues.push(err('parts', '预制件至少需要 1 个部件'));
   } else {
     parts.forEach((part, i) => validateObject(part, `parts[${i}]`, ctx, issues));
+
+    if (p.bodyMode === 'compound') {
+      // 焊接体只能有一套物理属性 → 取面积最大部件的材质
+      const materials = new Set(parts.map((part) => (part as Record<string, unknown>)?.material).filter(Boolean));
+      if (materials.size > 1) {
+        issues.push(
+          warn(
+            'parts',
+            `焊接体包含 ${materials.size} 种材质（${[...materials].join(', ')}），物理属性只会取「面积最大部件」的材质；如需逐块材质差异请改用 loose`,
+          ),
+        );
+      }
+    }
   }
   return issues;
 }

@@ -887,11 +887,6 @@ export class EditorStore {
     const H = PREFAB_RIG.height;
     const groundY = PREFAB_RIG.groundY;
     const origin = this.prefabRigOrigin();
-    const parts = expandPrefab(this.prefabDraft, {
-      ref: this.prefabDraft.id,
-      x: origin.x,
-      y: origin.y,
-    });
     return {
       version: MAP_FORMAT_VERSION,
       name: `__prefab_rig`,
@@ -911,8 +906,9 @@ export class EditorStore {
           h: H - groundY,
           material: 'ground',
         },
-        ...parts,
       ],
+      // 用"预制件实例"渲染，这样 bodyMode(松件/焊接) 与实际游戏完全一致
+      prefabs: [{ id: this.prefabDraft.id, ref: this.prefabDraft.id, x: origin.x, y: origin.y }],
     };
   }
 

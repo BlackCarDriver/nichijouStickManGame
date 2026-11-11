@@ -13,9 +13,10 @@ import Phaser from 'phaser';
 import { getMaterial } from '../config/materials';
 import type { MaterialConfig } from '../config/materials';
 import { COLLISION_CATEGORY } from '../core/CollisionCategories';
-import type { MapData, MapJoint, MapObject } from './MapFormat';
+import type { MapData, MapJoint, MapObject, PrefabInstance } from './MapFormat';
 import type { PrefabData } from './PrefabFormat';
 import { expandPrefab } from './PrefabExpand';
+import { centroidOf, currentVertices, signedArea } from './PolygonUtil';
 import { hasMaterialTexture, matTextureKey } from './TextureLoader';
 
 /** 地图物体的运行时记录（破坏系统 / 编辑器重建 需要） */
@@ -33,6 +34,8 @@ export interface MapObjectRuntime {
   layer: 'solid' | 'decor';
   /** 关节锚点体（isSensor，无碰撞），重建时一并销毁 */
   extraBodies?: MatterJS.BodyType[];
+  /** 是否焊接体（一个刚体 + 一个 Container 视觉，需要每帧同步） */
+  compound?: boolean;
 }
 
 /** Matter body 与游戏对象绑定的返回形态 */
@@ -72,6 +75,18 @@ export function buildMap(
       return;
     }
     const instId = inst.id ?? `prefab_${autoIdSeq++}`;
+
+    // 焊接：整体一个复合刚体
+    if ((prefab.bodyMode ?? 'loose') === 'compound') {
+      const welded = buildCompoundPrefab(scene, prefab, { ...inst, id: instId }, instId);
+      if (welded) {
+        runtime.push(welded);
+        if (welded.body) bodiesById.set(instId, welded.body);
+      }
+      return;
+    }
+
+    // 松件：每个部件独立刚体
     expandPrefab(prefab, { ...inst, id: instId }).forEach((part, j) => {
       pending.push({ obj: part, id: part.id ?? `${instId}#${j}` });
     });
@@ -285,6 +300,196 @@ function createObject(
     oneWay,
     layer: 'solid',
   };
+}
+
+/** 形状在世界坐标下的中心（rect=中心 / circle=圆心 / polygon=中心+质心） */
+function shapeCenterWorld(obj: MapObject): { x: number; y: number } {
+  if (obj.type === 'rect') return { x: obj.x + obj.w / 2, y: obj.y + obj.h / 2 };
+  if (obj.type === 'circle') return { x: obj.x, y: obj.y };
+  const cen = centroidOf(currentVertices(obj));
+  return { x: obj.x + cen.x, y: obj.y + cen.y };
+}
+
+/** 形状面积（用于挑"主材质"） */
+function shapeArea(obj: MapObject): number {
+  if (obj.type === 'rect') return obj.w * obj.h;
+  if (obj.type === 'circle') return Math.PI * obj.radius * obj.radius;
+  return Math.abs(signedArea(currentVertices(obj)));
+}
+
+/** 多边形绘制（世界/局部顶点均可，顶点需自带偏移） */
+function paintPolygon(
+  g: Phaser.GameObjects.Graphics,
+  verts: Array<{ x: number; y: number }>,
+  color: number,
+  alpha: number,
+  strokeAlpha = 0.5,
+): void {
+  const pts = verts.map((v) => new Phaser.Geom.Point(v.x, v.y));
+  g.fillStyle(color, 1);
+  g.lineStyle(2, 0x000000, strokeAlpha);
+  g.fillPoints(pts, true);
+  g.strokePoints(pts, true);
+  if (alpha < 1) g.setAlpha(alpha);
+}
+
+/** 创建"纯视觉"形状（不绑定物理，供焊接体作为 Container 子对象使用） */
+function createShapeVisual(
+  scene: Phaser.Scene,
+  obj: MapObject,
+  mat: MaterialConfig,
+): Phaser.GameObjects.GameObject | null {
+  const color = obj.color ? parseHex(obj.color, mat.color) : mat.color;
+  const alpha = mat.opacity ?? 1;
+  const angleRad = Phaser.Math.DegToRad(obj.angle ?? 0);
+
+  if (obj.type === 'rect') {
+    const go = createRectVisual(scene, obj.x + obj.w / 2, obj.y + obj.h / 2, obj.w, obj.h, mat, color, 0.5);
+    (go as unknown as Phaser.GameObjects.Components.Transform).setRotation(angleRad);
+    applyAlpha(go, alpha);
+    return go;
+  }
+  if (obj.type === 'circle') {
+    const go = scene.add.circle(obj.x, obj.y, obj.radius, color, 1);
+    go.setStrokeStyle(2, 0x000000, 0.5);
+    applyAlpha(go, alpha);
+    return go;
+  }
+  const verts = currentVertices(obj);
+  const cen = centroidOf(verts);
+  const container = scene.add.container(obj.x + cen.x, obj.y + cen.y);
+  const g = scene.add.graphics();
+  container.add(g);
+  paintPolygon(g, verts, color, alpha, 0.5);
+  container.setRotation(angleRad);
+  applyAlpha(container, alpha);
+  return container;
+}
+
+/** 创建一个"离线"刚体（不加入世界），用于拼复合体 */
+function createOfflineBody(
+  scene: Phaser.Scene,
+  obj: MapObject,
+  density: number,
+): MatterJS.BodyType | null {
+  const angle = Phaser.Math.DegToRad(obj.angle ?? 0);
+  const center = shapeCenterWorld(obj);
+  const base = { angle, density, isStatic: false };
+
+  if (obj.type === 'rect') {
+    return scene.matter.bodies.rectangle(center.x, center.y, obj.w, obj.h, base);
+  }
+  if (obj.type === 'circle') {
+    return scene.matter.bodies.circle(center.x, center.y, obj.radius, base);
+  }
+  const verts = currentVertices(obj);
+  if (verts.length < 3) return null;
+  // 与 MapLoader 的 polygon 约定一致：fromVertices 会把质心对齐到传入的 (x,y)
+  return scene.matter.bodies.fromVertices(center.x, center.y, [verts.map((v) => ({ x: v.x, y: v.y }))], base);
+}
+
+/**
+ * 焊接的预制件实例：把各部件拼成一个复合刚体 + 一个 Container 视觉。
+ *
+ * - 物理属性统一取自**面积最大的部件**的材质（复合体只能有一套属性）
+ * - 视觉上所有部件是 Container 的**子对象**（本地坐标），
+ *   每帧只需把 Container 同步到刚体位置/角度，无需逐部件同步
+ */
+function buildCompoundPrefab(
+  scene: Phaser.Scene,
+  prefab: PrefabData,
+  inst: PrefabInstance,
+  instId: string,
+): MapObjectRuntime | null {
+  const parts = expandPrefab(prefab, inst);
+  if (parts.length === 0) return null;
+
+  // 主材质：面积最大的部件
+  let primary = parts[0];
+  let primaryArea = -1;
+  for (const p of parts) {
+    const area = shapeArea(p);
+    if (area > primaryArea) {
+      primaryArea = area;
+      primary = p;
+    }
+  }
+  const mat = getMaterial(primary.material);
+  if (!mat) {
+    console.warn(`[MapLoader] 焊接体主材质未知: ${primary.material}`);
+    return null;
+  }
+
+  const isStatic = inst.fixed ?? mat.fixed;
+
+  const partBodies: MatterJS.BodyType[] = [];
+  for (const p of parts) {
+    const body = createOfflineBody(scene, p, mat.density);
+    if (body) partBodies.push(body);
+  }
+  if (partBodies.length === 0) return null;
+
+  // 合成复合体并加入世界
+  const compound = scene.matter.body.create({
+    parts: partBodies,
+    friction: mat.friction,
+    frictionStatic: mat.frictionStatic,
+    restitution: mat.bounce,
+    isStatic,
+    label: `weld:${instId}`,
+    collisionFilter: { group: 0, category: COLLISION_CATEGORY.default, mask: 0xffff },
+  });
+  scene.matter.world.add(compound);
+
+  // setStatic 会把摩擦力重置，必须重新应用材质参数
+  if (isStatic && !compound.isStatic) scene.matter.body.setStatic(compound, true);
+  compound.friction = mat.friction;
+  compound.frictionStatic = mat.frictionStatic;
+  compound.restitution = mat.bounce;
+
+  // 视觉：Container（位于刚体中心）+ 子视觉（本地坐标）
+  const bx = compound.position.x;
+  const by = compound.position.y;
+  const ba = compound.angle;
+  const ca = Math.cos(-ba);
+  const sa = Math.sin(-ba);
+  const container = scene.add.container(bx, by);
+
+  for (const p of parts) {
+    const visual = createShapeVisual(scene, p, mat);
+    if (!visual) continue;
+    const center = shapeCenterWorld(p);
+    const dx = center.x - bx;
+    const dy = center.y - by;
+    const t = visual as unknown as Phaser.GameObjects.Components.Transform;
+    t.setPosition(dx * ca - dy * sa, dx * sa + dy * ca);
+    t.setRotation(Phaser.Math.DegToRad(p.angle ?? 0) - ba);
+    container.add(visual);
+  }
+
+  return {
+    id: instId,
+    body: compound,
+    visual: container,
+    material: primary.material,
+    durability: mat.destructible ? mat.durability : -1,
+    oneWay: false,
+    layer: 'solid',
+    compound: true,
+  };
+}
+
+/** 把焊接体的 Container 视觉同步到刚体（每帧调用；编辑器暂停物理时无副作用） */
+export function syncCompoundVisuals(runtime: MapObjectRuntime[]): void {
+  for (const item of runtime) {
+    if (!item.compound || !item.body) continue;
+    const c = item.visual as unknown as Phaser.GameObjects.Components.Transform;
+    const b = item.body;
+    if (c.x !== b.position.x || c.y !== b.position.y || c.rotation !== b.angle) {
+      c.setPosition(b.position.x, b.position.y);
+      c.setRotation(b.angle);
+    }
+  }
 }
 
 /**
