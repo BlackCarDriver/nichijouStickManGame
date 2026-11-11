@@ -177,9 +177,23 @@ export class EditorStore {
     this.notify();
   }
 
-  /** 只通知不记历史（拖动过程中的中间态） */
+  /** 只通知不记历史（离散操作 / Tab 切换等） */
   touch(): void {
     this.notify();
+  }
+
+  private liveTimer = 0;
+
+  /**
+   * 拖动过程中的节流通知：拖动时每帧都在改数据，
+   * 但不需要每帧重建整个 DOM 面板（约 90ms 一次即可）。
+   */
+  touchLive(): void {
+    if (this.liveTimer) return;
+    this.liveTimer = window.setTimeout(() => {
+      this.liveTimer = 0;
+      this.notify();
+    }, 90);
   }
 
   undo(): void {
@@ -658,7 +672,7 @@ export class EditorStore {
     const res = moveVertex(poly, index, world, origin);
     if (!res) return;
     this.applyPolygonResult(t, res);
-    this.touch();
+    this.touchLive();
   }
 
   /** 在边上插入顶点 */
@@ -764,7 +778,7 @@ export class EditorStore {
     const part = this.prefabDraft.parts[index];
     if (!part) return;
     Object.assign(part as unknown as Record<string, unknown>, patch);
-    this.touch();
+    this.touchLive();
   }
 
   // ---------------- 渲染数据 ----------------

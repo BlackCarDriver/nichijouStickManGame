@@ -393,7 +393,8 @@ function renderLeft(): void {
         button('+ 多边形', () => store.addPart({ type: 'polygon', x: 0, y: 0, sides: 3, radius: 40, material: store.activeMaterialId })),
       ]),
       h('p', { class: 'ed-help' }, [
-        '画布操作：点部件=选中 · 拖动=移动 · 右下角绿点=拖拽改大小 · 上方蓝点=拖拽旋转（按住 Shift 吸附 15°）。',
+        '画布操作：点部件=选中 · 拖动=移动 · 右下角绿点=改大小 · 上方蓝点=旋转（Shift 吸附 15°）。',
+        '拖动/缩放时按住 Shift = 临时取消网格吸附，可做精细调整。',
       ]),
     );
     return;

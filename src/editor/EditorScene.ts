@@ -10,13 +10,14 @@ import Phaser from 'phaser';
 import { buildMap, destroyMapRuntime } from '../map/MapLoader';
 import type { MapObjectRuntime } from '../map/MapLoader';
 import { ensureMaterialTextures, preloadMaterialTextures } from '../map/TextureLoader';
+import type { MapObject, MapObjectCircle, MapObjectPolygon, MapObjectRect } from '../map/MapFormat';
 import { MATERIALS } from '../config/materials';
 import { PLAYER_CONFIG } from '../entities/Player';
 import { StickmanRenderer } from '../render/StickmanRenderer';
 import { editorStore, PREFAB_RIG } from './EditorStore';
 import type { EditorTab, ToolKind } from './EditorStore';
 import { jumpMetrics, type Vec } from './geometry';
-import { nearestEdge } from './polygonEdit';
+import { centroidOf, currentVertices, nearestEdge } from './polygonEdit';
 import { setStatus } from './status';
 
 /** 预制件工作台上的鼠标操作（移动 / 改大小 / 旋转） */
@@ -110,12 +111,18 @@ export class EditorScene extends Phaser.Scene {
 
   // ---------------- 渲染 ----------------
   private queueRebuild(): void {
-    if (this.rebuildQueued) return;
     this.rebuildQueued = true;
-    this.time.delayedCall(0, () => {
-      this.rebuildQueued = false;
-      this.rebuildAll();
-    });
+  }
+
+  /** 每帧最多重建一次（在 update 早期处理） */
+  update(): void {
+    // 兜底：鼠标已松开但拖动状态残留（例如在画布外松开、窗口失焦）
+    if ((this.prefabDrag || this.vertexDrag || this.drag) && !this.input.activePointer.isDown) {
+      this.onPointerUp();
+    }
+    if (!this.rebuildQueued) return;
+    this.rebuildQueued = false;
+    this.rebuildAll();
   }
 
   private rebuildAll(): void {
@@ -256,6 +263,7 @@ export class EditorScene extends Phaser.Scene {
         return true;
       }
       this.vertexDrag = { index: vi };
+      this.suppressRebuild = true;
       return true;
     }
 
@@ -288,10 +296,12 @@ export class EditorScene extends Phaser.Scene {
         const rotateHandle = { x: (b.minX + b.maxX) / 2, y: b.minY - 30 / z };
         if (Math.hypot(p.x - resizeHandle.x, p.y - resizeHandle.y) <= hs) {
           this.prefabDrag = { kind: 'resize', index: idx, center: c };
+          this.suppressRebuild = true;
           return;
         }
         if (Math.hypot(p.x - rotateHandle.x, p.y - rotateHandle.y) <= hs) {
           this.prefabDrag = { kind: 'rotate', index: idx, center: c };
+          this.suppressRebuild = true;
           return;
         }
       }
@@ -304,6 +314,7 @@ export class EditorScene extends Phaser.Scene {
     }
     store.select([`part:${hit}`]);
     this.prefabDrag = { kind: 'move', index: hit, last: p };
+    this.suppressRebuild = true;
   }
 
   private prefabPointerMove(p: Vec, shiftKey: boolean): void {
@@ -317,10 +328,8 @@ export class EditorScene extends Phaser.Scene {
     if (d.kind === 'move') {
       const center = store.partWorldCenter(d.index);
       if (!center) return;
-      const target = store.snapPoint({
-        x: center.x + (p.x - d.last.x),
-        y: center.y + (p.y - d.last.y),
-      });
+      const raw = { x: center.x + (p.x - d.last.x), y: center.y + (p.y - d.last.y) };
+      const target = shiftKey ? raw : store.snapPoint(raw);
       d.last = p;
       const lc = store.worldToPartLocal(target);
       if (part.type === 'rect') {
@@ -328,7 +337,8 @@ export class EditorScene extends Phaser.Scene {
       } else {
         store.patchPartLive(d.index, { x: lc.x, y: lc.y });
       }
-      this.queueRebuild();
+      this.applyLiveVisual(this.partRuntimeId(d.index), part, store.prefabRigOrigin());
+      this.drawOverlay();
       return;
     }
 
@@ -337,16 +347,17 @@ export class EditorScene extends Phaser.Scene {
       if (part.type === 'rect') {
         const halfW = Math.abs(local.x - cLocal.x);
         const halfH = Math.abs(local.y - cLocal.y);
-        const w = Math.max(4, store.snapToGrid ? store.snapValue(halfW * 2) : halfW * 2);
-        const h = Math.max(4, store.snapToGrid ? store.snapValue(halfH * 2) : halfH * 2);
+        const snap = store.snapToGrid && !shiftKey;
+        const w = Math.max(4, snap ? store.snapValue(halfW * 2) : halfW * 2);
+        const h = Math.max(4, snap ? store.snapValue(halfH * 2) : halfH * 2);
         store.patchPartLive(d.index, { x: cLocal.x - w / 2, y: cLocal.y - h / 2, w, h });
       } else {
         const r = Math.hypot(local.x - cLocal.x, local.y - cLocal.y);
-        store.patchPartLive(d.index, {
-          radius: Math.max(3, store.snapToGrid ? store.snapValue(r) : r),
-        });
+        const snapR = store.snapToGrid && !shiftKey;
+        store.patchPartLive(d.index, { radius: Math.max(3, snapR ? store.snapValue(r) : r) });
       }
-      this.queueRebuild();
+      this.applyLiveVisual(this.partRuntimeId(d.index), part, store.prefabRigOrigin());
+      this.drawOverlay();
       return;
     }
 
@@ -358,12 +369,14 @@ export class EditorScene extends Phaser.Scene {
     while (deg < -180) deg += 360;
     if (shiftKey) deg = Math.round(deg / 15) * 15;
     store.patchPartLive(d.index, { angle: Math.round(deg * 10) / 10 });
-    this.queueRebuild();
+    this.applyLiveVisual(this.partRuntimeId(d.index), part, store.prefabRigOrigin());
+    this.drawOverlay();
   }
 
   private prefabPointerUp(): boolean {
     if (!this.prefabDrag) return false;
     this.prefabDrag = null;
+    this.suppressRebuild = false; // 松手后完整重建一次，保证物理体与数据一致
     editorStore.commit();
     return true;
   }
@@ -523,6 +536,8 @@ export class EditorScene extends Phaser.Scene {
     this.input.on('pointerdown', this.onPointerDown, this);
     this.input.on('pointermove', this.onPointerMove, this);
     this.input.on('pointerup', this.onPointerUp, this);
+    // 在画布外松开鼠标也要结束拖动
+    this.input.on('pointerupoutside', this.onPointerUp, this);
     this.input.on(
       'wheel',
       (pointer: Phaser.Input.Pointer, _objs: unknown, _dx: number, dy: number) => {
@@ -652,9 +667,22 @@ export class EditorScene extends Phaser.Scene {
     }
 
     if (this.vertexDrag) {
-      const target = editorStore.snapToGrid ? editorStore.snapPoint(p) : p;
-      editorStore.polygonMoveVertex(this.vertexDrag.index, target);
-      this.queueRebuild();
+      const store = editorStore;
+      const shift = (pointer.event as MouseEvent | undefined)?.shiftKey === true;
+      const target = store.snapToGrid && !shift ? store.snapPoint(p) : p;
+      store.polygonMoveVertex(this.vertexDrag.index, target);
+      // 实时重画多边形（不重建整个物理世界）
+      const t = store.polygonTarget();
+      if (t) {
+        if (t.scope === 'map') {
+          const obj = store.getObject(t.id);
+          if (obj) this.applyLiveVisual(t.id, obj, { x: 0, y: 0 });
+        } else {
+          const part = store.prefabDraft.parts[t.index];
+          if (part) this.applyLiveVisual(this.partRuntimeId(t.index), part, store.prefabRigOrigin());
+        }
+      }
+      this.drawOverlay();
       return;
     }
 
@@ -705,6 +733,7 @@ export class EditorScene extends Phaser.Scene {
     }
     if (this.vertexDrag) {
       this.vertexDrag = null;
+      this.suppressRebuild = false;
       editorStore.commit();
       return;
     }
@@ -779,6 +808,71 @@ export class EditorScene extends Phaser.Scene {
     }
     store.tool = 'select';
     this.drawOverlay();
+  }
+
+  /**
+   * 拖动过程中的"实时视觉更新"：只改已存在的显示对象（位置/尺寸/旋转/顶点），
+   * 不销毁重建（避免每帧新建 TileSprite/刚体导致的掉帧）。松手后统一重建一次。
+   *
+   * 注意：Phaser Matter 里 gameObject.x/y 是 body.position 的代理，
+   * 所以设置位置会同时移动刚体，视觉与物理保持一致。
+   */
+  private applyLiveVisual(runtimeId: string, obj: MapObject, offset: Vec): void {
+    const item = this.runtime.find((r) => r.id === runtimeId);
+    if (!item) return;
+    const mat = MATERIALS[obj.material];
+    const alpha = mat?.opacity ?? 1;
+    const color = obj.color ? parseInt(obj.color.replace('#', ''), 16) : (mat?.color ?? 0xffffff);
+    const rot = ((obj.angle ?? 0) * Math.PI) / 180;
+    const v = item.visual;
+
+    if (v instanceof Phaser.GameObjects.TileSprite) {
+      const r = obj as MapObjectRect;
+      v.setPosition(offset.x + r.x + r.w / 2, offset.y + r.y + r.h / 2);
+      v.setSize(r.w, r.h);
+      v.setRotation(rot);
+      v.setAlpha(alpha);
+    } else if (v instanceof Phaser.GameObjects.Image) {
+      const r = obj as MapObjectRect;
+      v.setPosition(offset.x + r.x + r.w / 2, offset.y + r.y + r.h / 2);
+      v.setDisplaySize(r.w, r.h);
+      v.setRotation(rot);
+      v.setAlpha(alpha);
+    } else if (v instanceof Phaser.GameObjects.Rectangle) {
+      const r = obj as MapObjectRect;
+      v.setPosition(offset.x + r.x + r.w / 2, offset.y + r.y + r.h / 2);
+      v.setSize(r.w, r.h);
+      v.setFillStyle(color, 1);
+      v.setRotation(rot);
+      v.setAlpha(alpha);
+    } else if (v instanceof Phaser.GameObjects.Arc) {
+      const c = obj as MapObjectCircle;
+      v.setPosition(offset.x + c.x, offset.y + c.y);
+      v.setRadius(c.radius);
+      v.setFillStyle(color, 1);
+      v.setAlpha(alpha);
+    } else if (v instanceof Phaser.GameObjects.Container) {
+      const p = obj as MapObjectPolygon;
+      const vs = currentVertices(p);
+      const cen = centroidOf(vs);
+      v.setPosition(offset.x + p.x + cen.x, offset.y + p.y + cen.y);
+      v.setRotation(rot);
+      v.setAlpha(alpha);
+      const g = v.getAt(0);
+      if (g instanceof Phaser.GameObjects.Graphics) {
+        g.clear();
+        g.fillStyle(color, 1);
+        g.lineStyle(2, 0x000000, 0.5);
+        const pts = vs.map((pt) => new Phaser.Geom.Point(pt.x, pt.y));
+        g.fillPoints(pts, true);
+        g.strokePoints(pts, true);
+      }
+    }
+  }
+
+  /** 预制件部件对应的运行时 id */
+  private partRuntimeId(index: number): string {
+    return `${editorStore.prefabDraft.id}#${index}`;
   }
 
   /** 拖动时直接平移已渲染的运行时对象（避免整图重建卡顿） */
