@@ -24,6 +24,10 @@ export interface ActionPose {
   footLY: number;
   footRX: number;
   footRY: number;
+  kneeLHintX: number;
+  kneeLHintY: number;
+  kneeRHintX: number;
+  kneeRHintY: number;
 }
 
 export interface ActionKeyframe {
@@ -62,6 +66,10 @@ export function defaultPose(weapon: ActionWeapon = 'none'): ActionPose {
       footLY: 48,
       footRX: 9,
       footRY: 48,
+      kneeLHintX: -3,
+      kneeLHintY: 23,
+      kneeRHintX: 4,
+      kneeRHintY: 22,
     };
   }
   return {
@@ -79,6 +87,10 @@ export function defaultPose(weapon: ActionWeapon = 'none'): ActionPose {
     footLY: 48,
     footRX: 8,
     footRY: 48,
+    kneeLHintX: -3,
+    kneeLHintY: 23,
+    kneeRHintX: 4,
+    kneeRHintY: 22,
   };
 }
 

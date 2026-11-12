@@ -1566,8 +1566,9 @@ function startPlayTest(): void {
   testing = true;
   document.body.classList.add('testing');
   try {
-    // Play Test 始终运行当前地图草稿；renderMap() 在预制件/材质 Tab 会返回工作台演示场景。
-    const map = JSON.parse(JSON.stringify(store.map));
+    // Play Test 运行"当前 Tab 对应的场景"：
+    //   地图 Tab → 当前地图草稿；预制件 Tab → 预制件工作台；材质 Tab → 材质工作台
+    const map = JSON.parse(JSON.stringify(store.renderMap()));
     game.scene.stop('GameScene');
     game.scene.stop('EditorScene');
     game.scene.start('GameScene', {

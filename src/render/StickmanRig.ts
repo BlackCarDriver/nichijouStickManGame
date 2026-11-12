@@ -93,6 +93,29 @@ export function solveLegIK(
   return { thighAngle, kneeBend };
 }
 
+export function solveLegIKWithHint(
+  hipX: number,
+  hipY: number,
+  footX: number,
+  footY: number,
+  hintX: number,
+  hintY: number,
+  L1 = RIG_BONES.THIGH,
+  L2 = RIG_BONES.SHIN,
+): { thighAngle: number; kneeBend: number; knee: Vec2 } {
+  const candidates = ([-1, 1] as const).map((sign) => {
+    const solved = solveLegIK(hipX, hipY, footX, footY, 1, L1, L2, sign);
+    const chain = chain2(hipX, hipY, solved.thighAngle, L1, solved.kneeBend, L2, 1, 'down');
+    return { ...solved, knee: chain.joint };
+  });
+  const hint = { x: hintX, y: hintY };
+  return candidates.reduce((best, candidate) => {
+    const bestDistance = Math.hypot(best.knee.x - hint.x, best.knee.y - hint.y);
+    const candidateDistance = Math.hypot(candidate.knee.x - hint.x, candidate.knee.y - hint.y);
+    return candidateDistance < bestDistance ? candidate : best;
+  });
+}
+
 /**
  * 两骨骼 FK 链：给定根、第一节骨角度与长度、第二节相对弯曲与长度，
  * 返回关节（肘/膝）与末端（手/脚）的世界坐标。也用于手臂。
