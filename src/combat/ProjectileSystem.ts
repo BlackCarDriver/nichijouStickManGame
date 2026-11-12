@@ -76,6 +76,11 @@ interface Projectile {
   dirY: number;
   /** 投掷物的独立视觉（用真实武器模型绘制，跟随飞行方向旋转） */
   gfx?: Phaser.GameObjects.Graphics;
+  /**
+   * 最近若干帧的位置（旧→新）。拖尾按**真实轨迹**画，而不是"当前方向反推一条直线"：
+   * 子弹是抛物线、还能反弹，直线拖尾会和实际路径脱节。
+   */
+  history: { x: number; y: number }[];
 }
 
 /** 插在目标上的投掷物（停留一段时间后消失） */
@@ -102,6 +107,10 @@ export class ProjectileSystem {
   private readonly fx: FxSystem;
   private readonly explode: (req: ExplosionRequest) => void;
   private readonly g: Phaser.GameObjects.Graphics;
+  /** 拖尾绘制用的复用数组（避免每帧分配） */
+  private readonly scratchA: { x: number; y: number }[] = [];
+  private readonly scratchB: { x: number; y: number }[] = [];
+  private readonly scratchC: { x: number; y: number }[] = [];
   private projectiles: Projectile[] = [];
   private stuck: StuckItem[] = [];
 
@@ -166,6 +175,7 @@ export class ProjectileSystem {
       smokeTimer: 0,
       dirX: Math.cos(options.angle),
       dirY: Math.sin(options.angle),
+      history: [{ x: options.x, y: options.y }],
     });
 
     // 投掷武器：用与手持完全相同的模型渲染（不是画一根相似颜色的长条）
@@ -277,6 +287,11 @@ export class ProjectileSystem {
       if (p.explosion) this.explodeAt(p, p.x, p.y);
       p.alive = false;
     }
+
+    // 记录轨迹用于拖尾（按拖尾长度决定取多少采样点）
+    const maxSamples = Phaser.Math.Clamp(Math.ceil(p.bullet.trail / 12) + 2, 4, 14);
+    p.history.push({ x: p.x, y: p.y });
+    if (p.history.length > maxSamples) p.history.shift();
   }
 
   /** 结算一次命中。返回 true = 子弹终止 */
@@ -517,6 +532,76 @@ export class ProjectileSystem {
     p.y = hit.point.y + dirY * 0.8;
   }
 
+  /**
+   * 锥形拖尾 + 多层发光弹头。
+   *
+   * 拖尾是一条**沿真实轨迹渐细的多边形带**（不是一根等宽直线）：
+   *  - 尾端宽 0.12×、头端宽 ~1.07× → 读作"运动模糊"
+   *  - 分两层（外发光 + 内核），外宽内窄，形成发光边缘
+   *  - 顶点数组复用，避免每帧给每颗子弹分配新数组（GC 压力）
+   *
+   * 弹头是三层同心圆（外晕 → 本体 → 白热核心），比单个实心圆更有"热"感。
+   */
+  private drawTrail(p: Projectile): void {
+    const { bullet } = p;
+    const hist = p.history;
+    const n = hist.length;
+
+    if (bullet.trail > 0 && n >= 2) {
+      const left = this.scratchA;
+      const right = this.scratchB;
+      const poly = this.scratchC;
+      left.length = 0;
+      right.length = 0;
+      poly.length = 0;
+
+      for (let i = 0; i < n; i++) {
+        const prev = hist[Math.max(0, i - 1)];
+        const next = hist[Math.min(n - 1, i + 1)];
+        let dx = next.x - prev.x;
+        let dy = next.y - prev.y;
+        const len = Math.hypot(dx, dy) || 1;
+        dx /= len;
+        dy /= len;
+        // 法线
+        const nx = -dy;
+        const ny = dx;
+        const t = i / (n - 1); // 0 = 尾, 1 = 头
+        const w = bullet.size * (0.12 + 0.95 * Math.pow(t, 1.6));
+        left.push({ x: hist[i].x + nx * w, y: hist[i].y + ny * w });
+        right.push({ x: hist[i].x - nx * w, y: hist[i].y - ny * w });
+      }
+
+      // 外发光
+      for (const v of left) poly.push(v);
+      for (let i = right.length - 1; i >= 0; i--) poly.push(right[i]);
+      this.g.fillStyle(p.color, 0.2);
+      this.g.fillPoints(poly, true);
+
+      // 内核（更细更亮）
+      poly.length = 0;
+      for (let i = 0; i < left.length; i++) {
+        const c = hist[i];
+        poly.push({ x: c.x + (left[i].x - c.x) * 0.45, y: c.y + (left[i].y - c.y) * 0.45 });
+      }
+      for (let i = right.length - 1; i >= 0; i--) {
+        const c = hist[i];
+        poly.push({ x: c.x + (right[i].x - c.x) * 0.45, y: c.y + (right[i].y - c.y) * 0.45 });
+      }
+      this.g.fillStyle(p.color, 0.75);
+      this.g.fillPoints(poly, true);
+    }
+
+    // 弹头：外晕 → 本体 → 白热核心
+    const size = bullet.size;
+    this.g.fillStyle(p.color, 0.28);
+    this.g.fillCircle(p.x, p.y, size * 1.9);
+    this.g.fillStyle(p.color, 1);
+    this.g.fillCircle(p.x, p.y, size);
+    this.g.fillStyle(0xffffff, 0.92);
+    this.g.fillCircle(p.x, p.y, size * 0.45);
+  }
+
   private draw(): void {
     this.g.clear();
     for (const p of this.projectiles) {
@@ -531,21 +616,7 @@ export class ProjectileSystem {
         continue;
       }
 
-      if (bullet.trail > 0) {
-        this.g.lineStyle(Math.max(1, bullet.size * 0.7), p.color, 0.4);
-        this.g.lineBetween(
-          p.x - p.dirX * bullet.trail,
-          p.y - p.dirY * bullet.trail,
-          p.x,
-          p.y,
-        );
-      }
-      this.g.fillStyle(p.color, 1);
-      this.g.fillCircle(p.x, p.y, bullet.size);
-      if (bullet.kind === 'rocket' || bullet.kind === 'grenade') {
-        this.g.fillStyle(0xffffff, 0.85);
-        this.g.fillCircle(p.x, p.y, bullet.size * 0.4);
-      }
+      this.drawTrail(p);
     }
 
     // 插在目标上的投掷物由各自的 gfx 绘制（真实武器模型），这里无需再画
