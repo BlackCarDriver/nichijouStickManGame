@@ -111,7 +111,7 @@ export class Player extends Entity {
   private handLocal = { x: 0, y: StickmanRenderer.SHOULDER_Y };
 
   // ---- 攻击动作（刺击/踢）----
-  private attackKind: 'stab' | 'kick' | null = null;
+  private attackKind: 'stab' | 'kick' | 'slash' | null = null;
   private attackTimer = 0;
   private attackDuration = 1;
 
@@ -335,14 +335,14 @@ export class Player extends Entity {
   }
 
   /** 触发一次攻击动作（刺击/踢），供武器系统调用 */
-  setAttack(kind: 'stab' | 'kick', durationMs: number): void {
+  setAttack(kind: 'stab' | 'kick' | 'slash', durationMs: number): void {
     this.attackKind = kind;
     this.attackTimer = durationMs;
     this.attackDuration = Math.max(1, durationMs);
   }
 
   /** 当前攻击类型（无攻击时为 null） */
-  get attack(): 'stab' | 'kick' | null {
+  get attack(): 'stab' | 'kick' | 'slash' | null {
     return this.attackTimer > 0 ? this.attackKind : null;
   }
 
@@ -351,11 +351,30 @@ export class Player extends Entity {
     return this.attackTimer > 0 ? 1 - this.attackTimer / this.attackDuration : 0;
   }
 
+  /**
+   * 挥砍角度偏移（弧度，仅 slash 用）：从上往下扫过约 97°。
+   * 用于同时驱动"手臂朝向"和"刀刃朝向"，让挥砍看起来是一整条弧。
+   */
+  get slashOffset(): number {
+    if (this.attack !== 'slash') return 0;
+    const p = this.attackProgress;
+    const eased = 1 - Math.pow(1 - p, 2); // 前段快、后段收
+    return -0.95 + 1.7 * eased;
+  }
+
   /** 肩部位置（世界坐标）：瞄准角计算与枪口起点基准 */
   get shoulderWorld(): { x: number; y: number } {
     return {
       x: this.container.x,
       y: this.container.y + this.visual.y + StickmanRenderer.SHOULDER_Y,
+    };
+  }
+
+  /** 手部世界坐标（近战判定/挥砍起点） */
+  get handWorld(): { x: number; y: number } {
+    return {
+      x: this.container.x + this.facing * this.handLocal.x,
+      y: this.container.y + this.visual.y + this.handLocal.y,
     };
   }
 
@@ -638,8 +657,8 @@ export class Player extends Entity {
       groundYL: this.smSurfLeft - this.smSurfCenter,
       groundYR: this.smSurfRight - this.smSurfCenter,
       crouching: this.crouching,
-      // 持枪时前臂指向瞄准方向（手部位置由渲染器回传）
-      aim: this.heldWeapon && !this.health.isDead ? this.aimAngle : null,
+      // 持枪时前臂指向瞄准方向（挥砍时跟随刀身扫过）
+      aim: this.heldWeapon && !this.health.isDead ? this.aimAngle + this.slashOffset : null,
       backward: this.backward,
       attackKind: this.attack,
       attackProgress: this.attackProgress,
@@ -662,7 +681,7 @@ export class Player extends Entity {
         drawHeldWeapon(this.graphics, {
           visual,
           facing: this.facing,
-          aim: this.aimAngle,
+          aim: this.aimAngle + this.slashOffset,
           hand: {
             x: this.handLocal.x + this.facing * Math.cos(this.aimAngle) * thrust,
             y: this.handLocal.y + Math.sin(this.aimAngle) * thrust,

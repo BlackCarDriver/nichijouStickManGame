@@ -116,7 +116,7 @@ export class WeaponSystem {
         fired = this.fireBeam(player, weapon);
         break;
       case 'melee':
-        fired = this.stab(player, weapon);
+        fired = this.meleeAttack(player, weapon);
         break;
       case 'throw':
         fired = this.throwWeapon(player, weapon);
@@ -320,12 +320,138 @@ export class WeaponSystem {
     return true;
   }
 
+  /**
+   * 近战攻击。
+   * - stab（匕首/长矛）：手部向前一条短射线，命中单体
+   * - slash（光刀）：沿 arc 扫过一整段弧，每个目标只结算一次（可一刀扫多人）
+   */
+  private meleeAttack(player: Player, weapon: WeaponJson): boolean {
+    const melee = weapon.melee;
+    if (!melee) return false;
+    if ((melee.anim ?? 'stab') === 'slash') {
+      return this.slash(player, weapon);
+    }
+    return this.stab(player, weapon);
+  }
+
+  /**
+   * 挥砍：以手部为圆心的**扇区判定**（角度 + 距离 + 视线），
+   * 而不是"N 条采样射线"。采样法在采样间隔处会漏掉小目标；
+   * 扇区判定没有空隙，一刀可以稳定扫中弧内所有目标。
+   */
+  private slash(player: Player, weapon: WeaponJson): boolean {
+    const melee = weapon.melee;
+    if (!melee) return false;
+
+    player.setAttack('slash', 280);
+    const from = player.handWorld;
+    const aim = player.aim;
+    const halfArc = ((melee.arc ?? 40) * Math.PI) / 180;
+    const reach = melee.reach;
+    const bodies = getWorldBodies(this.scene);
+    const hitPlayers = new Set<number>();
+    const hitBodies = new Set<number>();
+
+    /**
+     * 判断目标是否在扇形内。
+     * @param radius 目标近似半径（用于放宽角度与距离判定，避免"擦边必漏"）
+     * @returns 手部到目标的距离；不在扇形内返回 null
+     */
+    const sectorDistance = (tx: number, ty: number, radius: number): number | null => {
+      const dx = tx - from.x;
+      const dy = ty - from.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > reach + radius) return null;
+      let diff = Math.atan2(dy, dx) - aim;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      const tolerance = halfArc + Math.atan2(radius, Math.max(1, dist));
+      if (Math.abs(diff) > tolerance) return null;
+      return dist;
+    };
+
+    /** 视线检查：手部到目标之间是否被别的物体挡住 */
+    const hasLineOfSight = (tx: number, ty: number, dist: number, ignore: MatterJS.BodyType[]): boolean => {
+      const dx = tx - from.x;
+      const dy = ty - from.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1) return true;
+      const hits = raycast(
+        bodies,
+        from,
+        { x: dx / len, y: dy / len },
+        Math.max(0, Math.min(reach, dist - 4)),
+        { ignore: [player.body, ...ignore], maxHits: 1 },
+      );
+      return hits.length === 0;
+    };
+
+    // ---- 玩家 ----
+    for (const other of this.bodyToPlayer.values()) {
+      if (other === player || other.health.isDead) continue;
+      if (hitPlayers.has(other.id)) continue;
+      const radius = 34; // 火柴人近似半径
+      const dist = sectorDistance(other.container.x, other.container.y, radius);
+      if (dist === null) continue;
+      if (!hasLineOfSight(other.container.x, other.container.y, dist, [other.body])) continue;
+
+      hitPlayers.add(other.id);
+      const nx = dist > 1 ? (other.container.x - from.x) / dist : Math.cos(aim);
+      const ny = dist > 1 ? (other.container.y - from.y) / dist : Math.sin(aim);
+      this.damageSystem.damagePlayer(other, {
+        amount: weapon.damage,
+        kind: 'melee',
+        sourceId: player.id,
+        point: { x: other.container.x, y: other.container.y },
+        normal: { x: -nx, y: -ny },
+        knockback: { x: nx * weapon.knockback, y: ny * weapon.knockback * 0.4 - 2 },
+      });
+    }
+
+    // ---- 地图物体 ----
+    for (const runtime of this.registry.objects) {
+      const body = runtime.body;
+      if (!body) continue;
+      if (hitBodies.has(body.id)) continue;
+      const b = body.bounds as unknown as { min: { x: number; y: number }; max: { x: number; y: number } };
+      const radius = Math.max(b.max.x - b.min.x, b.max.y - b.min.y) / 2;
+      const dist = sectorDistance(body.position.x, body.position.y, radius);
+      if (dist === null) continue;
+      if (!hasLineOfSight(body.position.x, body.position.y, dist, [body])) continue;
+
+      hitBodies.add(body.id);
+      this.damageSystem.damageObject(runtime, {
+        amount: weapon.damage,
+        kind: 'melee',
+        sourceId: player.id,
+        point: { x: body.position.x, y: body.position.y },
+        normal: { x: from.x - body.position.x, y: from.y - body.position.y },
+      });
+    }
+
+    // 刀光：沿弧线画一段亮线
+    this.fx.beam(
+      {
+        x: from.x + Math.cos(aim - halfArc) * reach,
+        y: from.y + Math.sin(aim - halfArc) * reach,
+      },
+      {
+        x: from.x + Math.cos(aim + halfArc) * reach,
+        y: from.y + Math.sin(aim + halfArc) * reach,
+      },
+      0x9fe8ff,
+      150,
+      3,
+    );
+    return true;
+  }
+
   /** 近战刺击：手/武器尖端向前一条短射线 */
   private stab(player: Player, weapon: WeaponJson): boolean {
     const melee = weapon.melee;
     if (!melee) return false;
 
-    const from = player.muzzle;
+    const from = player.handWorld;
     const angle = player.aim;
     const dir = { x: Math.cos(angle), y: Math.sin(angle) };
     player.setAttack('stab', 200);

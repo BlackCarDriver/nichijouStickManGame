@@ -129,6 +129,20 @@
       "visual": { "style": "spear", "length": 62, "thickness": 3, "color": "#b98b4e" }
     },
 
+    "lightsaber": {
+      "name": "光刀",
+      "attackMode": "melee",
+      "automatic": true,
+      "fireRate": 1.9,
+      "damage": 55,
+      "knockback": 9,
+      "ammo": -1,
+      "durability": 150,
+      "durabilityPerShot": 1,
+      "melee": { "reach": 100, "arc": 62, "anim": "slash" },
+      "visual": { "style": "lightsaber", "length": 74, "thickness": 5, "color": "#8ef7ff", "glow": "#3ad2ff" }
+    },
+
     "grenade": {
       "name": "手榴弹",
       "attackMode": "throw",

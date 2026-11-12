@@ -176,19 +176,15 @@ export class GameScene extends Phaser.Scene {
       const pieces = runtime.material === 'cardboard' ? 4 : 6;
       this.fragments.burst(center.x, center.y, colorHex, pieces);
     };
-    // 弹匣打空 → 武器实体化掉在地上（可被任何人再捡起）
+    // 弹药耗尽 / 耐久耗尽 → 武器直接消失（不掉落在地上）。
+    // 武器补给完全交给天降武器（DropSystem）。
     const onWeaponLost = (
-      player: Player,
-      weaponId: string,
-      reason: 'empty' | 'broken' | 'thrown',
-      snapshot?: { ammo: number; durability: number },
+      _player: Player,
+      _weaponId: string,
+      _reason: 'empty' | 'broken' | 'thrown',
+      _snapshot?: { ammo: number; durability: number },
     ): void => {
-      if (reason !== 'empty' || !snapshot) return;
-      this.pickups.spawn(weaponId, player.container.x, player.container.y + 20, {
-        ammo: snapshot.ammo,
-        durability: Math.max(1, snapshot.durability),
-        falling: false,
-      });
+      // 目前只做表现层反馈（在 WeaponSystem 里已播放特效）
     };
 
     this.events.on('player-hit', onPlayerHit);

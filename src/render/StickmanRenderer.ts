@@ -40,7 +40,7 @@ export interface StickmanDrawOptions {
   /** 是否倒着走（面向与移动方向相反 → 步态反向 + 身体后仰） */
   backward?: boolean;
   /** 当前攻击动作类型 */
-  attackKind?: 'stab' | 'kick' | null;
+  attackKind?: 'stab' | 'kick' | 'slash' | null;
   /** 攻击动作进度 0→1 */
   attackProgress?: number;
   /**

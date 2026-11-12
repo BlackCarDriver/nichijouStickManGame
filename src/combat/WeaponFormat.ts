@@ -26,7 +26,8 @@ export type WeaponVisualStyle =
   | 'launcher'
   | 'dagger'
   | 'spear'
-  | 'grenade';
+  | 'grenade'
+  | 'lightsaber';
 
 export interface BulletConfig {
   kind: BulletKind;
@@ -65,10 +66,12 @@ export interface BeamConfig {
 }
 
 export interface MeleeConfig {
-  /** 刺击距离（px） */
+  /** 攻击距离（px） */
   reach: number;
-  /** 判定弧宽（半角，度） */
+  /** 判定弧宽（半角，度）；slash 时按此角度扫描整段弧 */
   arc: number;
+  /** 动作类型：stab = 直刺（匕首/长矛）；slash = 挥砍（光刀） */
+  anim?: 'stab' | 'slash';
 }
 
 export interface ThrowConfig {
@@ -105,6 +108,8 @@ export interface WeaponVisual {
   length: number;
   thickness: number;
   color: string;
+  /** 发光色（光刀等发光武器用；不填则不发光） */
+  glow?: string;
 }
 
 export interface WeaponJson {

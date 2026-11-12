@@ -23,7 +23,16 @@ export class DropSystem {
   /** 开场立刻投放的数量（避免玩家开局没枪） */
   private static readonly INITIAL_COUNT = 2;
 
-  private static readonly DROP_POOL = ['pistol', 'ak47', 'dagger', 'spear', 'grenade', 'rocket', 'laser'];
+  private static readonly DROP_POOL = [
+    'pistol',
+    'ak47',
+    'dagger',
+    'spear',
+    'grenade',
+    'rocket',
+    'laser',
+    'lightsaber',
+  ];
 
   constructor(scene: Phaser.Scene, pickups: PickupSystem, map: MapData) {
     this.scene = scene;

@@ -136,6 +136,35 @@ export function drawHeldWeapon(g: Phaser.GameObjects.Graphics, o: WeaponDrawOpti
       break;
     }
 
+    case 'lightsaber': {
+      // 刀柄
+      const hilt0 = at(-8);
+      const hilt1 = at(6);
+      g.lineStyle(th + 2, 0x8c97a6, 1);
+      g.lineBetween(hilt0.x, hilt0.y, hilt1.x, hilt1.y);
+      g.lineStyle(2, 0x2f3540, 1);
+      g.lineBetween(hilt0.x, hilt0.y, hilt1.x, hilt1.y);
+
+      // 刀身：多层辉光叠加 + 白热核心（发光感靠"宽而淡 → 窄而亮"）
+      const glow = parseColor(visual.glow ?? visual.color, 0x8ef7ff);
+      const b0 = at(6);
+      const b1 = at(len);
+      g.lineStyle(18, glow, 0.08);
+      g.lineBetween(b0.x, b0.y, b1.x, b1.y);
+      g.lineStyle(12, glow, 0.16);
+      g.lineBetween(b0.x, b0.y, b1.x, b1.y);
+      g.lineStyle(7, glow, 0.4);
+      g.lineBetween(b0.x, b0.y, b1.x, b1.y);
+      g.lineStyle(3.4, 0xffffff, 0.95);
+      g.lineBetween(b0.x, b0.y, b1.x, b1.y);
+      // 端点柔化（模拟圆头）
+      g.fillStyle(glow, 0.12);
+      g.fillCircle(b1.x, b1.y, 9);
+      g.fillStyle(0xffffff, 0.85);
+      g.fillCircle(b1.x, b1.y, 2.6);
+      break;
+    }
+
     case 'grenade':
     default: {
       g.fillStyle(color, 1);

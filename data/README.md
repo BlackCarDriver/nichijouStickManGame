@@ -278,5 +278,20 @@ npm run validate
 
 ### 武器外形风格（`visual.style`）
 
-`pistol` / `rifle` / `laser` / `launcher` / `dagger` / `spear` / `grenade`
+`pistol` / `rifle` / `laser` / `launcher` / `dagger` / `spear` / `grenade` / `lightsaber`
 —— 每种风格的轮廓画法在 `src/render/WeaponRenderer.ts`。
+`lightsaber`（光刀）额外支持 `visual.glow`（辉光色），用多层"宽而淡 → 窄而亮"叠加出发光刀身。
+
+### 近战动作（`melee.anim`）
+
+| anim | 适用 | 判定方式 |
+|------|------|----------|
+| `stab`（默认） | 匕首、长矛 | 手部向前一条短射线，命中单体 |
+| `slash` | 光刀 | **扇区判定**：角度差 ≤ arc + 目标半径，距离 ≤ reach，并做视线检查；一刀可扫多个目标 |
+
+`arc` 是扇形**半角**（度）。光刀 62° = 左右各 62°。
+
+### 弹药耗尽
+
+弹药打空或耐久耗尽 → **武器直接消失**（不会掉在地上）。武器补给完全依赖天降武器
+（`DropSystem` 维持地图上 4 件，优先使用地图的 `weaponDropZones`）。
