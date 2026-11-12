@@ -267,7 +267,8 @@ export class WeaponSystem {
 
   /** 空手出拳：手部向前的短射线，伤害低但能用 */
   private punch(player: Player): boolean {
-    player.setAttack('stab', 150);
+    // 出拳有专门的直拳动作（不再是借用的轻微前送）
+    player.setAttack('punch', 170);
     this.scene.events.emit('sfx', 'melee');
     const from = player.handWorld;
     const aim = player.aim;

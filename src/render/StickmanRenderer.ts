@@ -42,7 +42,7 @@ export interface StickmanDrawOptions {
   /** 是否倒着走（面向与移动方向相反 → 步态反向 + 身体后仰） */
   backward?: boolean;
   /** 当前攻击动作类型 */
-  attackKind?: 'stab' | 'thrust' | 'kick' | 'slash' | null;
+  attackKind?: 'stab' | 'thrust' | 'kick' | 'slash' | 'punch' | null;
   /** 攻击动作进度 0→1 */
   attackProgress?: number;
   /**
@@ -120,6 +120,10 @@ export class StickmanRenderer {
       }
       if (o.attackKind === 'slash') {
         this.drawSlash(g, o);
+        return;
+      }
+      if (o.attackKind === 'punch') {
+        this.drawPunch(g, o);
         return;
       }
     }
@@ -280,6 +284,34 @@ export class StickmanRenderer {
     this.drawArmFK(g, o, shoulder, -1, -30 - 34 * k, 30);
     // 前臂（aim 覆盖时会被替换成"指向准星"）
     this.drawArmFK(g, o, shoulder, 1, 60, 8);
+  }
+
+  /**
+   * 出拳：直拳。
+   * 借力链条是"蹬地 → 转腰 → 送肩 → 出拳"，所以画面上要有：
+   * 后脚蹬（微抬）→ 肩膀前送（torso twist）→ 前臂直出 → 收拳。
+   * 前臂方向由 aim 覆盖（跟着准星），这里负责身体部分的发力。
+   */
+  private static drawPunch(g: Phaser.GameObjects.Graphics, o: StickmanDrawOptions): void {
+    const p = Math.min(1, Math.max(0, o.attackProgress ?? 0));
+    const k = this.strikeCurve(p, 0.18, 0.45); // 快速蓄力 → 爆发 → 收
+    const groundY = GROUND_OFFSET;
+
+    // 髋部：出拳瞬间前压 + 轻微下沉（重心转移）
+    const hip: Vec2 = { x: -2 + 7 * Math.max(0, k), y: this.HIP_Y + 2 + 2 * Math.max(0, k) };
+
+    // 前脚踏实、后脚蹬地（出击时后脚跟抬起 → 用更短的目标点表现）
+    this.drawLegIK(g, o.color, hip, { x: 9 + 6 * k, y: groundY });
+    this.drawLegIK(g, o.color, hip, { x: -11, y: groundY - 5 * Math.max(0, k) });
+
+    // 转腰送肩：下半身稳住、上半身拧转
+    const shoulder = this.drawTorso(g, o.color, hip, 3 + 7 * k, 12 * k);
+    this.drawHead(g, o.color, shoulder, 3 + 5 * k, 0);
+
+    // 后臂收紧护脸（与出拳反向，形成配重）
+    this.drawArmFK(g, o, shoulder, -1, -14 - 22 * k, 46);
+    // 前臂：aim 覆盖时直指准星（直拳）
+    this.drawArmFK(g, o, shoulder, 1, 58, 6);
   }
 
   /**

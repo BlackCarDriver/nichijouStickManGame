@@ -90,6 +90,8 @@ interface StuckItem {
   followBody?: MatterJS.BodyType;
   offsetX: number;
   offsetY: number;
+  /** 独立视觉：用与手持/飞行时**完全相同**的武器模型（插上后外观不变） */
+  gfx?: Phaser.GameObjects.Graphics;
 }
 
 export class ProjectileSystem {
@@ -434,19 +436,41 @@ export class ProjectileSystem {
   }
 
   private addStuck(p: Projectile, hit: RayHit): void {
-    if (this.stuck.length >= ProjectileSystem.MAX_STUCK) this.stuck.shift();
+    if (this.stuck.length >= ProjectileSystem.MAX_STUCK) {
+      const oldest = this.stuck.shift();
+      oldest?.gfx?.destroy();
+    }
     const body = hit.body;
-    this.stuck.push({
+    const angle = Math.atan2(p.dirY, p.dirX);
+    const item: StuckItem = {
       x: hit.point.x,
       y: hit.point.y,
-      angle: Math.atan2(p.dirY, p.dirX),
+      angle,
       color: p.color,
       size: p.bullet.size,
       remain: p.stickMs ?? 1500,
       followBody: body.isStatic ? undefined : body,
       offsetX: hit.point.x - body.position.x,
       offsetY: hit.point.y - body.position.y,
-    });
+    };
+
+    // 用真实武器模型（与手持/飞行时同一套绘制），插住后外观不变
+    const visual = getWeapon(p.weaponId)?.visual;
+    if (visual) {
+      const gfx = this.scene.add.graphics();
+      gfx.setDepth(851);
+      drawHeldWeapon(gfx, {
+        visual,
+        facing: 1,
+        aim: 0,
+        hand: { x: -visual.length / 2, y: 0 },
+      });
+      gfx.setPosition(item.x, item.y);
+      gfx.setRotation(angle);
+      item.gfx = gfx;
+    }
+
+    this.stuck.push(item);
   }
 
   private updateStuck(deltaMs: number): void {
@@ -457,7 +481,20 @@ export class ProjectileSystem {
         s.x = s.followBody.position.x + s.offsetX;
         s.y = s.followBody.position.y + s.offsetY;
       }
-      if (s.remain <= 0) this.stuck.splice(i, 1);
+      if (s.gfx) {
+        s.gfx.setPosition(s.x, s.y);
+        s.gfx.setRotation(s.angle);
+        // 只保留"消失前 1 秒闪烁"，其余时间不改变外观
+        const alpha =
+          s.remain < ProjectileSystem.STUCK_BLINK_MS
+            ? Math.floor(s.remain / 130) % 2 === 0 ? 1 : 0.22
+            : 1;
+        s.gfx.setAlpha(alpha);
+      }
+      if (s.remain <= 0) {
+        s.gfx?.destroy();
+        this.stuck.splice(i, 1);
+      }
     }
   }
 
@@ -511,23 +548,12 @@ export class ProjectileSystem {
       }
     }
 
-    // 插在目标上的投掷物（消失前 1 秒开始闪烁）
-    for (const s of this.stuck) {
-      const alpha =
-        s.remain < ProjectileSystem.STUCK_BLINK_MS
-          ? Math.floor(s.remain / 130) % 2 === 0
-            ? 1
-            : 0.22
-          : 1;
-      const dx = Math.cos(s.angle);
-      const dy = Math.sin(s.angle);
-      this.g.lineStyle(Math.max(2, s.size), s.color, alpha);
-      this.g.lineBetween(s.x - dx * 10, s.y - dy * 10, s.x + dx * 8, s.y + dy * 8);
-    }
+    // 插在目标上的投掷物由各自的 gfx 绘制（真实武器模型），这里无需再画
   }
 
   destroy(): void {
     for (const p of this.projectiles) p.gfx?.destroy();
+    for (const s of this.stuck) s.gfx?.destroy();
     this.projectiles = [];
     this.stuck = [];
     this.g.destroy();

@@ -173,7 +173,7 @@ export class Player extends Entity {
   private handLocal = { x: 0, y: StickmanRenderer.SHOULDER_Y };
 
   // ---- 攻击动作（刺击/踢）----
-  private attackKind: 'stab' | 'thrust' | 'kick' | 'slash' | null = null;
+  private attackKind: 'stab' | 'thrust' | 'kick' | 'slash' | 'punch' | null = null;
   private attackTimer = 0;
   private attackDuration = 1;
 
@@ -500,14 +500,14 @@ export class Player extends Entity {
   }
 
   /** 触发一次攻击动作（刺击/踢），供武器系统调用 */
-  setAttack(kind: 'stab' | 'thrust' | 'kick' | 'slash', durationMs: number): void {
+  setAttack(kind: 'stab' | 'thrust' | 'kick' | 'slash' | 'punch', durationMs: number): void {
     this.attackKind = kind;
     this.attackTimer = durationMs;
     this.attackDuration = Math.max(1, durationMs);
   }
 
   /** 当前攻击类型（无攻击时为 null） */
-  get attack(): 'stab' | 'thrust' | 'kick' | 'slash' | null {
+  get attack(): 'stab' | 'thrust' | 'kick' | 'slash' | 'punch' | null {
     return this.attackTimer > 0 ? this.attackKind : null;
   }
 

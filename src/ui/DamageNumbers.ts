@@ -49,9 +49,10 @@ export class DamageNumbers {
     const y = player.container.y - 74;
     const text = this.scene.add.text(x, y, `-${rounded}`, {
       fontFamily: 'monospace',
-      fontSize: opts.crit ? '22px' : '18px',
-      color: opts.crit ? '#ffd166' : '#ffffff',
-      stroke: '#2a0f0f',
+      fontSize: opts.crit ? '23px' : '18px',
+      // 红色数字（重击更红更大）
+      color: opts.crit ? '#ff2d2d' : '#ff5a5a',
+      stroke: '#2a0a0a',
       strokeThickness: 4,
     });
     text.setOrigin(0.5, 1);
