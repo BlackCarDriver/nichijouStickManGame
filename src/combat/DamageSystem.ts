@@ -16,6 +16,9 @@ import type { DamageInfo, DamageResult } from './DamageInfo';
  * - 以后加"伤害统计 / 击杀奖励 / 护甲"只需改这一处
  */
 export class DamageSystem {
+  /** 暴击倍率（命中头部） */
+  static readonly CRIT_MULTIPLIER = 2;
+
   private readonly fx: FxSystem;
   private readonly destruction: DestructionSystem;
 
@@ -24,14 +27,28 @@ export class DamageSystem {
     this.destruction = destruction;
   }
 
-  /** 对玩家造成伤害 */
+  /**
+   * 对玩家造成伤害。
+   *
+   * **命中头部 = 暴击**：伤害 ×2。判定统一放在这里，
+   * 这样所有伤害来源（子弹/光束/刺击/挥砍/出拳）都自动支持，不用各自实现一遍。
+   * 爆炸与摔落不参与暴击：它们的 point 是爆炸中心/缺失，不对应"打到头"。
+   */
   damagePlayer(player: Player, info: DamageInfo): DamageResult {
-    const applied = player.applyDamage(info);
+    const canCrit = (info.kind === 'bullet' || info.kind === 'melee') && info.point !== undefined;
+    const crit = canCrit && player.isHeadHit(info.point!.y);
+
+    const effective: DamageInfo = crit
+      ? { ...info, amount: info.amount * DamageSystem.CRIT_MULTIPLIER, critical: true }
+      : info;
+
+    const applied = player.applyDamage(effective);
     if (applied <= 0) {
       return { applied: 0, killed: false };
     }
-    if (info.point) {
-      this.fx.hitSpark(info.point, info.normal, 0xff6b6b);
+    if (effective.point) {
+      // 暴击用金色火花，普通命中用红色
+      this.fx.hitSpark(effective.point, effective.normal, crit ? 0xffd166 : 0xff6b6b);
     }
     return { applied, killed: player.health.isDead };
   }

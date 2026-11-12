@@ -7,6 +7,8 @@ interface Bubble {
   total: number;
   /** 剩余显示时间（ms） */
   remain: number;
+  /** 是否包含暴击（决定后缀与字号） */
+  crit: boolean;
 }
 
 /**
@@ -39,7 +41,12 @@ export class DamageNumbers {
     if (existing) {
       existing.total += rounded;
       existing.remain = DamageNumbers.MERGE_WINDOW;
-      existing.text.setText(`-${existing.total}`);
+      existing.crit = existing.crit || opts.crit === true;
+      existing.text.setText(
+        existing.crit ? `-${existing.total}!` : `-${existing.total}`,
+      );
+      existing.text.setFontSize(existing.crit ? '23px' : '18px');
+      existing.text.setColor(existing.crit ? '#ff2d2d' : '#ff5a5a');
       // 合并时轻微放大一下，提示"又打了一层"
       existing.text.setScale(1.18);
       return;
@@ -47,7 +54,8 @@ export class DamageNumbers {
 
     const x = player.container.x + (Math.random() - 0.5) * 12;
     const y = player.container.y - 74;
-    const text = this.scene.add.text(x, y, `-${rounded}`, {
+    const label = opts.crit ? `-${rounded}!` : `-${rounded}`;
+    const text = this.scene.add.text(x, y, label, {
       fontFamily: 'monospace',
       fontSize: opts.crit ? '23px' : '18px',
       // 红色数字（重击更红更大）
@@ -57,7 +65,12 @@ export class DamageNumbers {
     });
     text.setOrigin(0.5, 1);
     text.setDepth(1002);
-    this.bubbles.set(player.id, { text, total: rounded, remain: DamageNumbers.MERGE_WINDOW });
+    this.bubbles.set(player.id, {
+      text,
+      total: rounded,
+      remain: DamageNumbers.MERGE_WINDOW,
+      crit: opts.crit === true,
+    });
   }
 
   update(deltaMs: number): void {

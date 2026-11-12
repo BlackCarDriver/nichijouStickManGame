@@ -244,13 +244,14 @@ export class GameScene extends Phaser.Scene {
       _player: Player,
       amount: number,
       kind: string,
+      critical: boolean,
     ): void => {
       if (kind !== 'env') {
         this.hitStop.trigger(HitStop.durationForDamage(amount));
       }
       this.audio.play('hit');
-      // 伤害气泡（短时间内的连续伤害会合并成一个数字）
-      this.damageNumbers.show(_player, amount, { crit: amount >= 40 });
+      // 伤害气泡（短时间内的连续伤害会合并成一个数字；暴击用更大字号）
+      this.damageNumbers.show(_player, amount, { crit: critical });
     };
     // 死亡 → 音效 + 击杀计数（记录凶手）
     const onPlayerDied = (victim: Player, killerId?: number): void => {

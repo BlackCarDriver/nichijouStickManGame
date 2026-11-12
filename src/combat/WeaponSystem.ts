@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { MATERIALS, parseColor } from '../config/materials';
 import type { Player } from '../entities/Player';
+import { PLAYER_CONFIG } from '../entities/Player';
 import type { WorldRegistry } from '../world/WorldRegistry';
 import type { FxSystem } from '../fx/FxSystem';
 import type { DamageSystem } from './DamageSystem';
@@ -34,6 +35,9 @@ const PUNCH = {
   knockback: 4,
   cooldownSec: 0.36,
 } as const;
+
+/** 挥砍判定"是否砍到头"的窄角窗口（弧度）：避免 62° 大弧永远覆盖头部 */
+const SLASH_HEAD_ARC = (20 * Math.PI) / 180;
 
 const KICK = {
   range: 80,
@@ -644,7 +648,12 @@ export class WeaponSystem {
      * @param radius 目标近似半径（用于放宽角度与距离判定，避免"擦边必漏"）
      * @returns 手部到目标的距离；不在扇形内返回 null
      */
-    const sectorDistance = (tx: number, ty: number, radius: number): number | null => {
+    const sectorDistance = (
+      tx: number,
+      ty: number,
+      radius: number,
+      arcOverride?: number,
+    ): number | null => {
       const dx = tx - from.x;
       const dy = ty - from.y;
       const dist = Math.hypot(dx, dy);
@@ -652,7 +661,7 @@ export class WeaponSystem {
       let diff = Math.atan2(dy, dx) - aim;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
-      const tolerance = halfArc + Math.atan2(radius, Math.max(1, dist));
+      const tolerance = (arcOverride ?? halfArc) + Math.atan2(radius, Math.max(1, dist));
       if (Math.abs(diff) > tolerance) return null;
       return dist;
     };
@@ -685,11 +694,27 @@ export class WeaponSystem {
       hitPlayers.add(other.id);
       const nx = dist > 1 ? (other.container.x - from.x) / dist : Math.cos(aim);
       const ny = dist > 1 ? (other.container.y - from.y) / dist : Math.sin(aim);
+
+      /**
+       * 挥砍的命中点原本取身体中心 → 永远判不到头。
+       * 这里额外探一下"头部点是否也在扇区内"：
+       * 抬刀往头上砍时就能打出暴击（伤害 ×2）。
+       */
+      const headY = other.container.y - PLAYER_CONFIG.headZoneOffset;
+      // 注意：挥砍弧本身有 62°，几乎必然覆盖头部 → 会变成"永远暴击"。
+      // 所以"砍到头"用更窄的窗口（20°），必须真的把刀扫到头部高度才算暴击。
+      const headInSector =
+        sectorDistance(other.container.x, headY, 12, SLASH_HEAD_ARC) !== null &&
+        hasLineOfSight(other.container.x, headY, dist, [other.body]);
+      const hitPoint = headInSector
+        ? { x: other.container.x, y: headY }
+        : { x: other.container.x, y: other.container.y };
+
       this.damageSystem.damagePlayer(other, {
         amount: weapon.damage,
         kind: 'melee',
         sourceId: player.id,
-        point: { x: other.container.x, y: other.container.y },
+        point: hitPoint,
         normal: { x: -nx, y: -ny },
         knockback: { x: nx * weapon.knockback, y: ny * weapon.knockback * 0.4 - 2 },
       });

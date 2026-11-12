@@ -38,6 +38,8 @@ export interface DamageInfo {
    * 不会被第一颗弹丸造成的受击无敌帧挡掉。
    */
   attackId?: number;
+  /** 是否暴击（命中头部）—— 由 DamageSystem 判定后回填，用于表现层 */
+  critical?: boolean;
 }
 
 /** 伤害结算结果 */

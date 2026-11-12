@@ -31,6 +31,12 @@ export const PLAYER_CONFIG = {
   /** 最大下落速度：防穿透（同时抬高摔落伤害的可测区间） */
   maxFallSpeed: 32,
   /**
+   * 头部区域：碰撞体中心上方多少 px 以内算"头"（暴击区）。
+   * 碰撞体高 96（中心 ±48），火柴人的头画在中心上方 41~63px，
+   * 取 30 作为分界 → 顶部 18px 的碰撞带就是头部。
+   */
+  headZoneOffset: 30,
+  /**
    * 自动上台阶的高度（px）。
    * 地上的木板/薄板（16~24px）不该把玩家卡住，应该能直接踩上去。
    */
@@ -391,7 +397,7 @@ export class Player extends Entity {
     if (info.attackId !== undefined) this.lastHitAttackId = info.attackId;
     this.lastDamageSourceId = info.sourceId;
     // 广播：顿帧 / 音效 / 表现层都监听这个
-    this.scene.events.emit('player-damaged', this, applied, info.kind);
+    this.scene.events.emit('player-damaged', this, applied, info.kind, info.critical === true);
 
     // 击退 + 受击姿态（hit() 内部会广播 player-hit → 屏幕震动）
     // 高频低伤（激光 tick）用短后仰，否则会被持续锁在受击姿势里
@@ -543,6 +549,11 @@ export class Player extends Entity {
       x: this.container.x,
       y: this.container.y + this.visual.y + StickmanRenderer.SHOULDER_Y,
     };
+  }
+
+  /** 命中点是否落在头部（暴击区） */
+  isHeadHit(pointY: number): boolean {
+    return pointY <= this.container.y - PLAYER_CONFIG.headZoneOffset;
   }
 
   /** 手部世界坐标（近战判定/挥砍起点） */
