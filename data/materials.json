@@ -57,6 +57,21 @@
       "bulletPierce": false,
       "opacity": 1
     },
+    "plank": {
+      "name": "厚木板",
+      "color": "#6b4a26",
+      "fixed": false,
+      "density": 0.002,
+      "friction": 0.4,
+      "frictionStatic": 0.8,
+      "bounce": 0.1,
+      "destructible": false,
+      "durability": 0,
+      "damageMultiplier": 1,
+      "bulletBounce": false,
+      "bulletPierce": false,
+      "opacity": 1
+    },
     "cardboard": {
       "name": "纸箱",
       "color": "#c8a165",

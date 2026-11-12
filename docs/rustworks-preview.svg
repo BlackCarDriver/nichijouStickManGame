@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="750" viewBox="0 0 1600 750">
+<rect width="100%" height="100%" fill="#1a1a2e"/>
+<rect x="0.0" y="710.0" width="1600.0" height="40.0" fill="#3d5a3d" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<rect x="0.0" y="0.0" width="20.0" height="750.0" fill="#4a4a5a" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<rect x="1580.0" y="0.0" width="20.0" height="750.0" fill="#4a4a5a" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<rect x="60.0" y="620.0" width="100.0" height="10.0" fill="#8b5a2b" fill-opacity="1" stroke="#000" stroke-width="1" stroke-dasharray="6 4"/>
+<polygon points="150.0,620.0 320.0,710.0 150.0,710.0" fill="#8fd0e8" fill-opacity="0.75" stroke="#000" stroke-width="1"/>
+<rect x="340.0" y="575.0" width="150.0" height="10.0" fill="#8b5a2b" fill-opacity="1" stroke="#000" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="510.0" y="620.0" width="20.0" height="30.0" fill="#c8a165" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<rect x="510.0" y="650.0" width="20.0" height="30.0" fill="#c8a165" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<rect x="510.0" y="680.0" width="20.0" height="30.0" fill="#c8a165" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<rect x="550.0" y="625.0" width="180.0" height="12.0" fill="#8b5a2b" fill-opacity="1" stroke="#000" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="580.0" y="530.0" width="150.0" height="12.0" fill="#8b5a2b" fill-opacity="1" stroke="#000" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="600.0" y="450.0" width="90.0" height="12.0" fill="#8b5a2b" fill-opacity="1" stroke="#000" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="595.0" y="415.0" width="8.0" height="35.0" fill="#9aa5b1" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<rect x="687.0" y="415.0" width="8.0" height="35.0" fill="#9aa5b1" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<rect x="470.0" y="570.0" width="75.0" height="7.0" fill="#8b5a2b" fill-opacity="1" stroke="#000" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="695.0" y="505.0" width="60.0" height="7.0" fill="#8b5a2b" fill-opacity="1" stroke="#000" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="350.0" y="465.0" width="200.0" height="8.0" fill="#8b5a2b" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<rect x="750.0" y="465.0" width="160.0" height="8.0" fill="#8b5a2b" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<rect x="280.0" y="635.0" width="70.0" height="7.0" fill="#8b5a2b" fill-opacity="1" stroke="#000" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="310.0" y="560.0" width="70.0" height="7.0" fill="#8b5a2b" fill-opacity="1" stroke="#000" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="280.0" y="495.0" width="70.0" height="7.0" fill="#8b5a2b" fill-opacity="1" stroke="#000" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="780.0" y="670.0" width="270.0" height="40.0" fill="#9aa5b1" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<rect x="780.0" y="550.0" width="270.0" height="8.0" fill="#9aa5b1" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<rect x="780.0" y="558.0" width="8.0" height="52.0" fill="#9aa5b1" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<rect x="725.0" y="696.5" width="30.0" height="13.5" fill="#9aa5b1" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<rect x="755.0" y="683.0" width="30.0" height="13.5" fill="#9aa5b1" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<circle cx="975.0" cy="656.0" r="13.0" fill="#9aa5b1" stroke="#000" stroke-width="1"/>
+<rect x="1060.0" y="678.5" width="150.0" height="8.0" fill="#6b4a26" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<rect x="1130.0" y="686.5" width="10.0" height="31.5" fill="#4a4a5a" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<rect x="1240.0" y="678.5" width="150.0" height="8.0" fill="#6b4a26" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<rect x="1310.0" y="686.5" width="10.0" height="31.5" fill="#4a4a5a" fill-opacity="1" stroke="#000" stroke-width="1"/>
+<circle cx="1222.5" cy="699.0" r="11.0" fill="#9aa5b1" stroke="#000" stroke-width="1"/>
+<rect x="1425.0" y="625.0" width="75.0" height="10.0" fill="#8b5a2b" fill-opacity="1" stroke="#000" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="1510.0" y="540.0" width="60.0" height="10.0" fill="#8b5a2b" fill-opacity="1" stroke="#000" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="340.0" y="690.0" width="40.0" height="40.0" fill="#c8a165" fill-opacity="1" stroke="#3a2a18" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="345.0" y="650.0" width="30.0" height="40.0" fill="#c8a165" fill-opacity="1" stroke="#3a2a18" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="400.0" y="690.0" width="40.0" height="40.0" fill="#c8a165" fill-opacity="1" stroke="#3a2a18" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="405.0" y="650.0" width="30.0" height="40.0" fill="#c8a165" fill-opacity="1" stroke="#3a2a18" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="460.0" y="690.0" width="40.0" height="40.0" fill="#c8a165" fill-opacity="1" stroke="#3a2a18" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="465.0" y="650.0" width="30.0" height="40.0" fill="#c8a165" fill-opacity="1" stroke="#3a2a18" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="1445.0" y="685.0" width="60.0" height="5.0" fill="#8b5a2b" fill-opacity="1" stroke="#3a2a18" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="1448.0" y="690.0" width="4.0" height="20.0" fill="#8b5a2b" fill-opacity="1" stroke="#3a2a18" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="1498.0" y="690.0" width="4.0" height="20.0" fill="#8b5a2b" fill-opacity="1" stroke="#3a2a18" stroke-width="1" stroke-dasharray="6 4"/>
+<rect x="1460.0" y="690.0" width="3.0" height="20.0" fill="#8b5a2b" fill-opacity="1" stroke="#3a2a18" stroke-width="1" stroke-dasharray="6 4"/>
+<circle cx="60.0" cy="686.0" r="9" fill="#e74c3c" stroke="#fff" stroke-width="2"/>
+<text x="74.0" y="691.0" fill="#fff" font-family="monospace" font-size="13">P1</text>
+<circle cx="1560.0" cy="686.0" r="9" fill="#e74c3c" stroke="#fff" stroke-width="2"/>
+<text x="1574.0" y="691.0" fill="#fff" font-family="monospace" font-size="13">P2</text>
+<rect x="634.0" y="436.5" width="12" height="12" fill="#4ade80" stroke="#fff" stroke-width="1.5"/>
+<rect x="94.0" y="606.5" width="12" height="12" fill="#4ade80" stroke="#fff" stroke-width="1.5"/>
+<rect x="869.0" y="656.5" width="12" height="12" fill="#9aa5b1" stroke="#fff" stroke-width="1.5"/>
+<rect x="1454.0" y="611.5" width="12" height="12" fill="#9aa5b1" stroke="#fff" stroke-width="1.5"/>
+<circle cx="1135.0" cy="682.5" r="5" fill="none" stroke="#ffd166" stroke-width="2"/>
+<circle cx="1315.0" cy="682.5" r="5" fill="none" stroke="#ffd166" stroke-width="2"/>
+<rect x="50.0" y="40.0" width="700.0" height="60.0" fill="none" stroke="#7ef9ff" stroke-opacity="0.5" stroke-dasharray="4 6"/>
+<rect x="800.0" y="40.0" width="750.0" height="60.0" fill="none" stroke="#7ef9ff" stroke-opacity="0.5" stroke-dasharray="4 6"/>
+<text x="12" y="738" fill="#9aa5b1" font-family="monospace" font-size="12">rustworks · 3200×1500 · 红=P1 蓝=P2 · 绿方块=医疗包 · 灰方块=防弹衣 · 黄圈=跷跷板轴 · 虚线框=空投区</text>
+</svg>

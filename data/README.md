@@ -34,6 +34,11 @@ npm run validate
 | cardboard | 0.001 | 80×80 箱 ≈ 6.4 | 轻，玩家可推动 |
 | wood | 0.002 | 300×16 板 ≈ 9.6 | 略重于玩家，可压动跷跷板 |
 | metal | 0.008 | r30 球 ≈ 22.6 | 重，难推但会滚 |
+| plank | 0.002 | 300×16 板 ≈ 9.6 | 同木头，但**不可破坏**（跷跷板/机械件专用） |
+
+> `plank`（厚木板）存在的理由：跷跷板这类**会被反复撞击**的机械件如果用 `wood`，
+> 撞击伤害会把板子打坏（重物压上去、端点砸地面都会掉耐久），玩一会儿跷跷板就没了。
+> `destructible: false` 让它只负责物理行为、不参与破坏系统。
 
 ## 硬度（`hardness`）
 
@@ -173,6 +178,9 @@ npm run validate
 
 1. **手写 / AI 编辑**：直接改 JSON → `npm run validate` → 刷新游戏
 2. **可视化编辑**：`npm run dev` 后打开 <http://localhost:5173/editor.html>
+3. **指定地图试玩**：`http://localhost:5173/?map=<地图名>`
+   - 例：`http://localhost:5173/?map=rustworks`
+   - 不传 `?map=` → 默认地图（`arena1`）
 
 ## 预制件的两种物理形态（bodyMode）
 

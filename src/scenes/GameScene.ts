@@ -6,7 +6,7 @@ import { CameraRig } from '../camera/CameraRig';
 import { GameFeel } from '../feel/GameFeel';
 import { HitStop } from '../feel/HitStop';
 import { AudioSystem } from '../audio/AudioSystem';
-import { getDefaultMap, getPrefabTable } from '../map/MapRegistry';
+import { getDefaultMap, getPrefabTable, getMapByName } from '../map/MapRegistry';
 import type { PrefabData } from '../map/PrefabFormat';
 import type { MapData } from '../map/MapFormat';
 import { buildMap, syncCompoundVisuals } from '../map/MapLoader';
@@ -107,8 +107,23 @@ export class GameScene extends Phaser.Scene {
     super('GameScene');
   }
 
+  /**
+   * 支持 `?map=<地图名>` 直接进指定地图（试玩/调试用）。
+   * 例：http://localhost:5173/?map=rustworks
+   */
+  private static mapFromUrl(): MapData | undefined {
+    if (typeof window === 'undefined') return undefined;
+    const name = new URLSearchParams(window.location.search).get('map');
+    if (!name) return undefined;
+    const found = getMapByName(name);
+    if (!found) {
+      console.warn(`[GameScene] ?map=${name} 不存在，回退默认地图`);
+    }
+    return found;
+  }
+
   init(data: GameSceneData = {}): void {
-    this.mapData = data.map ?? getDefaultMap();
+    this.mapData = data.map ?? GameScene.mapFromUrl() ?? getDefaultMap();
     this.prefabTable = data.prefabs ?? getPrefabTable();
     this.onExit = data.onExit;
     this.players = [];
