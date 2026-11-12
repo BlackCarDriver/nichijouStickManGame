@@ -745,7 +745,7 @@ export class WeaponSystem {
         x: from.x + Math.cos(aim + halfArc) * reach,
         y: from.y + Math.sin(aim + halfArc) * reach,
       },
-      0x9fe8ff,
+      player.color,
       150,
       3,
     );

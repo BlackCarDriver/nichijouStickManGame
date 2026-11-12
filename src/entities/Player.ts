@@ -986,6 +986,8 @@ export class Player extends Entity {
           visual,
           facing: this.facing,
           aim: this.renderAim + this.slashOffset,
+          // 光刀的颜色跟随持有者（红火柴人 → 红光刃）
+          colorOverride: visual.style === 'lightsaber' ? this.color : undefined,
           hand: {
             x: this.handLocal.x + this.facing * Math.cos(this.aimAngle) * thrust,
             y: this.handLocal.y + Math.sin(this.aimAngle) * thrust,

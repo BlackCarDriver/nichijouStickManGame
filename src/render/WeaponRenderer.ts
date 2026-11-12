@@ -18,6 +18,22 @@ export interface WeaponDrawOptions {
   aim: number;
   /** 手部位置（visual 局部坐标） */
   hand: { x: number; y: number };
+  /**
+   * 颜色覆盖（光刀用持有者的火柴人颜色）。
+   * 不传则用 weapons.json 里的 visual.color。
+   */
+  colorOverride?: number;
+  /** 辉光色覆盖（不传则由颜色自动推导更亮的版本） */
+  glowOverride?: number;
+}
+
+/** 提亮颜色（与白色混合），用于从本体色推导辉光色 */
+export function lightenColor(color: number, amount: number): number {
+  const r = (color >> 16) & 0xff;
+  const g = (color >> 8) & 0xff;
+  const b = color & 0xff;
+  const mix = (v: number): number => Math.round(v + (255 - v) * amount);
+  return (mix(r) << 16) | (mix(g) << 8) | mix(b);
 }
 
 export function drawHeldWeapon(g: Phaser.GameObjects.Graphics, o: WeaponDrawOptions): void {
@@ -29,7 +45,7 @@ export function drawHeldWeapon(g: Phaser.GameObjects.Graphics, o: WeaponDrawOpti
   const px = -dy;
   const py = dx;
 
-  const color = parseColor(visual.color, 0x2b2b36);
+  const color = o.colorOverride ?? parseColor(visual.color, 0x2b2b36);
   const len = visual.length;
   const th = visual.thickness;
 
@@ -180,31 +196,46 @@ export function drawHeldWeapon(g: Phaser.GameObjects.Graphics, o: WeaponDrawOpti
     }
 
     case 'lightsaber': {
-      // 刀柄
-      const hilt0 = at(-8);
+      // 刀柄（保持金属灰，跟光刃形成对比）
+      const hilt0 = at(-9);
       const hilt1 = at(6);
-      g.lineStyle(th + 2, 0x8c97a6, 1);
+      g.lineStyle(th + 3, 0x8c97a6, 1);
       g.lineBetween(hilt0.x, hilt0.y, hilt1.x, hilt1.y);
       g.lineStyle(2, 0x2f3540, 1);
       g.lineBetween(hilt0.x, hilt0.y, hilt1.x, hilt1.y);
 
-      // 刀身：多层辉光叠加 + 白热核心（发光感靠"宽而淡 → 窄而亮"）
-      const glow = parseColor(visual.glow ?? visual.color, 0x8ef7ff);
+      /**
+       * 刀身：五层"宽而淡 → 窄而亮"叠加。
+       * 颜色跟随持有者（红/蓝火柴人 → 红/蓝光刃），
+       * 辉光用比本体更亮的同色系，所以外层看起来像在发光。
+       */
+      const glow = o.glowOverride ?? lightenColor(color, 0.45);
       const b0 = at(6);
       const b1 = at(len);
-      g.lineStyle(18, glow, 0.08);
+
+      // ① 最外层大范围光晕（很淡但很宽，负责"照亮周围"）
+      g.lineStyle(34, glow, 0.1);
       g.lineBetween(b0.x, b0.y, b1.x, b1.y);
-      g.lineStyle(12, glow, 0.16);
+      // ② 中层光晕
+      g.lineStyle(22, glow, 0.2);
       g.lineBetween(b0.x, b0.y, b1.x, b1.y);
-      g.lineStyle(7, glow, 0.4);
+      // ③ 内层辉光
+      g.lineStyle(13, glow, 0.45);
       g.lineBetween(b0.x, b0.y, b1.x, b1.y);
-      g.lineStyle(3.4, 0xffffff, 0.95);
+      // ④ 刃体本身
+      g.lineStyle(7, color, 0.95);
       g.lineBetween(b0.x, b0.y, b1.x, b1.y);
-      // 端点柔化（模拟圆头）
-      g.fillStyle(glow, 0.12);
-      g.fillCircle(b1.x, b1.y, 9);
-      g.fillStyle(0xffffff, 0.85);
-      g.fillCircle(b1.x, b1.y, 2.6);
+      // ⑤ 白热核心
+      g.lineStyle(3.2, 0xffffff, 1);
+      g.lineBetween(b0.x, b0.y, b1.x, b1.y);
+
+      // 端点柔化（刀尖的光团）
+      g.fillStyle(glow, 0.18);
+      g.fillCircle(b1.x, b1.y, 15);
+      g.fillStyle(glow, 0.35);
+      g.fillCircle(b1.x, b1.y, 8);
+      g.fillStyle(0xffffff, 0.95);
+      g.fillCircle(b1.x, b1.y, 3.2);
       break;
     }
 

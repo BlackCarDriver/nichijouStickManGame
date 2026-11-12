@@ -469,7 +469,10 @@ npm run validate
 
 `pistol` / `rifle` / `laser` / `launcher` / `dagger` / `spear` / `grenade` / `lightsaber`
 —— 每种风格的轮廓画法在 `src/render/WeaponRenderer.ts`。
-`lightsaber`（光刀）额外支持 `visual.glow`（辉光色），用多层"宽而淡 → 窄而亮"叠加出发光刀身。
+`lightsaber`（光刀）：**颜色跟随持有者**（红火柴人 → 红光刃，蓝火柴人 → 蓝光刃），
+辉光色由本体色自动提亮推导；刀身用**五层**"宽而淡 → 窄而亮"叠加（34px/10% → 22px/20% →
+13px/45% → 刃体 7px → 白热核心 3.2px），实测光晕扩散约 20px。
+`visual.glow` 仍可作为数据侧默认值（地面掉落物的图标用它）。
 
 ### 霰弹（`pellets` / `spreadDeg`）
 
