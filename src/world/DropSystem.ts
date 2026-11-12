@@ -57,7 +57,14 @@ export class DropSystem {
   }
 
   private dropOne(): void {
-    const pool = DropSystem.DROP_POOL.filter((id) => listWeaponIds().includes(id));
+    // 手榴弹是「腰上只能带 1 发」的道具：地上已经有一发没人捡时不再投掷，
+    // 否则它会永久占住 TARGET_COUNT 的名额，把枪械挤掉。
+    const grenadeOnGround = this.pickups.list.some(
+      (item) => item.kind === 'weapon' && item.weaponId === 'grenade',
+    );
+    const pool = DropSystem.DROP_POOL.filter(
+      (id) => listWeaponIds().includes(id) && !(id === 'grenade' && grenadeOnGround),
+    );
     if (pool.length === 0) return;
     const weaponId = pool[Math.floor(Math.random() * pool.length)];
 

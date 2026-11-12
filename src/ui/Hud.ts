@@ -14,8 +14,6 @@ export class Hud {
   private readonly labels: Phaser.GameObjects.Text[] = [];
   /** 武器信息文本（名称 / 弹药 / 耐久） */
   private readonly weaponLabels: Phaser.GameObjects.Text[] = [];
-  /** 手榴弹提示文本 */
-  private readonly grenadeLabels: Phaser.GameObjects.Text[] = [];
   private players: Player[] = [];
   /** playerId → 击杀数（与 GameScene 共享同一个 Map） */
   private kills: Map<number, number> | null = null;
@@ -70,15 +68,6 @@ export class Hud {
       weaponText.setScrollFactor(0);
       weaponText.setDepth(1001);
       this.weaponLabels.push(weaponText);
-
-      const grenadeText = this.scene.add.text(x + 58, Hud.TOP + Hud.WEAPON_ROW_GAP + 14, '', {
-        fontFamily: 'monospace',
-        fontSize: '11px',
-        color: '#9fe870',
-      });
-      grenadeText.setScrollFactor(0);
-      grenadeText.setDepth(1001);
-      this.grenadeLabels.push(grenadeText);
     });
   }
 
@@ -117,8 +106,6 @@ export class Hud {
 
       // ---- 武器信息 ----
       this.drawWeaponInfo(player, x, y + Hud.WEAPON_ROW_GAP - 4);
-      // ---- 手榴弹背包 ----
-      this.drawGrenadeInfo(player, x, y + Hud.WEAPON_ROW_GAP + 16);
     });
   }
 
@@ -136,24 +123,6 @@ export class Hud {
     this.g.fillStyle(color, 1);
     if (ratio > 0) {
       this.g.fillRoundedRect(x, y, Hud.BAR_W * ratio, Hud.SHIELD_H, 2);
-    }
-  }
-
-  /** 手榴弹行：数量点 + 持握提示 */
-  private drawGrenadeInfo(player: Player, x: number, y: number): void {
-    const count = player.grenadeCount;
-    for (let i = 0; i < 3; i++) {
-      const cx = x + 7 + i * 16;
-      this.g.fillStyle(0x000000, 0.5);
-      this.g.fillCircle(cx, y, 6);
-      if (i < count) {
-        this.g.fillStyle(player.grenadeMode ? 0x9fe870 : 0x6fae4a, 1);
-        this.g.fillCircle(cx, y, 4.4);
-      }
-    }
-    const label = this.grenadeLabels[this.players.indexOf(player)];
-    if (label) {
-      label.setText(count > 0 ? (player.grenadeMode ? 'G 收起' : 'G 取出') : '');
     }
   }
 

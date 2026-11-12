@@ -119,6 +119,13 @@ export class ProjectileSystem {
   private static readonly MAX_HITS_PER_STEP = 8;
   /** 插入物消失前的闪烁时长（ms） */
   private static readonly STUCK_BLINK_MS = 1000;
+  /**
+   * 腰部手榴弹的命中判定带（px）。
+   * 用「命中点与腰部锚点的垂直距离」而不是 2D 距离：
+   * 玩家碰撞体宽 36，榴弹挂在背面边缘，2D 距离会被命中面（前/后）严重影响，
+   * 导致"从背面打中不算、从正面打中才算"。只看高度带则手感稳定可预期。
+   */
+  private static readonly GRENADE_WAIST_BAND = 10;
 
   constructor(
     scene: Phaser.Scene,
@@ -345,6 +352,13 @@ export class ProjectileSystem {
         knockback,
         attackId: p.attackId,
       });
+      // 腰上挂着手榴弹 → 打到腰部高度会引爆它（消耗这一发，由场景负责爆炸）
+      if (target.grenadeCount > 0) {
+        const waist = target.waistWorld;
+        if (Math.abs(hit.point.y - waist.y) <= ProjectileSystem.GRENADE_WAIST_BAND) {
+          this.scene.events.emit('carried-grenade-hit', target, waist, p.ownerId);
+        }
+      }
       if (p.bullet.piercePlayers) {
         p.ignore.push(hit.body);
         p.damageMul *= p.bullet.pierceDamageMul;

@@ -19,6 +19,12 @@ export interface ExplosionRequest {
   /** 投掷者实体 id（自伤判定 / 击杀归属） */
   ownerId: number;
   sourceId: number;
+  /**
+   * 无视受击无敌帧（可选）。
+   * 用于"同一瞬间先挨了子弹、随后怀里榴弹爆炸"这种场景：
+   * 否则子弹给的 180ms 无敌会把紧接着的爆炸伤害全部吃掉。
+   */
+  ignoreInvuln?: boolean;
 }
 
 /**
@@ -82,6 +88,7 @@ export class ExplosionSystem {
           x: dirX * knockback * falloff,
           y: dirY * knockback * falloff - 3 * falloff,
         },
+        ignoreInvuln: req.ignoreInvuln === true,
       });
     }
 

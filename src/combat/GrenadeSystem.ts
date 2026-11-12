@@ -15,8 +15,8 @@ import { TrajectoryPreview } from './TrajectoryPreview';
  * - 再按一次 G 可以收起（不消耗）
  */
 export class GrenadeSystem {
-  /** 背包上限 */
-  static readonly MAX = 3;
+  /** 背包上限：腰上只挂一发（拾取时若已有一发则不再拾取） */
+  static readonly MAX = 1;
 
   private readonly projectiles: ProjectileSystem;
   private readonly preview: TrajectoryPreview;
@@ -40,8 +40,7 @@ export class GrenadeSystem {
     return true;
   }
 
-  /** 投出（左键）。成功返回 true */
-  throwGrenade(player: Player): boolean {
+  /** 投出（左键）。成功返回 true */  throwGrenade(player: Player): boolean {
     if (!player.grenadeMode || player.grenadeCount <= 0 || player.health.isDead) return false;
     const weapon = getWeapon('grenade');
     const cfg = weapon?.throw;
@@ -83,6 +82,18 @@ export class GrenadeSystem {
     // 投出后自动切回上一个武器（武器从未被卸下，这里只需退出榴弹模式）
     player.grenadeMode = false;
     player.setAttack('stab', 160);
+    return true;
+  }
+
+  /**
+   * 引爆腰上挂着的手榴弹（被子弹击中时由场景调用）。
+   * 只负责“消耗这一发 + 退出持握状态”，爆炸本身由 ExplosionSystem 处理。
+   * @returns 是否真的爆炸了
+   */
+  detonate(player: Player): boolean {
+    if (player.grenadeCount <= 0 || player.health.isDead) return false;
+    player.grenadeCount = 0;
+    player.grenadeMode = false;
     return true;
   }
 

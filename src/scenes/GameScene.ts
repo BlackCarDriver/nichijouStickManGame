@@ -241,6 +241,30 @@ export class GameScene extends Phaser.Scene {
       this.pickups.spawn(weaponId, x, y, { falling: true });
     };
 
+    // 腰上手榴弹被子弹击中 → 消耗这一发并在腰部爆炸（击杀归属算开枪者）
+    const onCarriedGrenadeHit = (
+      player: Player,
+      point: { x: number; y: number },
+      shooterId?: number,
+    ): void => {
+      if (!this.grenades.detonate(player)) return;
+      const explosion = getWeapon('grenade')?.explosion;
+      if (!explosion) return;
+      this.explosion.explode({
+        x: point.x,
+        y: point.y,
+        radius: explosion.radius,
+        damage: explosion.damage,
+        // 身上的榴弹炸了 → 自己肯定要受伤害
+        selfDamage: true,
+        knockback: explosion.knockback,
+        ownerId: player.id,
+        sourceId: shooterId ?? player.id,
+        // 子弹刚造成受击无敌，这里必须穿透，否则爆炸会被自己这一发子弹免疫掉
+        ignoreInvuln: true,
+      });
+    };
+
     // 拾取武器：如果这个武器带 super 配置（光刀）→ 自动进入超级战士
     const onWeaponPicked = (player: Player, weaponId: string): void => {
       const superCfg = getWeapon(weaponId)?.super;
@@ -322,6 +346,7 @@ export class GameScene extends Phaser.Scene {
     this.events.on('item-used', onItemUsed);
     this.events.on('player-shielded', onPlayerShielded);
     this.events.on('super-mode', onSuperMode);
+    this.events.on('carried-grenade-hit', onCarriedGrenadeHit);
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.events.off('player-hit', onPlayerHit);
@@ -343,6 +368,7 @@ export class GameScene extends Phaser.Scene {
       this.events.off('item-used', onItemUsed);
       this.events.off('player-shielded', onPlayerShielded);
       this.events.off('super-mode', onSuperMode);
+      this.events.off('carried-grenade-hit', onCarriedGrenadeHit);
       this.projectileSystem.destroy();
       this.sights.destroy();
       this.grenades.destroy();

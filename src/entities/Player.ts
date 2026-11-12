@@ -210,6 +210,12 @@ export class Player extends Entity {
 
   private static readonly HIT_INVULN_MS = 180;
 
+  /**
+   * 腰上挂着的手榴弹的局部锚点（visual 局部坐标，+x = 面向方向）。
+   * y ≈ 髋部（HIP_Y=5 略下方），x 取负值 = 挂在腰带后侧（不遮挡躯干）。
+   */
+  private static readonly WAIST_LOCAL = { x: -5, y: 7 };
+
   // ---- 死亡表现时序（倒下 → 闪烁 → 消失 → 复活）----
   /** 倒地动画时长 */
   private static readonly DEATH_FALL_MS = 450;
@@ -634,6 +640,18 @@ export class Player extends Entity {
     return {
       x: this.container.x,
       y: this.container.y + this.visual.y + StickmanRenderer.SHOULDER_Y,
+    };
+  }
+
+  /**
+   * 腰上挂着的手榴弹的世界坐标（子弹是否击中榴弹用）。
+   * 局部坐标 +x = 面向方向，因此背后的偏移要乘 facing；
+   * visual 整体有 smSurfCenter 的斜面下移，这里一并计入。
+   */
+  get waistWorld(): { x: number; y: number } {
+    return {
+      x: this.container.x + this.facing * Player.WAIST_LOCAL.x,
+      y: this.container.y + this.visual.y + Player.WAIST_LOCAL.y,
     };
   }
 
@@ -1091,11 +1109,32 @@ export class Player extends Entity {
       }
     }
 
+    // 腰上挂着的手榴弹（未取出、且身上确实有榴弹时显示）
+    this.drawWaistGrenade();
+
     // 斜面时整体下移视觉（平滑值，避免抖动闪烁）
     this.visual.y = this.smSurfCenter;
 
     // 存活时确保不透明（死亡表现由 updateDeathPose 控制 alpha）
     if (!this.health.isDead) this.visual.setAlpha(1);
+  }
+
+  /**
+   * 画腰上挂着的手榴弹。
+   * 用武器渲染器画（保证与手里/地上的手榴弹是同一个模型），
+   * 朝下悬挂：aim = π/2，并把绘制起点回推半个长度，使榴弹本体落在腰部锚点上。
+   */
+  private drawWaistGrenade(): void {
+    if (this.grenadeCount <= 0 || this.grenadeMode || this.health.isDead) return;
+    const visual = getWeapon('grenade')?.visual;
+    if (!visual) return;
+    const anchor = Player.WAIST_LOCAL;
+    drawHeldWeapon(this.graphics, {
+      visual,
+      facing: this.facing,
+      aim: Math.PI / 2,
+      hand: { x: anchor.x, y: anchor.y - visual.length * 0.4 },
+    });
   }
 
   /** 联机预留：状态快照 */
