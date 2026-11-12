@@ -397,7 +397,16 @@ export class Player extends Entity {
     if (info.attackId !== undefined) this.lastHitAttackId = info.attackId;
     this.lastDamageSourceId = info.sourceId;
     // 广播：顿帧 / 音效 / 表现层都监听这个
-    this.scene.events.emit('player-damaged', this, applied, info.kind, info.critical === true);
+    // 第 5 个参数是"本次攻击的伤害值"（未按剩余血量截断）：
+    // 血量只剩 1 时挨 100 伤害，气泡应该显示 100 而不是 1
+    this.scene.events.emit(
+      'player-damaged',
+      this,
+      applied,
+      info.kind,
+      info.critical === true,
+      info.amount,
+    );
 
     // 击退 + 受击姿态（hit() 内部会广播 player-hit → 屏幕震动）
     // 高频低伤（激光 tick）用短后仰，否则会被持续锁在受击姿势里

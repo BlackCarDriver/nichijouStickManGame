@@ -99,7 +99,7 @@
         "pierceDamageMul": 1,
         "piercePlayers": false
       },
-      "explosion": { "radius": 150, "damage": 60, "selfDamage": true, "knockback": 14 },
+      "explosion": { "radius": 160, "damage": 115, "selfDamage": true, "knockback": 14 },
       "recoil": { "push": 9.0, "climbDeg": 2.2, "climbMaxDeg": 6.0, "recoverMs": 2600 },
       "visual": { "style": "launcher", "length": 44, "thickness": 9, "color": "#4a4a55" }
     },
@@ -223,7 +223,7 @@
         "bounceAny": true,
         "bounceRestitution": 0.45
       },
-      "explosion": { "radius": 170, "damage": 55, "selfDamage": true, "knockback": 16 },
+      "explosion": { "radius": 175, "damage": 125, "selfDamage": true, "knockback": 16 },
       "recoil": { "push": 0, "climbDeg": 0, "climbMaxDeg": 0, "recoverMs": 0 },
       "visual": { "style": "grenade", "length": 12, "thickness": 8, "color": "#4e6b3a" }
     }

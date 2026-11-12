@@ -29,6 +29,8 @@ export class AimSightSystem {
 
     for (const player of players) {
       if (player.health.isDead) continue;
+      // 握着的手榴弹会盖住武器 → 此时不该继续显示枪械的红外线
+      if (player.grenadeMode) continue;
       const held = player.heldWeapon;
       if (!held) continue;
 

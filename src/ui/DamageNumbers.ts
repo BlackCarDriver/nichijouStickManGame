@@ -42,10 +42,9 @@ export class DamageNumbers {
       existing.total += rounded;
       existing.remain = DamageNumbers.MERGE_WINDOW;
       existing.crit = existing.crit || opts.crit === true;
-      existing.text.setText(
-        existing.crit ? `-${existing.total}!` : `-${existing.total}`,
-      );
-      existing.text.setFontSize(existing.crit ? '23px' : '18px');
+      existing.text.setText(`-${existing.total}`);
+      existing.text.setFontSize(existing.crit ? '27px' : '18px');
+      existing.text.setFontStyle(existing.crit ? 'bold' : 'normal');
       existing.text.setColor(existing.crit ? '#ff2d2d' : '#ff5a5a');
       // 合并时轻微放大一下，提示"又打了一层"
       existing.text.setScale(1.18);
@@ -54,11 +53,11 @@ export class DamageNumbers {
 
     const x = player.container.x + (Math.random() - 0.5) * 12;
     const y = player.container.y - 74;
-    const label = opts.crit ? `-${rounded}!` : `-${rounded}`;
-    const text = this.scene.add.text(x, y, label, {
+    const text = this.scene.add.text(x, y, `-${rounded}`, {
       fontFamily: 'monospace',
-      fontSize: opts.crit ? '23px' : '18px',
-      // 红色数字（重击更红更大）
+      // 暴击：更粗 + 更大（不用感叹号）
+      fontSize: opts.crit ? '27px' : '18px',
+      fontStyle: opts.crit ? 'bold' : 'normal',
       color: opts.crit ? '#ff2d2d' : '#ff5a5a',
       stroke: '#2a0a0a',
       strokeThickness: 4,
