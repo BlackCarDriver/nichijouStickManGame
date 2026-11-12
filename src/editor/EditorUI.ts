@@ -686,10 +686,12 @@ function renderRight(): void {
   if (store.tab === 'map') {
     const spawnIndex = store.selectedSpawnIndex();
     const weaponIndex = store.selectedWeaponIndex();
+    const jointIndex = store.selectedJointIndex();
     const obj = store.firstSelectedObject();
     const inst = store.firstSelectedInstance();
     if (spawnIndex !== null) rightEl.append(spawnForm(spawnIndex));
     else if (weaponIndex !== null) rightEl.append(weaponSpawnForm(weaponIndex));
+    else if (jointIndex !== null) rightEl.append(jointForm(jointIndex));
     else if (obj) rightEl.append(objectForm(obj));
     else if (inst) rightEl.append(instanceForm());
     else rightEl.append(mapForm());
@@ -879,6 +881,27 @@ function spawnForm(index: number): HTMLElement {
     ]),
     h('div', { class: 'ed-row' }, [
       button('删除该出生点', () => store.removeSpawn(index), 'danger'),
+    ]),
+  ]);
+}
+
+/** 关节属性（锚点可精确输入；画布上可直接拖动锚点） */
+function jointForm(index: number): HTMLElement {
+  const store = editorStore;
+  const j = store.joints()[index];
+  if (!j) return h('div');
+  return h('div', {}, [
+    h('h3', { class: 'ed-h3' }, [`关节 #${index + 1}（${j.type}）`]),
+    h('p', { class: 'ed-help' }, [
+      `主体 bodyA: ${j.bodyA} · 另一端: ${j.bodyB ?? 'world（固定在世界锚点）'}`,
+      ' 画布上可直接拖动粉色锚点；也可在此精确填写。',
+    ]),
+    h('div', { class: 'ed-grid2' }, [
+      field('锚点 x', numberInput(j.anchor.x, (v) => store.updateJoint(index, { anchor: { x: v, y: j.anchor.y } }))),
+      field('锚点 y', numberInput(j.anchor.y, (v) => store.updateJoint(index, { anchor: { x: j.anchor.x, y: v } }))),
+    ]),
+    h('div', { class: 'ed-row' }, [
+      button('删除该关节', () => store.removeJoint(index), 'danger'),
     ]),
   ]);
 }

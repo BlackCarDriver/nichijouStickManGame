@@ -71,6 +71,9 @@ export type ToolKind =
   | 'joint'
   | 'ruler';
 
+/** 关节锚点的命中半径（px）：比绘制半径略大，便于点中 */
+export const JOINT_ANCHOR_HIT_RADIUS = 14;
+
 const STORAGE_KEY = 'stickman.editor.v1';
 const HISTORY_LIMIT = 80;
 
@@ -304,6 +307,8 @@ export class EditorStore {
     if (spawn) return Number(spawn[1]) < (this.map.spawnPoints ?? []).length;
     const weapon = /^weapon:(\d+)$/.exec(id);
     if (weapon) return Number(weapon[1]) < (this.map.weapons ?? []).length;
+    const joint = /^joint:(\d+)$/.exec(id);
+    if (joint) return Number(joint[1]) < (this.map.joints ?? []).length;
     return false;
   }
 
@@ -324,6 +329,20 @@ export class EditorStore {
   selectedSpawnIndices(): number[] {
     return this.selection
       .map((id) => /^spawn:(\d+)$/.exec(id))
+      .filter((m): m is RegExpExecArray => !!m)
+      .map((m) => Number(m[1]));
+  }
+
+  /** 选中的关节下标（选择里只有一个 joint: 时） */
+  selectedJointIndex(): number | null {
+    if (this.selection.length !== 1) return null;
+    const m = /^joint:(\d+)$/.exec(this.selection[0]);
+    return m ? Number(m[1]) : null;
+  }
+
+  selectedJointIndices(): number[] {
+    return this.selection
+      .map((id) => /^joint:(\d+)$/.exec(id))
       .filter((m): m is RegExpExecArray => !!m)
       .map((m) => Number(m[1]));
   }
@@ -409,6 +428,11 @@ export class EditorStore {
         const w = (this.map.weapons ?? [])[Number(weapon[1])];
         if (w) boxes.push({ minX: w.x - 22, minY: w.y - 22, maxX: w.x + 22, maxY: w.y + 22 });
       }
+      const joint = /^joint:(\d+)$/.exec(id);
+      if (joint) {
+        const a = (this.map.joints ?? [])[Number(joint[1])]?.anchor;
+        if (a) boxes.push({ minX: a.x - 16, minY: a.y - 16, maxX: a.x + 16, maxY: a.y + 16 });
+      }
     }
     return boxes.length ? unionBounds(boxes) : null;
   }
@@ -421,7 +445,7 @@ export class EditorStore {
   }
 
   /** 命中测试：从后往前（后画的在上） */
-  hitTest(p: Vec): { kind: 'object' | 'prefab' | 'spawn' | 'weapon'; id: string } | null {
+  hitTest(p: Vec): { kind: 'object' | 'prefab' | 'spawn' | 'weapon' | 'joint'; id: string } | null {
     // 交互标记优先于几何体：出生点/武器点常摆在地面上，否则永远选不中
     const spawns = this.map.spawnPoints ?? [];
     for (let i = spawns.length - 1; i >= 0; i--) {
@@ -432,6 +456,14 @@ export class EditorStore {
     for (let i = weapons.length - 1; i >= 0; i--) {
       const w = weapons[i];
       if (Math.hypot(p.x - w.x, p.y - w.y) <= 22) return { kind: 'weapon', id: `weapon:${i}` };
+    }
+    // 关节锚点：通常正落在物体内部（跷跷板支点），必须比几何体先判
+    const joints = this.map.joints ?? [];
+    for (let i = joints.length - 1; i >= 0; i--) {
+      const a = joints[i].anchor;
+      if (Math.hypot(p.x - a.x, p.y - a.y) <= JOINT_ANCHOR_HIT_RADIUS) {
+        return { kind: 'joint', id: `joint:${i}` };
+      }
     }
     const prefabs = this.map.prefabs ?? [];
     for (let i = prefabs.length - 1; i >= 0; i--) {
@@ -564,6 +596,16 @@ export class EditorStore {
 
   removeJoint(index: number): void {
     this.map.joints?.splice(index, 1);
+    this.selection = [];
+    this.commit();
+  }
+
+  /** 修改关节锚点/主体（右栏表单用） */
+  updateJoint(index: number, patch: Partial<Pick<MapJoint, 'anchor' | 'bodyB'>>): void {
+    const j = (this.map.joints ?? [])[index];
+    if (!j) return;
+    if (patch.anchor) j.anchor = { ...j.anchor, ...patch.anchor };
+    if (patch.bodyB !== undefined) j.bodyB = patch.bodyB;
     this.commit();
   }
 
@@ -630,6 +672,13 @@ export class EditorStore {
         w.y += dy;
       }
     }
+    for (const i of this.selectedJointIndices()) {
+      const j = (this.map.joints ?? [])[i];
+      if (j) {
+        j.anchor.x += dx;
+        j.anchor.y += dy;
+      }
+    }
   }
 
   deleteSelected(): void {
@@ -644,9 +693,13 @@ export class EditorStore {
     if (weaponIdx.size > 0) {
       this.map.weapons = (this.map.weapons ?? []).filter((_, i) => !weaponIdx.has(i));
     }
+    const jointIdx = new Set(this.selectedJointIndices());
+    if (jointIdx.size > 0) {
+      this.map.joints = (this.map.joints ?? []).filter((_, i) => !jointIdx.has(i));
+    }
 
     // 2) id 型选择（物体 / 预制件实例）
-    const ids = new Set(this.selection.filter((id) => !/^(spawn|weapon|part):/.test(id)));
+    const ids = new Set(this.selection.filter((id) => !/^(spawn|weapon|joint|part):/.test(id)));
     if (ids.size > 0) {
       this.map.objects = this.map.objects.filter((o) => !o.id || !ids.has(o.id));
       this.map.prefabs = (this.map.prefabs ?? []).filter((p) => !p.id || !ids.has(p.id));

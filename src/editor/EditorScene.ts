@@ -13,7 +13,7 @@ import { ensureMaterialTextures, preloadMaterialTextures } from '../map/TextureL
 import type { MapObject, MapObjectCircle, MapObjectPolygon, MapObjectRect } from '../map/MapFormat';
 import { MATERIALS } from '../config/materials';
 import { PLAYER_CONFIG } from '../entities/Player';
-import { RIG_BONES, GROUND_OFFSET, chain2, solveLegIK, upVec } from '../render/StickmanRig';
+import { RIG_BONES, chain2, solveLegIK, upVec } from '../render/StickmanRig';
 import { StickmanRenderer } from '../render/StickmanRenderer';
 import { editorStore, PREFAB_RIG } from './EditorStore';
 import type { EditorTab, ToolKind } from './EditorStore';
@@ -21,6 +21,9 @@ import { jumpMetrics, objectCenter, type Vec } from './geometry';
 import { centroidOf, currentVertices, nearestEdge } from './polygonEdit';
 import { setStatus } from './status';
 import { actionStore } from './ActionStore';
+import type { ActionPose, ActionWeapon } from './ActionFormat';
+import { getWeapon } from '../combat/WeaponFormat';
+import { drawHeldWeapon } from '../render/WeaponRenderer';
 
 /** 地图 Tab 中对象的 gizmo 操作（改大小 / 旋转） */
 interface MapGizmoDrag {
@@ -62,6 +65,10 @@ interface DragState {
 
 const SPAWN_COLORS = [0xe74c3c, 0x3498db, 0x2ecc71, 0xf1c40f];
 
+interface ActionDrag {
+  handle: 'hip' | 'shoulder' | 'frontElbow' | 'frontHand' | 'backElbow' | 'backHand' | 'footL' | 'footR';
+}
+
 export class EditorScene extends Phaser.Scene {
   private runtime: MapObjectRuntime[] = [];
   private gridGfx!: Phaser.GameObjects.Graphics;
@@ -88,6 +95,8 @@ export class EditorScene extends Phaser.Scene {
   private refGuide!: Phaser.GameObjects.Graphics;
   private lastNotify = 0;
   private lastTab: EditorTab = 'map';
+  /** 动作编辑画布中的当前关节拖动 */
+  private actionDrag: ActionDrag | null = null;
 
   constructor() {
     super('EditorScene');
@@ -291,6 +300,202 @@ export class EditorScene extends Phaser.Scene {
     guide.lineBetween(bx - 6, feet, bx + 6, feet);
     guide.lineStyle(1, 0x8fa3b8, 0.18);
     guide.lineBetween(bx - 60, feet, bx + 160, feet);
+  }
+
+  private actionOrigin(): Vec {
+    const map = editorStore.renderMap();
+    return { x: map.width / 2, y: map.height / 2 + 80 };
+  }
+
+  private actionArm(root: Vec, shoulder: number, elbow: number): { joint: Vec; end: Vec } {
+    return chain2(root.x, root.y, shoulder, RIG_BONES.UPPER_ARM, elbow, RIG_BONES.FOREARM, 1, 'down');
+  }
+
+  private drawActionFigure(g: Phaser.GameObjects.Graphics, pose: ActionPose, weapon: ActionWeapon): void {
+    g.clear();
+    const hip = { x: pose.rootX, y: pose.rootY };
+    const footL = { x: hip.x + pose.footLX, y: hip.y + pose.footLY };
+    const footR = { x: hip.x + pose.footRX, y: hip.y + pose.footRY };
+    const legs = [
+      solveLegIK(hip.x, hip.y, footL.x, footL.y, 1),
+      solveLegIK(hip.x, hip.y, footR.x, footR.y, 1),
+    ];
+    const legChains = [
+      chain2(hip.x, hip.y, legs[0].thighAngle, RIG_BONES.THIGH, legs[0].kneeBend, RIG_BONES.SHIN, 1, 'down'),
+      chain2(hip.x, hip.y, legs[1].thighAngle, RIG_BONES.THIGH, legs[1].kneeBend, RIG_BONES.SHIN, 1, 'down'),
+    ];
+    g.lineStyle(5.5, 0x8fa3b8, 1);
+    for (const leg of legChains) {
+      g.lineBetween(hip.x, hip.y, leg.joint.x, leg.joint.y);
+      g.lineBetween(leg.joint.x, leg.joint.y, leg.end.x, leg.end.y);
+      g.fillStyle(0xdce7f0, 1);
+      g.fillCircle(leg.joint.x, leg.joint.y, 2.5);
+    }
+
+    const torsoAngle = pose.torsoTilt + pose.torsoTwist * 0.35;
+    const torso = upVec(torsoAngle, RIG_BONES.TORSO, 1);
+    const shoulder = { x: hip.x + torso.x, y: hip.y + torso.y };
+    g.lineStyle(7, 0x8fa3b8, 1);
+    g.lineBetween(hip.x, hip.y, shoulder.x, shoulder.y);
+    const neck = upVec(pose.headTilt, RIG_BONES.NECK, 1);
+    const headBase = { x: shoulder.x + neck.x, y: shoulder.y + neck.y };
+    const head = upVec(pose.headTilt, RIG_BONES.HEAD_R * 0.75, 1);
+    g.fillStyle(0x8fa3b8, 1);
+    g.fillCircle(headBase.x + head.x, headBase.y + head.y + pose.headOffsetY, RIG_BONES.HEAD_R);
+
+    const frontRoot = { x: shoulder.x + 3.5, y: shoulder.y + 1.5 };
+    const backRoot = { x: shoulder.x - 3.5, y: shoulder.y + 1.5 };
+    const front = this.actionArm(frontRoot, pose.armFrontShoulder, pose.armFrontElbow);
+    const back = this.actionArm(backRoot, pose.armBackShoulder, pose.armBackElbow);
+    g.lineStyle(4, 0x8fa3b8, 1);
+    g.lineBetween(frontRoot.x, frontRoot.y, front.joint.x, front.joint.y);
+    g.lineBetween(front.joint.x, front.joint.y, front.end.x, front.end.y);
+    g.lineBetween(backRoot.x, backRoot.y, back.joint.x, back.joint.y);
+    g.lineBetween(back.joint.x, back.joint.y, back.end.x, back.end.y);
+    g.fillStyle(0xdce7f0, 1);
+    g.fillCircle(front.joint.x, front.joint.y, 2.2);
+    g.fillCircle(back.joint.x, back.joint.y, 2.2);
+
+    if (weapon === 'spear') {
+      const visual = getWeapon('spear')?.visual;
+      if (visual) {
+        const aim = Math.atan2(front.end.y - frontRoot.y, front.end.x - frontRoot.x);
+        drawHeldWeapon(g, { visual, facing: 1, aim, hand: front.end });
+      }
+    }
+  }
+
+  private actionHandlePoints(pose: ActionPose): Record<ActionDrag['handle'], Vec> {
+    const hip = { x: pose.rootX, y: pose.rootY };
+    const torsoAngle = pose.torsoTilt + pose.torsoTwist * 0.35;
+    const torso = upVec(torsoAngle, RIG_BONES.TORSO, 1);
+    const shoulder = { x: hip.x + torso.x, y: hip.y + torso.y };
+    const frontRoot = { x: shoulder.x + 3.5, y: shoulder.y + 1.5 };
+    const backRoot = { x: shoulder.x - 3.5, y: shoulder.y + 1.5 };
+    const front = this.actionArm(frontRoot, pose.armFrontShoulder, pose.armFrontElbow);
+    const back = this.actionArm(backRoot, pose.armBackShoulder, pose.armBackElbow);
+    return {
+      hip,
+      shoulder,
+      frontElbow: front.joint,
+      frontHand: front.end,
+      backElbow: back.joint,
+      backHand: back.end,
+      footL: { x: hip.x + pose.footLX, y: hip.y + pose.footLY },
+      footR: { x: hip.x + pose.footRX, y: hip.y + pose.footRY },
+    };
+  }
+
+  private actionArmPose(root: Vec, target: Vec): { shoulder: number; elbow: number } {
+    const dx = target.x - root.x;
+    const dy = target.y - root.y;
+    const l1 = RIG_BONES.UPPER_ARM;
+    const l2 = RIG_BONES.FOREARM;
+    const distance = Math.max(Math.abs(l1 - l2) + 0.5, Math.min(l1 + l2 - 0.01, Math.hypot(dx, dy)));
+    const cosB = (l1 * l1 + distance * distance - l2 * l2) / (2 * l1 * distance);
+    const bendAtRoot = Math.acos(Math.max(-1, Math.min(1, cosB)));
+    return {
+      shoulder: (Math.atan2(dx, dy) - bendAtRoot) * (180 / Math.PI),
+      elbow: bendAtRoot * 2 * (180 / Math.PI),
+    };
+  }
+
+  private drawActionHandles(): void {
+    const g = this.overlay;
+    const origin = this.actionOrigin();
+    const points = this.actionHandlePoints(actionStore.currentPose);
+    const entries: Array<[ActionDrag['handle'], number]> = [
+      ['hip', 0xf1c40f],
+      ['shoulder', 0xf1c40f],
+      ['frontElbow', 0x48dbfb],
+      ['frontHand', 0x2ecc71],
+      ['backElbow', 0x48dbfb],
+      ['backHand', 0x2ecc71],
+      ['footL', 0xff8c42],
+      ['footR', 0xff8c42],
+    ];
+    for (const [name, color] of entries) {
+      const p = points[name];
+      const x = origin.x + p.x;
+      const y = origin.y + p.y;
+      g.lineStyle(1.5, color, 0.9);
+      g.strokeCircle(x, y, 7);
+      g.fillStyle(color, 0.9);
+      g.fillCircle(x, y, 3.5);
+    }
+    g.lineStyle(1, 0xffffff, 0.25);
+    g.lineBetween(origin.x - 220, origin.y, origin.x + 260, origin.y);
+    g.lineBetween(origin.x, origin.y - 120, origin.x, origin.y + 70);
+  }
+
+  private actionPointerDown(p: Vec): void {
+    const origin = this.actionOrigin();
+    const local = { x: p.x - origin.x, y: p.y - origin.y };
+    const points = this.actionHandlePoints(actionStore.currentPose);
+    const order: ActionDrag['handle'][] = ['frontHand', 'backHand', 'frontElbow', 'backElbow', 'footL', 'footR', 'shoulder', 'hip'];
+    const hit = order.find((name) => Math.hypot(local.x - points[name].x, local.y - points[name].y) <= 12 / this.cameras.main.zoom);
+    if (!hit) return;
+    actionStore.ensureKeyframeAtTime();
+    this.actionDrag = { handle: hit };
+  }
+
+  private actionPointerMove(p: Vec): void {
+    if (!this.actionDrag) return;
+    const origin = this.actionOrigin();
+    const local = { x: p.x - origin.x, y: p.y - origin.y };
+    const pose = actionStore.currentPose;
+    const hip = { x: pose.rootX, y: pose.rootY };
+    const torsoAngle = pose.torsoTilt + pose.torsoTwist * 0.35;
+    const torso = upVec(torsoAngle, RIG_BONES.TORSO, 1);
+    const shoulder = { x: hip.x + torso.x, y: hip.y + torso.y };
+    const frontRoot = { x: shoulder.x + 3.5, y: shoulder.y + 1.5 };
+    const backRoot = { x: shoulder.x - 3.5, y: shoulder.y + 1.5 };
+    const patch: Partial<ActionPose> = {};
+    switch (this.actionDrag.handle) {
+      case 'hip':
+        patch.rootX = local.x;
+        patch.rootY = local.y;
+        break;
+      case 'shoulder':
+        patch.torsoTilt = (Math.atan2(local.x - hip.x, -(local.y - hip.y)) * 180) / Math.PI - pose.torsoTwist * 0.35;
+        break;
+      case 'frontHand': {
+        const arm = this.actionArmPose(frontRoot, local);
+        patch.armFrontShoulder = arm.shoulder;
+        patch.armFrontElbow = arm.elbow;
+        break;
+      }
+      case 'backHand': {
+        const arm = this.actionArmPose(backRoot, local);
+        patch.armBackShoulder = arm.shoulder;
+        patch.armBackElbow = arm.elbow;
+        break;
+      }
+      case 'frontElbow':
+        patch.armFrontShoulder = (Math.atan2(local.x - frontRoot.x, local.y - frontRoot.y) * 180) / Math.PI;
+        patch.armFrontElbow = pose.armFrontElbow;
+        break;
+      case 'backElbow':
+        patch.armBackShoulder = (Math.atan2(local.x - backRoot.x, local.y - backRoot.y) * 180) / Math.PI;
+        patch.armBackElbow = pose.armBackElbow;
+        break;
+      case 'footL':
+        patch.footLX = local.x - pose.rootX;
+        patch.footLY = local.y - pose.rootY;
+        break;
+      case 'footR':
+        patch.footRX = local.x - pose.rootX;
+        patch.footRY = local.y - pose.rootY;
+        break;
+    }
+    actionStore.updateCurrentPose(patch);
+  }
+
+  private actionPointerUp(): boolean {
+    if (!this.actionDrag) return false;
+    this.actionDrag = null;
+    actionStore.commit();
+    return true;
   }
 
   /** 虚线（Graphics 没有原生 dash） */
@@ -710,6 +915,11 @@ export class EditorScene extends Phaser.Scene {
     const g = this.overlay;
     g.clear();
 
+    if (store.tab === 'action') {
+      this.drawActionHandles();
+      return;
+    }
+
     // 预制件工作台：选中部件的 gizmo（缩放手柄 + 旋转手柄）
     if (store.tab === 'prefab') {
       const idx = store.selectedPartIndex();
@@ -783,16 +993,26 @@ export class EditorScene extends Phaser.Scene {
         g.fillCircle(w.x - 10, w.y + 3, 3);
       });
 
-      // 关节：主体中心 → 锚点
-      for (const j of store.joints()) {
+      // 关节：主体中心 → 锚点（锚点可点选、可拖动）
+      store.joints().forEach((j, i) => {
+        const selected = store.selection.includes(`joint:${i}`);
         const center = store.centerOfObject(j.bodyA);
-        g.lineStyle(2, 0xff5ce6, 0.9);
+        g.lineStyle(2, selected ? 0xffffff : 0xff5ce6, selected ? 1 : 0.9);
         if (center) g.lineBetween(center.x, center.y, j.anchor.x, j.anchor.y);
         g.fillStyle(0xff5ce6, 1);
         g.fillCircle(j.anchor.x, j.anchor.y, 5);
-        g.lineStyle(2, 0xff5ce6, 1);
+        g.lineStyle(2, selected ? 0xffffff : 0xff5ce6, 1);
         g.strokeCircle(j.anchor.x, j.anchor.y, 11);
-      }
+        if (selected) {
+          // 选中：外圈加一层粗白环 + 十字，明确"这是可以拖的锚点"
+          g.lineStyle(2, 0xffffff, 0.95);
+          g.strokeCircle(j.anchor.x, j.anchor.y, 16);
+          g.lineBetween(j.anchor.x - 20, j.anchor.y, j.anchor.x - 14, j.anchor.y);
+          g.lineBetween(j.anchor.x + 14, j.anchor.y, j.anchor.x + 20, j.anchor.y);
+          g.lineBetween(j.anchor.x, j.anchor.y - 20, j.anchor.x, j.anchor.y - 14);
+          g.lineBetween(j.anchor.x, j.anchor.y + 14, j.anchor.x, j.anchor.y + 20);
+        }
+      });
     }
 
     // 地图 Tab：选中对象的旋转 / 缩放手柄
@@ -950,6 +1170,11 @@ export class EditorScene extends Phaser.Scene {
       this.drawOverlay();
       return;
     }
+    if (store.tab === 'action') {
+      this.actionPointerDown(p);
+      this.drawOverlay();
+      return;
+    }
 
     const shiftKey = (pointer.event as MouseEvent | undefined)?.shiftKey === true;
     // 地图 Tab：选择工具下优先响应多边形顶点手柄 / gizmo 手柄
@@ -1058,6 +1283,13 @@ export class EditorScene extends Phaser.Scene {
       return;
     }
 
+    if (this.actionDrag) {
+      this.actionPointerMove(p);
+      this.drawReferenceFigure();
+      this.drawOverlay();
+      return;
+    }
+
     if (this.vertexDrag) {
       const store = editorStore;
       const shift = (pointer.event as MouseEvent | undefined)?.shiftKey === true;
@@ -1130,6 +1362,10 @@ export class EditorScene extends Phaser.Scene {
     const store = editorStore;
     if (this.panning) {
       this.panning = null;
+      return;
+    }
+    if (this.actionDrag) {
+      this.actionPointerUp();
       return;
     }
     if (this.mapGizmoDrag) {
