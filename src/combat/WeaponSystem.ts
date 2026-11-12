@@ -705,7 +705,8 @@ export class WeaponSystem {
     };
 
     this.projectiles.spawn({
-      weaponId: weapon.visual.style,
+      // 用真实武器 id（匕首/长矛），插不进去时场景据此在落点生成掉落物
+      weaponId: player.heldWeapon?.id ?? weapon.visual.style,
       x: from.x,
       y: from.y,
       angle,

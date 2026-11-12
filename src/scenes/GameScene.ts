@@ -192,16 +192,23 @@ export class GameScene extends Phaser.Scene {
       // 目前只做表现层反馈（在 WeaponSystem 里已播放特效）
     };
 
+    // 投掷武器插不进去（目标硬度 >= 投掷伤害）→ 掉到地上变成可拾取物
+    const onThrownBlocked = (weaponId: string, x: number, y: number): void => {
+      this.pickups.spawn(weaponId, x, y, { falling: true });
+    };
+
     this.events.on('player-hit', onPlayerHit);
     this.events.on('explosion', onExplosion);
     this.events.on('object-destroyed', onObjectDestroyed);
     this.events.on('weapon-lost', onWeaponLost);
+    this.events.on('thrown-blocked', onThrownBlocked);
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.events.off('player-hit', onPlayerHit);
       this.events.off('explosion', onExplosion);
       this.events.off('object-destroyed', onObjectDestroyed);
       this.events.off('weapon-lost', onWeaponLost);
+      this.events.off('thrown-blocked', onThrownBlocked);
       this.projectileSystem.destroy();
       this.sights.destroy();
       this.grenades.destroy();

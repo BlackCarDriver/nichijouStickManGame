@@ -834,6 +834,10 @@ function materialForm(): HTMLElement {
       field('耐受度', numberInput(mat.durability, (v) => upd({ durability: Math.max(0, v) }))),
       field('受伤倍率', numberInput(mat.damageMultiplier, (v) => upd({ damageMultiplier: Math.max(0, v) }), 0.1)),
     ]),
+    h('div', { class: 'ed-grid2' }, [
+      field('硬度', numberInput(mat.hardness, (v) => upd({ hardness: Math.max(0, v) }), 0.5)),
+    ]),
+    h('p', { class: 'ed-help' }, ['硬度抵扣伤害：单次伤害 ≤ 硬度则完全打不动；投掷武器也插不进去（会掉在地上）。']),
 
     // ---- 子弹 ----
     h('h3', { class: 'ed-h3' }, ['子弹交互']),

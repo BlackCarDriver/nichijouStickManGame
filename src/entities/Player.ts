@@ -49,8 +49,8 @@ export const PLAYER_CONFIG = {
   // ---- 生命值 ----
   /** 最大生命值 */
   maxHp: 100,
-  /** 死亡后复活延迟（ms）：沙盒模式下无限重生 */
-  respawnDelayMs: 1200,
+  /** 死亡 → 复活的完整时长（ms）= 倒下 + 闪烁 + 消失 */
+  respawnDelayMs: 2800,
   /** 复活后的无敌时长（ms） */
   spawnInvulnMs: 900,
 } as const;
@@ -123,6 +123,18 @@ export class Player extends Entity {
   private lastHitAttackId: number | undefined;
 
   private static readonly HIT_INVULN_MS = 180;
+
+  // ---- 死亡表现时序（倒下 → 闪烁 → 消失 → 复活）----
+  /** 倒地动画时长 */
+  private static readonly DEATH_FALL_MS = 450;
+  /** 闪烁阶段时长（正常 ↔ 半透明） */
+  private static readonly DEATH_BLINK_MS = 2000;
+  /** 闪烁切换间隔 */
+  private static readonly DEATH_BLINK_INTERVAL_MS = 250;
+  /** 完全消失到复活的间隔 */
+  private static readonly DEATH_GONE_MS = 350;
+  private static readonly DEATH_TOTAL_MS =
+    Player.DEATH_FALL_MS + Player.DEATH_BLINK_MS + Player.DEATH_GONE_MS;
 
   // ---- 着地状态 ----
   /** 脚下射线检测结果 */
@@ -320,6 +332,38 @@ export class Player extends Entity {
   /** 治疗（医疗包用） */
   heal(amount: number): number {
     return this.health.heal(amount);
+  }
+
+  /**
+   * 死亡表现：倒下 → 闪烁 2 秒 → 消失 → 复活。
+   * 由 respawnTimer 的剩余时间反推当前处于哪个阶段。
+   */
+  private updateDeathPose(): void {
+    const elapsed = Player.DEATH_TOTAL_MS - this.respawnTimer;
+    const fallEnd = Player.DEATH_FALL_MS;
+    const blinkEnd = fallEnd + Player.DEATH_BLINK_MS;
+    const lyingAngle = this.facing * (Math.PI / 2) * 0.94;
+
+    if (elapsed < fallEnd) {
+      // 倒地：快速转到躺平（ease-out）
+      const t = Math.min(1, elapsed / fallEnd);
+      const eased = 1 - Math.pow(1 - t, 2);
+      this.container.rotation = lyingAngle * eased;
+      this.visual.setAlpha(1);
+      return;
+    }
+
+    this.container.rotation = lyingAngle;
+
+    if (elapsed < blinkEnd) {
+      // 闪烁：正常 ↔ 半透明
+      const phase = Math.floor((elapsed - fallEnd) / Player.DEATH_BLINK_INTERVAL_MS);
+      this.visual.setAlpha(phase % 2 === 0 ? 1 : 0.3);
+      return;
+    }
+
+    // 消失
+    this.visual.setAlpha(0);
   }
 
   private die(): void {
@@ -603,6 +647,12 @@ export class Player extends Entity {
 
   /** 动画状态机：物理状态（着地/速度/受击）→ 姿势 */
   private updatePose(deltaMs: number, wasGrounded: boolean): void {
+    // 死亡：尸体姿势与闪烁由专门的时序驱动，跳过常规姿势
+    if (this.health.isDead) {
+      this.updateDeathPose();
+      return;
+    }
+
     // 动作细节计时器递减（spine-animation：冲击吸收/预备都需要“衰减恢复”）
     this.landImpact = Math.max(0, this.landImpact - deltaMs);
     this.jumpAnticipation = Math.max(0, this.jumpAnticipation - deltaMs);
@@ -723,8 +773,8 @@ export class Player extends Entity {
     // 斜面时整体下移视觉（平滑值，避免抖动闪烁）
     this.visual.y = this.smSurfCenter;
 
-    // 死亡表现：半透明
-    this.visual.setAlpha(this.health.isDead ? 0.3 : 1);
+    // 存活时确保不透明（死亡表现由 updateDeathPose 控制 alpha）
+    if (!this.health.isDead) this.visual.setAlpha(1);
   }
 
   /** 联机预留：状态快照 */

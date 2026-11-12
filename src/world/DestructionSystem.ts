@@ -47,8 +47,16 @@ export class DestructionSystem {
 
     const material = MATERIALS[runtime.material];
     const multiplier = material?.damageMultiplier ?? 1;
-    const amount = Math.max(0, info.amount) * multiplier;
+    const hardness = material?.hardness ?? 0;
+
+    // 硬度抵扣：先按倍率缩放，再减去硬度（最低 0）
+    const raw = Math.max(0, info.amount) * multiplier;
+    const amount = raw - hardness;
     if (amount <= 0) {
+      // 打不动：只给"叮"一下的火花反馈，不掉耐久
+      if (info.point) {
+        this.fx.hitSpark(info.point, info.normal, 0xdfe7f0);
+      }
       return { applied: 0, destroyed: false, remaining: runtime.durability };
     }
 

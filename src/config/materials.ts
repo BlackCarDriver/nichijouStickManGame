@@ -36,6 +36,12 @@ export interface MaterialJson {
   durability: number;
   /** 受到伤害的倍率（1 = 正常，>1 更脆） */
   damageMultiplier?: number;
+  /**
+   * 硬度：**抵扣伤害**（伤害 - 硬度，最小值 0）。
+   * 若某次伤害 <= 硬度，则该次攻击完全无法破坏它
+   * （低于硬度的武器打不动；投掷的近战武器也插不进去，会掉在地上）。
+   */
+  hardness?: number;
   // ---- 子弹交互 ----
   /** 子弹击中是否反弹（金属） */
   bulletBounce?: boolean;
@@ -49,7 +55,7 @@ export interface MaterialsFile {
 }
 
 /** 运行时材质（解析后的形态） */
-export interface MaterialConfig extends Omit<MaterialJson, 'color' | 'textureMode' | 'damageMultiplier' | 'bulletBounce' | 'bulletPierce'> {
+export interface MaterialConfig extends Omit<MaterialJson, 'color' | 'textureMode' | 'damageMultiplier' | 'bulletBounce' | 'bulletPierce' | 'hardness'> {
   id: string;
   opacity: number;
   /** 解析后的颜色（Phaser number） */
@@ -58,6 +64,7 @@ export interface MaterialConfig extends Omit<MaterialJson, 'color' | 'textureMod
   colorHex: string;
   textureMode: TextureMode;
   damageMultiplier: number;
+  hardness: number;
   bulletBounce: boolean;
   bulletPierce: boolean;
 }
@@ -116,6 +123,7 @@ export function toMaterialConfig(id: string, def: MaterialJson): MaterialConfig 
     destructible: def.destructible ?? false,
     durability: def.durability ?? 0,
     damageMultiplier: def.damageMultiplier ?? 1,
+    hardness: def.hardness ?? 0,
     bulletBounce: def.bulletBounce ?? false,
     bulletPierce: def.bulletPierce ?? false,
   };
@@ -137,6 +145,7 @@ export function materialToJson(m: MaterialConfig): MaterialJson {
     destructible: m.destructible,
     durability: m.durability,
     damageMultiplier: m.damageMultiplier,
+    hardness: m.hardness,
     bulletBounce: m.bulletBounce,
     bulletPierce: m.bulletPierce,
   };

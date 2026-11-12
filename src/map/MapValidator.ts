@@ -373,6 +373,11 @@ export function validateMaterialsFile(
     if (def.textureMode !== undefined && def.textureMode !== 'tile' && def.textureMode !== 'stretch') {
       issues.push(err(`${path}.textureMode`, '只能是 "tile" 或 "stretch"'));
     }
+    if (def.hardness !== undefined) {
+      if (!isFiniteNumber(def.hardness) || def.hardness < 0) {
+        issues.push(err(`${path}.hardness`, '硬度必须 >= 0 的数字'));
+      }
+    }
     if (def.damageMultiplier !== undefined) {
       if (!isFiniteNumber(def.damageMultiplier) || def.damageMultiplier < 0) {
         issues.push(err(`${path}.damageMultiplier`, '受伤倍率必须 >= 0 的数字'));

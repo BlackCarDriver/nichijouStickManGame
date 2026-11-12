@@ -102,6 +102,8 @@ export class ProjectileSystem {
   private static readonly MAX_PROJECTILES = 240;
   private static readonly MAX_STUCK = 24;
   private static readonly MAX_HITS_PER_STEP = 8;
+  /** 插入物消失前的闪烁时长（ms） */
+  private static readonly STUCK_BLINK_MS = 1000;
 
   constructor(
     scene: Phaser.Scene,
@@ -268,6 +270,14 @@ export class ProjectileSystem {
 
     // ---- 投掷物（匕首/长矛）：先结算伤害，再插入目标停留 ----
     if (p.stickMs) {
+      // 目标硬度过高（伤害 <= 硬度）→ 插不进去，掉到地上（由场景生成掉落物）
+      const runtime = this.registry.resolve(hit.body);
+      const hardness = runtime ? (MATERIALS[runtime.material]?.hardness ?? 0) : 0;
+      if (runtime && amount - hardness <= 0) {
+        this.scene.events.emit('thrown-blocked', p.weaponId, hit.point.x, hit.point.y);
+        this.fx.hitSpark(hit.point, hit.normal, 0xdfe7f0);
+        return true;
+      }
       this.applyDamageTo(p, hit, amount, knockback);
       this.addStuck(p, hit);
       return true;
@@ -458,9 +468,14 @@ export class ProjectileSystem {
       }
     }
 
-    // 插在目标上的投掷物（随剩余时间淡出）
+    // 插在目标上的投掷物（消失前 1 秒开始闪烁）
     for (const s of this.stuck) {
-      const alpha = Math.min(1, s.remain / 400);
+      const alpha =
+        s.remain < ProjectileSystem.STUCK_BLINK_MS
+          ? Math.floor(s.remain / 130) % 2 === 0
+            ? 1
+            : 0.22
+          : 1;
       const dx = Math.cos(s.angle);
       const dy = Math.sin(s.angle);
       this.g.lineStyle(Math.max(2, s.size), s.color, alpha);
