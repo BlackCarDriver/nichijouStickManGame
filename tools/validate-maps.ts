@@ -88,6 +88,10 @@ function main(): void {
   const itemIds = existsSync(itemsPath)
     ? Object.keys((readJson<{ items?: Record<string, unknown> }>(itemsPath).items ?? {}))
     : [];
+  const weaponsPath = join(DATA, 'weapons.json');
+  const weaponIds = existsSync(weaponsPath)
+    ? Object.keys((readJson<{ weapons?: Record<string, unknown> }>(weaponsPath).weapons ?? {}))
+    : [];
 
   // ---- maps ----
   const mapDir = join(DATA, 'maps');
@@ -95,7 +99,7 @@ function main(): void {
   const mapIssues: Issue[] = [];
   for (const file of mapFiles) {
     const raw = readJson<unknown>(join(mapDir, file));
-    const ctx = makeContext(materialIds, prefabs, itemIds);
+    const ctx = makeContext(materialIds, prefabs, itemIds, weaponIds);
     mapIssues.push(...validateMap(raw, ctx).map((i) => ({ ...i, path: `maps/${file} → ${i.path}` })));
   }
   errorCount += printIssues(`data/maps  (${mapFiles.length} 张地图)`, mapIssues);

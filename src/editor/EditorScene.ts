@@ -13,12 +13,14 @@ import { ensureMaterialTextures, preloadMaterialTextures } from '../map/TextureL
 import type { MapObject, MapObjectCircle, MapObjectPolygon, MapObjectRect } from '../map/MapFormat';
 import { MATERIALS } from '../config/materials';
 import { PLAYER_CONFIG } from '../entities/Player';
+import { RIG_BONES, GROUND_OFFSET, chain2, solveLegIK, upVec } from '../render/StickmanRig';
 import { StickmanRenderer } from '../render/StickmanRenderer';
 import { editorStore, PREFAB_RIG } from './EditorStore';
 import type { EditorTab, ToolKind } from './EditorStore';
 import { jumpMetrics, objectCenter, type Vec } from './geometry';
 import { centroidOf, currentVertices, nearestEdge } from './polygonEdit';
 import { setStatus } from './status';
+import { actionStore } from './ActionStore';
 
 /** 地图 Tab 中对象的 gizmo 操作（改大小 / 旋转） */
 interface MapGizmoDrag {
@@ -141,13 +143,19 @@ export class EditorScene extends Phaser.Scene {
   }
 
   /** 每帧最多重建一次（在 update 早期处理） */
-  update(): void {
+  update(_time?: number, delta = 0): void {
+    actionStore.tick(delta);
     // 兜底：鼠标已松开但拖动状态残留（例如在画布外松开、窗口失焦）
     if ((this.prefabDrag || this.vertexDrag || this.mapGizmoDrag || this.drag) && !this.input.activePointer.isDown) {
       this.onPointerUp();
     }
     if (!this.prefabDrag && !this.vertexDrag && !this.mapGizmoDrag && !this.drag && !this.panning) {
       this.updateHoverCursor();
+    }
+    if (editorStore.tab === 'action') {
+      this.drawReferenceFigure();
+      this.drawOverlay();
+      return;
     }
     if (!this.rebuildQueued) return;
     this.rebuildQueued = false;
@@ -241,6 +249,16 @@ export class EditorScene extends Phaser.Scene {
     guide.clear();
     if (store.tab === 'map') {
       g.setVisible(false);
+      return;
+    }
+    if (store.tab === 'action') {
+      const origin = this.actionOrigin();
+      g.setVisible(true);
+      g.setPosition(origin.x, origin.y);
+      this.drawActionFigure(g, actionStore.currentPose, actionStore.current.weapon);
+      guide.clear();
+      guide.lineStyle(1, 0x8fa3b8, 0.3);
+      guide.lineBetween(origin.x - 220, origin.y + 48, origin.x + 260, origin.y + 48);
       return;
     }
     g.setVisible(true);
@@ -732,14 +750,37 @@ export class EditorScene extends Phaser.Scene {
       }
 
       // 出生点
+      // 出生点（可选中/拖动）：选中时加一圈高亮
       store.map.spawnPoints.forEach((sp, i) => {
         const color = SPAWN_COLORS[i % SPAWN_COLORS.length];
+        const selected = store.selection.includes(`spawn:${i}`);
         g.lineStyle(3, color, 1);
         g.strokeCircle(sp.x, sp.y, 26);
         g.lineBetween(sp.x - 34, sp.y, sp.x + 34, sp.y);
         g.lineBetween(sp.x, sp.y - 34, sp.x, sp.y + 34);
         g.fillStyle(color, 0.15);
         g.fillCircle(sp.x, sp.y, 26);
+        if (selected) {
+          g.lineStyle(2, 0xffffff, 0.95);
+          g.strokeCircle(sp.x, sp.y, 33);
+        }
+        g.fillStyle(color, 1);
+        g.fillCircle(sp.x + 20, sp.y - 20, 9);
+      });
+
+      // 地图武器投放点
+      store.weaponSpawns().forEach((w, i) => {
+        const selected = store.selection.includes(`weapon:${i}`);
+        g.fillStyle(0x2b2b36, 0.85);
+        g.fillCircle(w.x, w.y, 20);
+        g.lineStyle(selected ? 3 : 2, selected ? 0xffffff : 0xf5d76e, 1);
+        g.strokeCircle(w.x, w.y, 20);
+        // 小型"枪"图形，便于和出生点区分
+        g.lineStyle(3, 0xf5d76e, 1);
+        g.lineBetween(w.x - 9, w.y, w.x + 9, w.y);
+        g.lineBetween(w.x + 4, w.y - 5, w.x + 9, w.y);
+        g.fillStyle(0xf5d76e, 1);
+        g.fillCircle(w.x - 10, w.y + 3, 3);
       });
 
       // 关节：主体中心 → 锚点
@@ -954,8 +995,25 @@ export class EditorScene extends Phaser.Scene {
         if (store.activePrefabId) {
           const sp = store.snapPoint(p);
           store.addPrefabInstance(store.activePrefabId, sp.x, sp.y);
+          // 投放是"一次性"动作：切回选择工具，避免连点造出一堆预制件
+          store.tool = 'select';
+          store.message = '已放置预制件（已切回选择工具）';
+          store.touch();
         } else {
           store.message = '请先在左侧选择一个预制件';
+          store.touch();
+        }
+        break;
+      }
+      case 'weapon': {
+        if (store.activeWeaponId) {
+          const sp = store.snapPoint(p);
+          store.addWeaponSpawn(store.activeWeaponId, sp.x, sp.y);
+          store.tool = 'select';
+          store.message = '已投放武器（已切回选择工具）';
+          store.touch();
+        } else {
+          store.message = '请先在左侧选择要投放的武器';
           store.touch();
         }
         break;

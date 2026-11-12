@@ -11,11 +11,14 @@ import { editorStore } from './EditorStore';
 import type { EditorTab, ToolKind } from './EditorStore';
 import { MATERIALS, materialIds } from '../config/materials';
 import { listMaps, listPrefabs } from '../map/MapRegistry';
+import { getWeapon, listWeaponIds } from '../combat/WeaponFormat';
 import type { Issue } from '../map/MapValidator';
 import type { MapObject } from '../map/MapFormat';
 import { setStatus, setStatusSink } from './status';
 import { textureUrl } from '../map/TextureLoader';
 import type { EditorScene } from './EditorScene';
+import { actionStore } from './ActionStore';
+import type { ActionPose } from './ActionFormat';
 
 type Child = Node | string | null | undefined | false;
 
@@ -67,11 +70,13 @@ function selectInput(
   options: Array<{ value: string; label: string }>,
   value: string,
   onChange: (v: string) => void,
+  placeholder?: string,
 ): HTMLSelectElement {
+  const all = placeholder ? [{ value: '', label: placeholder }, ...options] : options;
   const select = h(
     'select',
     { class: 'ed-input' },
-    options.map((o) => h('option', { value: o.value, selected: o.value === value }, [o.label])),
+    all.map((o) => h('option', { value: o.value, selected: o.value === value }, [o.label])),
   );
   select.value = value;
   select.addEventListener('change', () => onChange(select.value));
@@ -110,6 +115,7 @@ const TOOLS: Array<{ id: ToolKind; label: string; key: string }> = [
   { id: 'polygon', label: '多边形', key: 'P' },
   { id: 'spawn', label: '出生点', key: 'S' },
   { id: 'prefab', label: '放预制件', key: 'F' },
+  { id: 'weapon', label: '放武器', key: 'B' },
   { id: 'joint', label: '关节', key: 'J' },
   { id: 'ruler', label: '尺子', key: 'M' },
 ];
@@ -158,6 +164,7 @@ export function bindUI(phaserGame: Phaser.Game): void {
     statusTextEl.classList.add('ed-status-active');
   });
   editorStore.subscribe(render);
+  actionStore.subscribe(render);
   window.addEventListener('keydown', onKeyDown);
   // FPS 指示（每 500ms 刷新一次，不参与面板重建）
   window.setInterval(() => {
@@ -186,20 +193,20 @@ function render(): void {
   const errors = issues.filter((i) => i.level === 'error').length;
   const warns = issues.length - errors;
 
-  const hSig = `${store.tab}|${errors}|${warns}|${store.map.name}|${listMaps().length}|${testing}`;
+  const hSig = `${store.tab}|${errors}|${warns}|${store.map.name}|${listMaps().length}|${testing}|${actionStore.revision}`;
   if (hSig !== headerSig) {
     headerSig = hSig;
     renderHeader();
   }
 
   const selection = store.selection.join(',');
-  const lSig = `${store.tab}|${store.revision}|${selection}|${store.activePrefabId}|${store.activeMaterialId}|${store.tool}|${store.gridSize}|${store.snapToGrid}|${store.showGrid}|${store.prefabDraft.parts.length}|${materialIds().length}|${(store.map.objects ?? []).length}|${(store.map.prefabs ?? []).length}`;
+  const lSig = `${store.tab}|${store.revision}|${selection}|${store.activePrefabId}|${store.activeMaterialId}|${store.tool}|${store.gridSize}|${store.snapToGrid}|${store.showGrid}|${(store.prefabDraft.parts ?? []).length}|${materialIds().length}|${(store.map.objects ?? []).length}|${(store.map.prefabs ?? []).length}|${actionStore.revision}|${actionStore.activeId}|${actionStore.timeMs}`;
   if (lSig !== leftSig && !isEditingPanel(leftEl)) {
     leftSig = lSig;
     renderLeft();
   }
 
-  const rSig = `${store.tab}|${store.revision}|${selection}|${store.activeMaterialId}`;
+  const rSig = `${store.tab}|${store.revision}|${selection}|${store.activeMaterialId}|${actionStore.revision}|${actionStore.activeId}|${actionStore.timeMs}|${actionStore.selectedKeyframe}`;
   if (rSig !== rightSig && !isEditingPanel(rightEl)) {
     rightSig = rSig;
     renderRight();
@@ -226,7 +233,7 @@ function renderHeader(): void {
     h(
       'div',
       { class: 'ed-tabs' },
-      (['map', 'prefab', 'material'] as EditorTab[]).map((tab) =>
+      (['map', 'prefab', 'material', 'action'] as EditorTab[]).map((tab) =>
         h(
           'button',
           {
@@ -239,7 +246,7 @@ function renderHeader(): void {
               store.touch();
             },
           },
-          [tab === 'map' ? '地图' : tab === 'prefab' ? '预制件' : '材质'],
+          [tab === 'map' ? '地图' : tab === 'prefab' ? '预制件' : tab === 'material' ? '材质' : '动作'],
         ),
       ),
     ),
@@ -260,10 +267,21 @@ function renderHeader(): void {
         h('option', { value: '' }, ['打开已有地图…']),
         ...listMaps().map((m) => h('option', { value: m.name }, [m.name])),
       ]),
-      button('导入', () => openJsonModal('导入（粘贴 JSON）', '', 'import')),
-      button('导出', () => openJsonModal(`导出 ${store.exportFileName()}`, store.exportCurrent(), 'export')),
+      button('导入', () => {
+        if (store.tab === 'action') {
+          store.message = '动作第一版采用导出工作流，暂不支持导入';
+          store.touch();
+          return;
+        }
+        openJsonModal('导入（粘贴 JSON）', '', 'import');
+      }),
+      button('导出', () => openJsonModal(
+        store.tab === 'action' ? `导出 ${actionStore.exportFileName()}` : `导出 ${store.exportFileName()}`,
+        store.tab === 'action' ? actionStore.exportCurrent() : store.exportCurrent(),
+        'export',
+      )),
       button('复制', () => {
-        void navigator.clipboard.writeText(store.exportCurrent());
+        void navigator.clipboard.writeText(store.tab === 'action' ? actionStore.exportCurrent() : store.exportCurrent());
         statusTextEl.textContent = '已复制当前数据到剪贴板';
       }),
       button(errors > 0 ? `校验：${errors} 错误` : warns > 0 ? `校验：${warns} 警告` : '校验通过', () =>
@@ -314,6 +332,11 @@ function renderToast(): void {
 function renderLeft(): void {
   const store = editorStore;
   leftEl.replaceChildren();
+
+  if (store.tab === 'action') {
+    leftEl.append(actionLeftPanel());
+    return;
+  }
 
   if (store.tab === 'map') {
     leftEl.append(
@@ -370,24 +393,22 @@ function renderLeft(): void {
           ),
         ),
       ),
-      h('h3', { class: 'ed-h3' }, [`对象列表（${(store.map.objects ?? []).length}）`]),
-      h(
-        'div',
-        { class: 'ed-list ed-list-scroll' },
-        [...(store.map.objects ?? [])].reverse().map((o) =>
-          h(
-            'button',
-            {
-              class: `ed-list-row ${store.selection.includes(o.id ?? '') ? 'active' : ''}`,
-              onclick: () => store.select(o.id ? [o.id] : []),
-            },
-            [
-              h('span', { class: 'ed-list-main' }, [`${o.type} · ${o.material}`]),
-              h('span', { class: 'ed-list-sub' }, [o.id ?? '(无 id)']),
-            ],
-          ),
-        ),
+      h('h3', { class: 'ed-h3' }, ['武器投放（点击画布放置）']),
+      selectInput(
+        listWeaponIds().map((id) => ({ value: id, label: `${getWeapon(id)?.name ?? id} (${id})` })),
+        store.activeWeaponId ?? '',
+        (v) => {
+          store.activeWeaponId = v || null;
+          if (v) {
+            store.tool = 'weapon';
+            store.message = '已选择武器，点击画布投放';
+          }
+          store.touch();
+        },
+        '选择武器…',
       ),
+      h('h3', { class: 'ed-h3' }, [`对象列表（${(store.map.objects ?? []).length})`]),
+      buildObjectList(),
     );
     return;
   }
@@ -501,15 +522,175 @@ function renderLeft(): void {
   );
 }
 
+function actionLeftPanel(): HTMLElement {
+  const action = actionStore.current;
+  const range = h('input', {
+    class: 'ed-slider',
+    type: 'range',
+    min: '0',
+    max: String(action.durationMs),
+    step: '1',
+    value: String(actionStore.timeMs),
+  }) as HTMLInputElement;
+  range.addEventListener('input', () => actionStore.setTime(Number(range.value)));
+
+  return h('div', {}, [
+    h('h3', { class: 'ed-h3' }, ['动作库']),
+    h('div', { class: 'ed-list ed-list-scroll' }, actionStore.actions.map((item) =>
+      h('button', { class: `ed-list-row ${item.id === actionStore.activeId ? 'active' : ''}`, onclick: () => actionStore.select(item.id) }, [
+        h('span', { class: 'ed-list-main' }, [item.name]),
+        h('span', { class: 'ed-list-sub' }, [`${item.weapon === 'spear' ? '长矛' : '无武器'} · ${item.id}`]),
+      ]),
+    )),
+    h('div', { class: 'ed-row' }, [
+      button('+ 新动作', () => actionStore.createAction()),
+      button('删除动作', () => actionStore.deleteCurrent(), 'danger'),
+    ]),
+    h('h3', { class: 'ed-h3' }, ['动作属性']),
+    field('id', textInput(action.id, (v) => actionStore.updateMeta({ id: v.trim() || action.id }))),
+    field('名称', textInput(action.name, (v) => actionStore.updateMeta({ name: v }))),
+    field('类型', selectInput(
+      [
+        { value: 'none', label: '无武器' },
+        { value: 'spear', label: '长矛' },
+      ],
+      action.weapon,
+      (v) => actionStore.updateMeta({ weapon: v as 'none' | 'spear' }),
+    )),
+    field('时长（毫秒）', numberInput(action.durationMs, (v) => actionStore.updateMeta({ durationMs: v }), 10)),
+    h('label', { class: 'ed-check' }, [checkbox(action.loop, (v) => actionStore.updateMeta({ loop: v })), '循环播放']),
+    h('h3', { class: 'ed-h3' }, ['时间轴']),
+    h('div', { class: 'ed-row ed-row-between' }, [
+      h('span', { class: 'ed-help', style: 'margin:0' }, [`${actionStore.timeMs} / ${action.durationMs} ms`]),
+      button(actionStore.playing ? '暂停' : '播放', () => actionStore.togglePlaying(), 'primary'),
+    ]),
+    range,
+    h('div', { class: 'ed-row' }, [
+      button('添加/更新关键帧', () => actionStore.addOrUpdateKeyframe(), 'primary'),
+      button('删除当前帧', () => actionStore.deleteSelectedKeyframe(), 'danger'),
+    ]),
+    h('div', { class: 'ed-list ed-list-scroll' }, action.keyframes.map((frame, index) =>
+      h('button', {
+        class: `ed-list-row ${index === actionStore.selectedKeyframe ? 'active' : ''}`,
+        onclick: () => actionStore.selectKeyframe(index),
+      }, [
+        h('span', { class: 'ed-list-main' }, [`关键帧 ${index + 1}`]),
+        h('span', { class: 'ed-list-sub' }, [`${frame.timeMs} ms`]),
+      ]),
+    )),
+    h('p', { class: 'ed-help' }, [
+      '画布中拖动蓝色关节控制点：手腕/肘部使用手臂 IK，脚部使用腿部 IK，髋部和肩部调整身体重心。',
+      '拖动会自动在当前时间创建关键帧；动作数据通过顶部“导出”下载。',
+    ]),
+  ]);
+}
+
+function actionPoseField(label: string, pose: ActionPose, key: keyof ActionPose, step = 1): HTMLElement {
+  return field(label, numberInput(pose[key], (value) => actionStore.updateCurrentPose({ [key]: value }), step));
+}
+
+function actionRightPanel(): HTMLElement {
+  const action = actionStore.current;
+  const pose = actionStore.currentPose;
+  return h('div', {}, [
+    h('h3', { class: 'ed-h3' }, ['当前姿态']),
+    h('p', { class: 'ed-help' }, [`${action.name} · ${actionStore.timeMs} ms · 拖动控制点可直接编辑`]),
+    h('h3', { class: 'ed-h3' }, ['身体']),
+    h('div', { class: 'ed-grid2' }, [
+      actionPoseField('髋 X', pose, 'rootX'),
+      actionPoseField('髋 Y', pose, 'rootY'),
+      actionPoseField('躯干前倾', pose, 'torsoTilt'),
+      actionPoseField('躯干扭转', pose, 'torsoTwist'),
+      actionPoseField('头部倾角', pose, 'headTilt'),
+      actionPoseField('头部偏移', pose, 'headOffsetY'),
+    ]),
+    h('h3', { class: 'ed-h3' }, ['前臂 / 武器手']),
+    h('div', { class: 'ed-grid2' }, [
+      actionPoseField('肩角', pose, 'armFrontShoulder'),
+      actionPoseField('肘弯', pose, 'armFrontElbow'),
+    ]),
+    h('h3', { class: 'ed-h3' }, ['后臂 / 支撑手']),
+    h('div', { class: 'ed-grid2' }, [
+      actionPoseField('肩角', pose, 'armBackShoulder'),
+      actionPoseField('肘弯', pose, 'armBackElbow'),
+    ]),
+    h('h3', { class: 'ed-h3' }, ['脚部目标（相对髋部）']),
+    h('div', { class: 'ed-grid2' }, [
+      actionPoseField('左脚 X', pose, 'footLX'),
+      actionPoseField('左脚 Y', pose, 'footLY'),
+      actionPoseField('右脚 X', pose, 'footRX'),
+      actionPoseField('右脚 Y', pose, 'footRY'),
+    ]),
+    h('p', { class: 'ed-help' }, ['数值面板用于微调；骨骼长度固定，腿部会自动通过 IK 求解膝盖位置。']),
+  ]);
+}
+
 // ---------------- 右侧面板 ----------------
+/**
+ * 对象列表。
+ * - 重建时会保留滚动位置（否则拖动对象时列表会不停跳回顶部）
+ * - 选择变化时把选中项滚进可视区（需求：选中对象后列表要能定位到它）
+ */
+let objectListScrollTop = 0;
+let lastListSelectionKey = '';
+
+function buildObjectList(): HTMLElement {
+  const store = editorStore;
+  const objects = [...(store.map.objects ?? [])].reverse();
+  const list = h('div', { class: 'ed-list ed-list-scroll' });
+
+  for (const o of objects) {
+    const selected = !!o.id && store.selection.includes(o.id);
+    const row = h(
+      'button',
+      {
+        class: `ed-list-row ${selected ? 'active' : ''}`,
+        onclick: () => store.select(o.id ? [o.id] : []),
+      },
+      [
+        h('span', { class: 'ed-list-main' }, [`${o.type} · ${o.material}`]),
+        h('span', { class: 'ed-list-sub' }, [o.id ?? '(无 id)']),
+      ],
+    );
+    if (selected) row.dataset.selected = '1';
+    list.append(row);
+  }
+
+  list.scrollTop = objectListScrollTop;
+  list.addEventListener('scroll', () => {
+    objectListScrollTop = list.scrollTop;
+  });
+
+  const selectionKey = store.selection.join(',');
+  if (selectionKey !== lastListSelectionKey) {
+    lastListSelectionKey = selectionKey;
+    const activeRow = list.querySelector('[data-selected="1"]');
+    if (activeRow) {
+      // 在下一帧滚（此时列表已插入 DOM，才有正确的布局尺寸）
+      requestAnimationFrame(() => activeRow.scrollIntoView({ block: 'nearest' }));
+    }
+  }
+
+  return list;
+}
+
 function renderRight(): void {
   const store = editorStore;
   rightEl.replaceChildren();
 
+  if (store.tab === 'action') {
+    rightEl.append(actionRightPanel());
+    return;
+  }
+
   if (store.tab === 'map') {
+    const spawnIndex = store.selectedSpawnIndex();
+    const weaponIndex = store.selectedWeaponIndex();
     const obj = store.firstSelectedObject();
     const inst = store.firstSelectedInstance();
-    if (obj) rightEl.append(objectForm(obj));
+    if (spawnIndex !== null) rightEl.append(spawnForm(spawnIndex));
+    else if (weaponIndex !== null) rightEl.append(weaponSpawnForm(weaponIndex));
+    else if (obj) rightEl.append(objectForm(obj));
     else if (inst) rightEl.append(instanceForm());
     else rightEl.append(mapForm());
     rightEl.append(issuesPanel('校验', store.validateCurrent()));
@@ -548,7 +729,16 @@ function objectForm(obj: MapObject): HTMLElement {
 
   const rows: Child[] = [
     h('h3', { class: 'ed-h3' }, [`选中 ${multi ? `(${store.selection.length} 个)` : obj.type}`]),
-    h('p', { class: 'ed-help' }, [`id: ${obj.id ?? '(无)'}`]),
+    field('id（关节引用/定位都用它，可改）', textInput(obj.id ?? '', (v) => {
+      const res = store.renameSelectedId(v);
+      if (!res.ok) {
+        store.message = `改名失败：${res.reason ?? '未知原因'}`;
+        store.touch();
+      } else {
+        store.message = `id 已改为 ${v.trim()}`;
+        store.touch();
+      }
+    })),
     field('材质', selectInput(
       materialIds().map((id) => ({ value: id, label: `${MATERIALS[id].name} (${id})` })),
       obj.material,
@@ -640,8 +830,15 @@ function instanceForm(): HTMLElement {
   if (!inst) return h('div');
   return h('div', {}, [
     h('h3', { class: 'ed-h3' }, ['预制件实例']),
+    field('id（可改）', textInput(inst.id ?? '', (v) => {
+      const res = store.renameSelectedId(v);
+      if (!res.ok) {
+        store.message = `改名失败：${res.reason ?? '未知原因'}`;
+        store.touch();
+      }
+    })),
     h('p', { class: 'ed-help' }, [
-      `id: ${inst.id} · ref: ${inst.ref} · 形态: ${listPrefabs().find((p) => p.id === inst.ref)?.bodyMode === 'compound' ? '焊接' : '松件'}`,
+      `ref: ${inst.ref} · 形态: ${listPrefabs().find((p) => p.id === inst.ref)?.bodyMode === 'compound' ? '焊接' : '松件'}`,
     ]),
     h('div', { class: 'ed-grid2' }, [
       field('x（中心）', numberInput(inst.x, (v) => store.patchSelected({ x: v }))),
@@ -664,6 +861,47 @@ function instanceForm(): HTMLElement {
     h('div', { class: 'ed-row' }, [
       button('复制', () => store.duplicateSelected()),
       button('删除', () => store.deleteSelected(), 'danger'),
+    ]),
+  ]);
+}
+
+/** 出生点属性（选中画布上的出生点后显示，可直接拖动画布移动） */
+function spawnForm(index: number): HTMLElement {
+  const store = editorStore;
+  const sp = store.map.spawnPoints[index];
+  if (!sp) return h('div');
+  return h('div', {}, [
+    h('h3', { class: 'ed-h3' }, [`出生点 #${index + 1}`]),
+    h('p', { class: 'ed-help' }, ['画布上可直接拖动；也可在此精确定位。']),
+    h('div', { class: 'ed-grid2' }, [
+      field('x', numberInput(sp.x, (v) => store.updateSpawn(index, { x: v }))),
+      field('y', numberInput(sp.y, (v) => store.updateSpawn(index, { y: v }))),
+    ]),
+    h('div', { class: 'ed-row' }, [
+      button('删除该出生点', () => store.removeSpawn(index), 'danger'),
+    ]),
+  ]);
+}
+
+/** 武器投放点属性 */
+function weaponSpawnForm(index: number): HTMLElement {
+  const store = editorStore;
+  const w = store.weaponSpawns()[index];
+  if (!w) return h('div');
+  return h('div', {}, [
+    h('h3', { class: 'ed-h3' }, [`武器投放点 #${index + 1}`]),
+    h('p', { class: 'ed-help' }, ['开局时该武器直接摆在地上（不走随机空投）。画布上可拖动。']),
+    field('武器', selectInput(
+      listWeaponIds().map((id) => ({ value: id, label: `${getWeapon(id)?.name ?? id} (${id})` })),
+      w.type,
+      (v) => store.updateWeaponSpawn(index, { type: v }),
+    )),
+    h('div', { class: 'ed-grid2' }, [
+      field('x', numberInput(w.x, (v) => store.updateWeaponSpawn(index, { x: v }))),
+      field('y', numberInput(w.y, (v) => store.updateWeaponSpawn(index, { y: v }))),
+    ]),
+    h('div', { class: 'ed-row' }, [
+      button('删除该投放点', () => store.removeWeaponSpawn(index), 'danger'),
     ]),
   ]);
 }

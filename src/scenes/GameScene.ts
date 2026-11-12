@@ -218,6 +218,12 @@ export class GameScene extends Phaser.Scene {
     this.drops = new DropSystem(this, this.pickups, this.mapData);
     // 补给道具（医疗包/防弹衣）：地图固定点 + 维持数量
     this.itemDrops = new ItemDropSystem(this, this.pickups, this.mapData);
+    // 地图指定的武器：开局即摆在地上（不走随机空投）
+    for (const w of this.mapData.weapons ?? []) {
+      if (!this.pickups.spawn(w.type, w.x, w.y, { falling: false })) {
+        console.warn(`[GameScene] 未知武器 ${w.type}（地图 ${this.mapData.name}）`);
+      }
+    }
     this.fragments = new FragmentSystem(this);
     this.impactDamage = new ImpactDamageSystem(this, this.damageSystem, this.worldRegistry);
 

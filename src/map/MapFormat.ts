@@ -108,8 +108,15 @@ export interface DropZone {
   h: number;
 }
 
-/** 关卡内固定生成点（医疗包等，type 对应物品表 id） */
+/** 关卡内固定生成点（医疗包等，type 对应物品表 data/items.json 的 id） */
 export interface MapItemSpawn {
+  type: string;
+  x: number;
+  y: number;
+}
+
+/** 地图内指定的武器投放点（type 对应武器表 data/weapons.json 的 id），开局直接放在地上 */
+export interface MapWeaponSpawn {
   type: string;
   x: number;
   y: number;
@@ -128,6 +135,8 @@ export interface MapData {
   joints?: MapJoint[];
   /** 武器空投区域（预留：M4 掉落系统使用） */
   weaponDropZones?: DropZone[];
-  /** 场景内物品生成点（预留：医疗包等） */
+  /** 场景内物品生成点（医疗包/防弹衣等） */
   items?: MapItemSpawn[];
+  /** 场景内指定的武器生成点（开局即在地上，不走随机空投） */
+  weapons?: MapWeaponSpawn[];
 }

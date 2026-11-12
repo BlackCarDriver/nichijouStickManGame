@@ -9,6 +9,7 @@ import type {
   MapData,
   MapJoint,
   MapObject,
+  MapWeaponSpawn,
   PrefabInstance,
   SpawnPoint,
 } from '../map/MapFormat';
@@ -58,8 +59,17 @@ import {
   worldVertices,
 } from './polygonEdit';
 
-export type EditorTab = 'map' | 'prefab' | 'material';
-export type ToolKind = 'select' | 'rect' | 'circle' | 'polygon' | 'spawn' | 'prefab' | 'joint' | 'ruler';
+export type EditorTab = 'map' | 'prefab' | 'material' | 'action';
+export type ToolKind =
+  | 'select'
+  | 'rect'
+  | 'circle'
+  | 'polygon'
+  | 'spawn'
+  | 'prefab'
+  | 'weapon'
+  | 'joint'
+  | 'ruler';
 
 const STORAGE_KEY = 'stickman.editor.v1';
 const HISTORY_LIMIT = 80;
@@ -110,6 +120,8 @@ export class EditorStore {
   selection: string[] = [];
   /** 预制件调色板中待放置的预制件 */
   activePrefabId: string | null = null;
+  /** 当前选中的待投放武器 id（weapon 工具用） */
+  activeWeaponId: string | null = null;
   /** 材质 Tab 当前编辑的材质 */
   activeMaterialId = 'wood';
   /** 关节工具第一步选中的物体 id */
@@ -287,7 +299,40 @@ export class EditorStore {
 
   // ---------------- id 管理 ----------------
   private exists(id: string): boolean {
-    return !!(this.getObject(id) || this.getInstance(id));
+    if (this.getObject(id) || this.getInstance(id)) return true;
+    const spawn = /^spawn:(\d+)$/.exec(id);
+    if (spawn) return Number(spawn[1]) < (this.map.spawnPoints ?? []).length;
+    const weapon = /^weapon:(\d+)$/.exec(id);
+    if (weapon) return Number(weapon[1]) < (this.map.weapons ?? []).length;
+    return false;
+  }
+
+  /** 选中的出生点下标（选择里只有一个 spawn: 时） */
+  selectedSpawnIndex(): number | null {
+    if (this.selection.length !== 1) return null;
+    const m = /^spawn:(\d+)$/.exec(this.selection[0]);
+    return m ? Number(m[1]) : null;
+  }
+
+  /** 选中的武器投放点下标 */
+  selectedWeaponIndex(): number | null {
+    if (this.selection.length !== 1) return null;
+    const m = /^weapon:(\d+)$/.exec(this.selection[0]);
+    return m ? Number(m[1]) : null;
+  }
+
+  selectedSpawnIndices(): number[] {
+    return this.selection
+      .map((id) => /^spawn:(\d+)$/.exec(id))
+      .filter((m): m is RegExpExecArray => !!m)
+      .map((m) => Number(m[1]));
+  }
+
+  selectedWeaponIndices(): number[] {
+    return this.selection
+      .map((id) => /^weapon:(\d+)$/.exec(id))
+      .filter((m): m is RegExpExecArray => !!m)
+      .map((m) => Number(m[1]));
   }
 
   private nextId(prefix: string): string {
@@ -354,6 +399,16 @@ export class EditorStore {
       }
       const inst = this.getInstance(id);
       if (inst) boxes.push(instanceBounds(inst, this.prefabTable()[inst.ref]));
+      const spawn = /^spawn:(\d+)$/.exec(id);
+      if (spawn) {
+        const sp = (this.map.spawnPoints ?? [])[Number(spawn[1])];
+        if (sp) boxes.push({ minX: sp.x - 26, minY: sp.y - 26, maxX: sp.x + 26, maxY: sp.y + 26 });
+      }
+      const weapon = /^weapon:(\d+)$/.exec(id);
+      if (weapon) {
+        const w = (this.map.weapons ?? [])[Number(weapon[1])];
+        if (w) boxes.push({ minX: w.x - 22, minY: w.y - 22, maxX: w.x + 22, maxY: w.y + 22 });
+      }
     }
     return boxes.length ? unionBounds(boxes) : null;
   }
@@ -366,7 +421,18 @@ export class EditorStore {
   }
 
   /** 命中测试：从后往前（后画的在上） */
-  hitTest(p: Vec): { kind: 'object' | 'prefab'; id: string } | null {
+  hitTest(p: Vec): { kind: 'object' | 'prefab' | 'spawn' | 'weapon'; id: string } | null {
+    // 交互标记优先于几何体：出生点/武器点常摆在地面上，否则永远选不中
+    const spawns = this.map.spawnPoints ?? [];
+    for (let i = spawns.length - 1; i >= 0; i--) {
+      const sp = spawns[i];
+      if (Math.hypot(p.x - sp.x, p.y - sp.y) <= 26) return { kind: 'spawn', id: `spawn:${i}` };
+    }
+    const weapons = this.map.weapons ?? [];
+    for (let i = weapons.length - 1; i >= 0; i--) {
+      const w = weapons[i];
+      if (Math.hypot(p.x - w.x, p.y - w.y) <= 22) return { kind: 'weapon', id: `weapon:${i}` };
+    }
     const prefabs = this.map.prefabs ?? [];
     for (let i = prefabs.length - 1; i >= 0; i--) {
       const inst = prefabs[i];
@@ -384,6 +450,48 @@ export class EditorStore {
       }
     }
     return null;
+  }
+
+  /**
+   * 重命名当前选中的对象/实例的 id。
+   * 会同步修复引用它的关节（bodyA/bodyB），并校验唯一性与字符合法性。
+   * @returns { ok, reason }
+   */
+  renameSelectedId(rawId: string): { ok: boolean; reason?: string } {
+    if (this.selection.length !== 1) return { ok: false, reason: '只能单个改名' };
+    const oldId = this.selection[0];
+    const newId = rawId.trim();
+    if (oldId.startsWith('spawn:') || oldId.startsWith('weapon:')) {
+      return { ok: false, reason: '出生点/武器点没有 id' };
+    }
+    if (oldId.startsWith('part:')) return { ok: false, reason: '预制件部件没有 id' };
+    if (!newId) return { ok: false, reason: 'id 不能为空' };
+    if (!/^[A-Za-z0-9_\-]+$/.test(newId)) return { ok: false, reason: 'id 只能包含字母、数字、_ 和 -' };
+    if (newId === oldId) return { ok: true };
+    if (this.getIdOwner(newId)) return { ok: false, reason: `id "${newId}" 已被占用` };
+    if ((this.map.joints ?? []).some((j) => j.id === newId)) {
+      return { ok: false, reason: `id "${newId}" 与关节 id 冲突` };
+    }
+
+    const obj = this.getObject(oldId);
+    const inst = this.getInstance(oldId);
+    if (!obj && !inst) return { ok: false, reason: '没找到该对象' };
+    if (obj) obj.id = newId;
+    if (inst) inst.id = newId;
+
+    // 修复关节引用
+    for (const j of this.map.joints ?? []) {
+      if (j.bodyA === oldId) j.bodyA = newId;
+      if (j.bodyB === oldId) j.bodyB = newId;
+    }
+    this.selection = [newId];
+    this.commit();
+    return { ok: true };
+  }
+
+  /** 该 id 是否已被其它对象/实例占用 */
+  getIdOwner(id: string): MapObject | PrefabInstance | undefined {
+    return this.getObject(id) ?? this.getInstance(id);
   }
 
   // ---------------- 地图编辑 ----------------
@@ -416,6 +524,33 @@ export class EditorStore {
 
   removeSpawn(index: number): void {
     this.map.spawnPoints.splice(index, 1);
+    this.commit();
+  }
+
+  /** 地图武器生成点列表 */
+  weaponSpawns(): MapWeaponSpawn[] {
+    return this.map.weapons ?? [];
+  }
+
+  /** 投放一件武器（select=true 时选中它，便于立刻拖动/改类型） */
+  addWeaponSpawn(type: string, x: number, y: number, select = true): void {
+    if (!this.map.weapons) this.map.weapons = [];
+    this.map.weapons.push({ type, x, y });
+    if (select) this.selection = [`weapon:${this.map.weapons.length - 1}`];
+    this.commit();
+  }
+
+  updateWeaponSpawn(index: number, patch: Partial<MapWeaponSpawn>): void {
+    const w = (this.map.weapons ?? [])[index];
+    if (!w) return;
+    Object.assign(w, patch);
+    this.commit();
+  }
+
+  removeWeaponSpawn(index: number): void {
+    if (!this.map.weapons) return;
+    this.map.weapons.splice(index, 1);
+    this.selection = [];
     this.commit();
   }
 
@@ -481,20 +616,50 @@ export class EditorStore {
       inst.x += dx;
       inst.y += dy;
     }
+    for (const i of this.selectedSpawnIndices()) {
+      const sp = this.map.spawnPoints[i];
+      if (sp) {
+        sp.x += dx;
+        sp.y += dy;
+      }
+    }
+    for (const i of this.selectedWeaponIndices()) {
+      const w = (this.map.weapons ?? [])[i];
+      if (w) {
+        w.x += dx;
+        w.y += dy;
+      }
+    }
   }
 
   deleteSelected(): void {
     if (this.selection.length === 0) return;
-    const ids = new Set(this.selection);
-    this.map.objects = this.map.objects.filter((o) => !o.id || !ids.has(o.id));
-    this.map.prefabs = (this.map.prefabs ?? []).filter((p) => !p.id || !ids.has(p.id));
-    // 连带删除引用已删物体的关节
-    this.map.joints = (this.map.joints ?? []).filter(
-      (j) => !ids.has(j.bodyA) && (!j.bodyB || j.bodyB === 'world' || !ids.has(j.bodyB)),
-    );
+
+    // 1) 下标型选择（出生点 / 武器点）：删完后后面的下标会前移，所以统一清空选择
+    const spawnIdx = new Set(this.selectedSpawnIndices());
+    const weaponIdx = new Set(this.selectedWeaponIndices());
+    if (spawnIdx.size > 0) {
+      this.map.spawnPoints = this.map.spawnPoints.filter((_, i) => !spawnIdx.has(i));
+    }
+    if (weaponIdx.size > 0) {
+      this.map.weapons = (this.map.weapons ?? []).filter((_, i) => !weaponIdx.has(i));
+    }
+
+    // 2) id 型选择（物体 / 预制件实例）
+    const ids = new Set(this.selection.filter((id) => !/^(spawn|weapon|part):/.test(id)));
+    if (ids.size > 0) {
+      this.map.objects = this.map.objects.filter((o) => !o.id || !ids.has(o.id));
+      this.map.prefabs = (this.map.prefabs ?? []).filter((p) => !p.id || !ids.has(p.id));
+      // 连带删除引用已删物体的关节
+      this.map.joints = (this.map.joints ?? []).filter(
+        (j) => !ids.has(j.bodyA) && (!j.bodyB || j.bodyB === 'world' || !ids.has(j.bodyB)),
+      );
+    }
+
     this.selection = [];
     this.commit();
   }
+
 
   duplicateSelected(): void {
     const newIds: string[] = [];

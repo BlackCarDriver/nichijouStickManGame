@@ -27,6 +27,8 @@ export interface ValidateContext {
   prefabs: Record<string, PrefabData>;
   /** 可用道具 id（data/items.json）。提供时校验 map.items[].type */
   itemIds?: string[];
+  /** 可用武器 id（data/weapons.json）。提供时校验 map.weapons[].type */
+  weaponIds?: string[];
 }
 
 /** 单张地图的物理体数量超过该值时给出警告（Matter 性能考虑） */
@@ -248,6 +250,24 @@ export function validateMap(map: unknown, ctx: ValidateContext): Issue[] {
       });
     }
   }
+  if (m.weapons !== undefined) {
+    if (!Array.isArray(m.weapons)) {
+      issues.push(err('weapons', '必须是数组'));
+    } else {
+      m.weapons.forEach((it, i) => {
+        const o = it as Record<string, unknown>;
+        if (typeof o?.type !== 'string') issues.push(err(`weapons[${i}].type`, '缺少武器类型'));
+        else if (ctx.weaponIds && !ctx.weaponIds.includes(o.type)) {
+          issues.push(
+            err(`weapons[${i}].type`, `未知武器 "${o.type}"（可用：${ctx.weaponIds.join(', ')}）`),
+          );
+        }
+        if (!isFiniteNumber(o?.x) || !isFiniteNumber(o?.y)) {
+          issues.push(err(`weapons[${i}]`, '坐标必须是有限数字'));
+        }
+      });
+    }
+  }
   if (m.items !== undefined) {
     if (!Array.isArray(m.items)) {
       issues.push(err('items', '必须是数组'));
@@ -411,10 +431,11 @@ export function makeContext(
   materialIds: string[],
   prefabs: PrefabData[],
   itemIds?: string[],
+  weaponIds?: string[],
 ): ValidateContext {
   const table: Record<string, PrefabData> = {};
   for (const p of prefabs) table[p.id] = p;
-  return { materialIds, prefabs: table, itemIds };
+  return { materialIds, prefabs: table, itemIds, weaponIds };
 }
 
 /** 类型收窄辅助：把 unknown 当 MapData 使用（调用前应先 validateMap） */
