@@ -1219,15 +1219,58 @@ export class EditorStore {
   }
 
   /**
-   * **▶ 测试**要运行的地图（按当前 Tab 选场景）。
-   *   - 地图 Tab  → 当前地图草稿
-   *   - 预制件 Tab → 预制件工作台
-   *   - 材质 Tab  → 材质工作台（同材质的固定/动态对照）
+   * 材质 Tab 的「整体重刷」测试地图：把当前地图里**所有物体**的材质换成选中材质。
+   *
+   * 关键处理（否则地图会当场塌掉）：
+   *  1. **冻结静态性**：地面/墙之所以不动是因为材质 fixed:true。若直接换成木头（fixed:false），
+   *     地面会变成动态板块，整关崩塌。所以按"当前解析结果"把 fixed 显式写死到每个物体上。
+   *  2. **清掉对象级外观覆盖**（color / texture / textureMode）：否则它们会盖住新材质的
+   *     贴图和颜色，就看不出"把所有东西换成这个材质"的效果了。
    */
-  testMap(): MapData {
-    if (this.tab === 'prefab') return this.prefabRig();
-    if (this.tab === 'material') return this.materialRig();
-    return this.map;
+  materialTestMap(): MapData {
+    const mat = this.activeMaterialId;
+    const clone = JSON.parse(JSON.stringify(this.map)) as MapData;
+    for (const obj of clone.objects ?? []) {
+      const wasStatic = obj.fixed ?? MATERIALS[obj.material]?.fixed ?? false;
+      obj.material = mat;
+      obj.fixed = wasStatic;
+      delete obj.color;
+      delete obj.texture;
+      delete obj.textureMode;
+    }
+    return clone;
+  }
+
+  /** 材质 Tab 测试用的预制件表：所有部件材质一并换成选中材质 */
+  materialTestPrefabs(): Record<string, PrefabData> {
+    const mat = this.activeMaterialId;
+    const table = this.prefabTable();
+    const out: Record<string, PrefabData> = {};
+    for (const [id, prefab] of Object.entries(table)) {
+      const copy = JSON.parse(JSON.stringify(prefab)) as PrefabData;
+      for (const part of copy.parts ?? []) part.material = mat;
+      out[id] = copy;
+    }
+    return out;
+  }
+
+  /**
+   * **▶ 测试**要运行的场景（按当前 Tab）。
+   *   - 地图 Tab  → 当前地图草稿
+   *   - 材质 Tab  → 当前地图"整体重刷成选中材质"（用户预期：在真实关卡里看这个材质）
+   *   - 预制件 Tab → 预制件工作台
+   * @param useMaterialRig 材质 Tab 下改为跑"样品台"（固定/动态对照），用于单独试手感
+   */
+  testScene(useMaterialRig = false): { map: MapData; prefabs: Record<string, PrefabData> } {
+    if (this.tab === 'prefab') {
+      return { map: this.prefabRig(), prefabs: this.prefabTable() };
+    }
+    if (this.tab === 'material') {
+      return useMaterialRig
+        ? { map: this.materialRig(), prefabs: this.prefabTable() }
+        : { map: this.materialTestMap(), prefabs: this.materialTestPrefabs() };
+    }
+    return { map: this.map, prefabs: this.prefabTable() };
   }
 
   /** 预制件工作台：地面 + 预制件展开 */

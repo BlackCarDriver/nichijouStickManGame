@@ -1264,8 +1264,17 @@ function materialForm(): HTMLElement {
       mat.fixed
         ? '当前：固定 —— 用此材质新建的物体默认钉在原地，不会掉落/被推动（地图物体/预制件部件里仍可单独覆盖）。'
         : '当前：动态 —— 用此材质新建的物体默认会掉落、可被推动/踢飞。',
-      '测试场景里：左边两个是「固定」对照（悬空也不动），右边三个会从空中落下 —— 能掉下来就说明是动态的。',
-      '画布始终显示你正在编辑的那张地图（切换 Tab 不会换掉它）；点右上「▶ 测试」才进入材质工作台试手感。',
+      '画布始终显示你正在编辑的那张地图（切换 Tab 不会换掉它）。',
+    ]),
+    h('h3', { class: 'ed-h3' }, ['测试这个材质']),
+    h('p', { class: 'ed-help' }, [
+      '「▶ 测试」：把**当前地图的所有物体**（含预制件部件）材质换成这个材质，在真实关卡里看观感与破坏手感；',
+      '　　　　　　原有静态/动态形态会保留，所以地面和墙不会因为你换了材质而塌掉。',
+      '「样品台」：单独看这个材质在固定/动态样品上的表现（左边悬空不动、右边从空中落下）。',
+    ]),
+    h('div', { class: 'ed-row' }, [
+      button('▶ 测试（重刷整张地图）', () => startPlayTest(), 'primary'),
+      button('样品台测试', () => startPlayTest(true)),
     ]),
     h('div', { class: 'ed-grid2' }, [
       field('密度', numberInput(mat.density, (v) => upd({ density: Math.max(0.0001, v) }), 0.001)),
@@ -1577,7 +1586,7 @@ function showIssues(): void {
 }
 
 // ---------------- Play test ----------------
-function startPlayTest(): void {
+function startPlayTest(useMaterialRig = false): void {
   if (!game || testing) return;
   const store = editorStore;
   const errors = store.validateCurrent().filter((i) => i.level === 'error');
@@ -1589,15 +1598,17 @@ function startPlayTest(): void {
   testing = true;
   document.body.classList.add('testing');
   try {
-    // ▶ 测试 运行"当前 Tab 该测的场景"（testMap），与画布显示的内容（canvasMap）无关：
-    //   地图/动作 Tab → 当前地图草稿；预制件 Tab → 预制件工作台；材质 Tab → 材质工作台
-    const map = JSON.parse(JSON.stringify(store.testMap()));
+    // ▶ 测试 运行"当前 Tab 该测的场景"（testScene），与画布显示的内容（canvasMap）无关：
+    //   地图/动作 Tab → 当前地图草稿；材质 Tab → 当前地图整体重刷成选中材质；
+    //   预制件 Tab → 预制件工作台；材质 Tab + useMaterialRig → 材质样品台
+    const scene = store.testScene(useMaterialRig);
+    const map = JSON.parse(JSON.stringify(scene.map));
     game.scene.stop('GameScene');
     game.scene.stop('EditorScene');
     game.scene.start('GameScene', {
       map,
-      // 用编辑器内的预制件表（含未保存的焊接开关等改动）
-      prefabs: JSON.parse(JSON.stringify(store.prefabTable())),
+      // 用编辑器内的预制件表（含未保存的焊接开关等改动；材质测试时部件材质也一并替换）
+      prefabs: JSON.parse(JSON.stringify(scene.prefabs)),
       actions: JSON.parse(JSON.stringify(actionStore.actions)),
       onExit: () => stopPlayTest(),
     });
