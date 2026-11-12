@@ -11,6 +11,15 @@ interface Spark {
   color: number;
 }
 
+interface Ring {
+  x: number;
+  y: number;
+  radius: number;
+  life: number;
+  maxLife: number;
+  color: number;
+}
+
 interface Beam {
   x1: number;
   y1: number;
@@ -34,9 +43,11 @@ export class FxSystem {
   private readonly g: Phaser.GameObjects.Graphics;
   private readonly sparks: Spark[] = [];
   private readonly beams: Beam[] = [];
+  private readonly rings: Ring[] = [];
   /** 火花池上限（超出后复用最老的） */
   private static readonly MAX_SPARKS = 240;
   private static readonly MAX_BEAMS = 32;
+  private static readonly MAX_RINGS = 8;
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -108,6 +119,12 @@ export class FxSystem {
     });
   }
 
+  /** 爆炸扩散环：一个迅速扩张并淡出的圆环（读作"冲击波"） */
+  ring(x: number, y: number, radius: number, color = 0xffa94d, lifeMs = 260): void {
+    if (this.rings.length >= FxSystem.MAX_RINGS) this.rings.shift();
+    this.rings.push({ x, y, radius, life: lifeMs, maxLife: lifeMs, color });
+  }
+
   /** 受击闪白：在物体 AABB 上叠一个白色矩形，短暂淡出 */
   flashBounds(bounds: MatterJS.IBound | undefined, color = 0xffffff): void {
     if (!bounds) return;
@@ -173,11 +190,29 @@ export class FxSystem {
       this.g.lineStyle(Math.max(1, b.width * alpha), b.color, alpha);
       this.g.lineBetween(b.x1, b.y1, b.x2, b.y2);
     }
+
+    // 爆炸扩散环
+    for (let i = this.rings.length - 1; i >= 0; i--) {
+      const r = this.rings[i];
+      r.life -= deltaMs;
+      if (r.life <= 0) {
+        this.rings.splice(i, 1);
+        continue;
+      }
+      const t = 1 - r.life / r.maxLife; // 0 → 1
+      const alpha = (1 - t) * 0.85;
+      const rr = r.radius * (0.35 + 0.65 * t);
+      this.g.lineStyle(Math.max(1, 6 * (1 - t)), r.color, alpha);
+      this.g.strokeCircle(r.x, r.y, rr);
+      this.g.lineStyle(1.5, 0xffffff, alpha * 0.6);
+      this.g.strokeCircle(r.x, r.y, rr * 0.82);
+    }
   }
 
   destroy(): void {
     this.g.destroy();
     this.sparks.length = 0;
     this.beams.length = 0;
+    this.rings.length = 0;
   }
 }

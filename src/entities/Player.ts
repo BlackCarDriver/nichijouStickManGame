@@ -84,8 +84,12 @@ export class Player extends Entity {
   readonly body: MatterJS.BodyType;
   readonly color: number;
 
-  /** 面向（1=右 -1=左）；镜头 look-ahead 使用 */
+  /** 面向（1=右 -1=左）。**优先跟随瞄准（鼠标）**，无瞄准时跟随移动 */
   facing: 1 | -1 = 1;
+  /** 本帧移动方向（-1/0/1），用于判断"倒着走" */
+  moveDir = 0;
+  /** 是否在倒着走（面向与移动方向相反）→ 倒走动画 */
+  backward = false;
 
   // ---- 生命值 ----
   readonly health = new Health({ maxHp: PLAYER_CONFIG.maxHp });
@@ -105,6 +109,11 @@ export class Player extends Entity {
    * 武器从这里画、子弹从这里出，保证"枪口 = 子弹起点"。
    */
   private handLocal = { x: 0, y: StickmanRenderer.SHOULDER_Y };
+
+  // ---- 攻击动作（刺击/踢）----
+  private attackKind: 'stab' | 'kick' | null = null;
+  private attackTimer = 0;
+  private attackDuration = 1;
 
   private static readonly HIT_INVULN_MS = 180;
 
@@ -320,10 +329,26 @@ export class Player extends Entity {
   //  瞄准 / 枪口
   // ==========================================================
 
-  /** 设置瞄准角度（弧度，世界方向） */
   /** 当前瞄准角度（弧度） */
   get aim(): number {
     return this.aimAngle;
+  }
+
+  /** 触发一次攻击动作（刺击/踢），供武器系统调用 */
+  setAttack(kind: 'stab' | 'kick', durationMs: number): void {
+    this.attackKind = kind;
+    this.attackTimer = durationMs;
+    this.attackDuration = Math.max(1, durationMs);
+  }
+
+  /** 当前攻击类型（无攻击时为 null） */
+  get attack(): 'stab' | 'kick' | null {
+    return this.attackTimer > 0 ? this.attackKind : null;
+  }
+
+  /** 攻击动作进度 0→1（0 = 未开始/已结束） */
+  get attackProgress(): number {
+    return this.attackTimer > 0 ? 1 - this.attackTimer / this.attackDuration : 0;
   }
 
   /** 肩部位置（世界坐标）：瞄准角计算与枪口起点基准 */
@@ -449,11 +474,17 @@ export class Player extends Entity {
       this.container.setVelocityY(0);
     }
 
-    if (cmd.moveX !== 0) {
+    // ===== 朝向：优先跟随瞄准（鼠标），否则跟随移动 =====
+    if (cmd.aimAngle !== null) {
+      this.facing = Math.cos(cmd.aimAngle) >= 0 ? 1 : -1;
+    } else if (cmd.moveX !== 0) {
       this.facing = cmd.moveX > 0 ? 1 : -1;
     }
+    this.moveDir = cmd.moveX;
+    // 倒着走：面向与移动方向相反
+    this.backward = cmd.moveX !== 0 && Math.sign(cmd.moveX) !== this.facing;
 
-    // 瞄准：明确角度优先（鼠标玩家）；null → 跟随身体朝向（无鼠标玩家）
+    // 瞄准角：明确角度优先；null → 跟随朝向
     this.aimAngle = cmd.aimAngle ?? (this.facing > 0 ? 0 : Math.PI);
 
     this.updatePose(deltaMs, wasGrounded);
@@ -609,6 +640,9 @@ export class Player extends Entity {
       crouching: this.crouching,
       // 持枪时前臂指向瞄准方向（手部位置由渲染器回传）
       aim: this.heldWeapon && !this.health.isDead ? this.aimAngle : null,
+      backward: this.backward,
+      attackKind: this.attack,
+      attackProgress: this.attackProgress,
     });
 
     // 手部位置：渲染器在瞄准时输出；空手时用肩根近似
@@ -621,11 +655,18 @@ export class Player extends Entity {
     if (this.heldWeapon && !this.health.isDead) {
       const visual = getWeapon(this.heldWeapon.id)?.visual;
       if (visual) {
+        // 刺击时武器沿瞄准方向前送（近战戳得远，枪械只有轻微后坐）
+        const held = this.heldWeapon;
+        const isMelee = held ? getWeapon(held.id)?.attackMode === 'melee' : false;
+        const thrust = Math.sin(this.attackProgress * Math.PI) * (isMelee ? 16 : 4);
         drawHeldWeapon(this.graphics, {
           visual,
           facing: this.facing,
           aim: this.aimAngle,
-          hand: this.handLocal,
+          hand: {
+            x: this.handLocal.x + this.facing * Math.cos(this.aimAngle) * thrust,
+            y: this.handLocal.y + Math.sin(this.aimAngle) * thrust,
+          },
         });
       }
     }

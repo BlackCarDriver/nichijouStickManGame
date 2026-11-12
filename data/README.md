@@ -203,6 +203,7 @@ npm run validate
     "pistol": {
       "name": "手枪",
       "attackMode": "shoot",          // shoot=逻辑弹道子弹 | beam=瞬时光束 | melee=刺击 | throw=投掷
+      "automatic": false,               // true = 长按连射（AK47）；false = 点一次打一发
       "fireRate": 4,                   // 发/秒
       "damage": 14,                    // 单次命中伤害
       "knockback": 4.5,                // 命中玩家的击退强度
@@ -212,6 +213,7 @@ npm run validate
       "bullet": {
         "kind": "dot",                 // 外观：dot | streak | rocket | grenade | thrown
         "speed": 1600,                 // **弹速 px/秒 —— 决定"子弹飞行时间"**
+        "gravity": 520,                // **重力 px/秒² —— 决定抛物线下坠**（越小越平直）
         "range": 1500,                 // 最大飞行距离
         "size": 3,
         "color": "#ffe08a",
@@ -219,7 +221,9 @@ npm run validate
         "maxBounces": 3,               // 最多反弹次数（材质需 bulletBounce=true 才反弹）
         "bounceDamageMul": 0.7,        // 每次反弹后伤害倍率
         "pierceDamageMul": 0.6,        // 每次穿透后伤害倍率
-        "piercePlayers": false         // 是否穿透玩家（激光类）
+        "piercePlayers": false,        // 是否穿透玩家（激光类）
+        "bounceAny": false,            // true = 对任意材质都弹跳（手榴弹落地）
+        "bounceRestitution": 1         // 反弹速度保留系数（0.45 = 快速衰减）
       },
       "visual": { "style": "pistol", "length": 22, "thickness": 5, "color": "#2b2b36" }
     }
@@ -240,6 +244,37 @@ npm run validate
   改长度不用改代码，子弹起点会自动跟着走。
 - `attackMode` 当前实现状态：`shoot` / `beam` 已可用；`melee` / `throw` 待 W3/W4。
 - 火箭炮的 `explosion` 字段已预留，范围伤害在 W4 接入（当前只有直击伤害）。
+
+### 爆炸（`explosion`）
+
+```json
+"explosion": { "radius": 150, "damage": 60, "selfDamage": true, "knockback": 14 }
+```
+
+- `radius`：范围半径，边缘伤害线性衰减到 0
+- `selfDamage`：**是否炸到投掷者自己**（火箭/手榴弹都是 true）
+- 冲量按 `mass` 归一 → 纸箱和金属球获得相近的速度变化，不会出现"纸箱飞天/金属不动"
+
+### 投掷（`throw`）
+
+```json
+"throw": { "speed": 640, "gravity": 1100, "range": 900, "fuseMs": 1500,
+           "bounceAny": true, "bounceRestitution": 0.45 }
+```
+
+- 有 `fuseMs` → 引信弹：**撞到任何东西只弹开，不引爆**，到期才爆炸（手榴弹）
+- 有 `stickMs` → 投掷物插在目标上停留 N 毫秒后消失（匕首/长矛）
+- `damage` 可覆盖主伤害（投掷伤害与刺击伤害不同）
+- 近战武器投掷后**脱手**（武器不再回到手上）
+
+### 动作与输入对应
+
+| 输入 | 行为 |
+|------|------|
+| 主攻击（P1 左键 / P2 空格） | 开火 / 刺击 / 投掷手榴弹；全自动武器长按连射 |
+| 副攻击（P1 右键 / P2 Shift、E） | 优先"替换地上武器"；否则踢（空手/枪械）或投掷（持匕首长矛） |
+| 数字键 1~5 | 切换当前操作玩家的武器（手枪/AK47/激光/火箭炮/空手） |
+| 空格（P2 空格是攻击，不是跳） | P2 跳跃用 ↑ |
 
 ### 武器外形风格（`visual.style`）
 

@@ -32,6 +32,8 @@ export interface BulletConfig {
   kind: BulletKind;
   /** 飞行速度（px/秒）—— 不同武器速度不同，直接决定"子弹飞行时间" */
   speed: number;
+  /** 重力（px/秒²）：>0 时子弹走抛物线（所有射击武器都有，只是大小不同） */
+  gravity: number;
   /** 最大飞行距离（px） */
   range: number;
   /** 弹头大小（px） */
@@ -48,6 +50,10 @@ export interface BulletConfig {
   pierceDamageMul: number;
   /** 是否穿透玩家（激光类）；默认 false = 命中即停 */
   piercePlayers: boolean;
+  /** 是否对任意材质反弹（手榴弹落地会弹跳） */
+  bounceAny?: boolean;
+  /** 反弹速度保留系数（0.45 = 弹跳衰减，1 = 完全弹性） */
+  bounceRestitution?: number;
 }
 
 export interface BeamConfig {
@@ -68,17 +74,29 @@ export interface MeleeConfig {
 export interface ThrowConfig {
   speed: number;
   range: number;
-  /** 重力系数（0 = 不受重力） */
+  /** 重力（px/秒²），抛物线强度 */
   gravity?: number;
-  /** 手榴弹引信时间（ms） */
+  /** 引信时间（ms）：到期自爆（手榴弹） */
   fuseMs?: number;
-  /** 投掷物插在目标上的停留时间（ms） */
+  /** 投掷物插在目标上的停留时间（ms）—— 匕首/长矛 */
   stickMs?: number;
+  /** 投掷伤害（不填则用 weapon.damage） */
+  damage?: number;
+  /** 对任意材质反弹（手榴弹落地弹跳） */
+  bounceAny?: boolean;
+  /** 反弹速度保留系数 */
+  bounceRestitution?: number;
 }
 
 export interface ExplosionConfig {
+  /** 爆炸半径（px） */
   radius: number;
+  /** 爆炸中心伤害（边缘按距离衰减到 0） */
+  damage: number;
+  /** 是否伤害投掷者自己 */
   selfDamage: boolean;
+  /** 击退强度 */
+  knockback: number;
 }
 
 export interface WeaponVisual {
@@ -92,6 +110,8 @@ export interface WeaponVisual {
 export interface WeaponJson {
   name: string;
   attackMode: AttackMode;
+  /** 是否全自动（长按连射） */
+  automatic: boolean;
   /** 射速（发/秒） */
   fireRate: number;
   /** 单次命中伤害 */

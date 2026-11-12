@@ -37,6 +37,12 @@ export interface StickmanDrawOptions {
   groundYR?: number;
   /** 是否蹲下 */
   crouching?: boolean;
+  /** 是否倒着走（面向与移动方向相反 → 步态反向 + 身体后仰） */
+  backward?: boolean;
+  /** 当前攻击动作类型 */
+  attackKind?: 'stab' | 'kick' | null;
+  /** 攻击动作进度 0→1 */
+  attackProgress?: number;
   /**
    * 瞄准角（世界弧度）。非空时"前臂"改为指向瞄准方向（持枪姿势），
    * 并由 StickmanRenderer.lastAimHand 输出手部位置供武器渲染/枪口计算使用。
@@ -98,6 +104,12 @@ export class StickmanRenderer {
     g.clear();
     this.lastAimHand = null;
     const speedPxPerSec = Math.abs(o.velocityX) * 60;
+
+    // 踢腿动作优先（短暂覆盖行走/站立姿势）
+    if (o.attackKind === 'kick' && (o.attackProgress ?? 0) > 0) {
+      this.drawKick(g, o);
+      return;
+    }
 
     switch (o.pose) {
       case 'walk':
@@ -205,6 +217,39 @@ export class StickmanRenderer {
     this.drawArmFK(g, o, shoulder, -1, -10 - sway + lagSway, 0.32);
   }
 
+  // ---------------- 踢腿 ----------------
+
+  /**
+   * 踢腿：支撑腿站稳，前腿快速向前上方蹬出（前 45% 时间伸出，后 55% 收回），
+   * 躯干后仰保持平衡（contrapposto），手臂张开。
+   */
+  private static drawKick(g: Phaser.GameObjects.Graphics, o: StickmanDrawOptions): void {
+    const p = Math.min(1, Math.max(0, o.attackProgress ?? 0));
+    // 伸出曲线：0→1 快速，然后收回
+    const extend = p < 0.45 ? p / 0.45 : 1 - (p - 0.45) / 0.55;
+    const eased = Math.sin(Math.min(1, extend) * Math.PI * 0.5);
+
+    const hip: Vec2 = { x: -2 * eased, y: this.HIP_Y };
+    const gyL = this.gyL(o);
+    const gyR = this.gyR(o);
+
+    // 支撑腿（后）
+    this.drawLegIK(g, o.color, hip, { x: -9 - 3 * eased, y: gyL });
+    // 踢出的腿（前）：向前上方
+    this.drawLegIK(g, o.color, hip, {
+      x: 26 * eased + 6,
+      y: gyR - 46 * eased,
+    });
+
+    // 躯干后仰
+    const shoulder = this.drawTorso(g, o.color, hip, -6 * eased, -3 * eased);
+    this.drawHead(g, o.color, shoulder, -6 * eased, 0);
+
+    // 手臂：张开保持平衡（瞄准时仍指向准星）
+    this.drawArmFK(g, o, shoulder, 1, 55 + 20 * eased, 18);
+    this.drawArmFK(g, o, shoulder, -1, -35 - 25 * eased, 24);
+  }
+
   // ---------------- 行走 ----------------
 
   /**
@@ -218,9 +263,13 @@ export class StickmanRenderer {
     const speed = Math.max(70, speedPxPerSec);
     const squat = this.landImpactSquat(o);
     const T = WALK.T; // 固定步频（恢复之前的手感）
+    // 倒着走：步态在时间上反向（脚往后迈），躯干改为后仰
+    const bw = o.backward === true;
+    const t = bw ? -o.gaitTime : o.gaitTime;
+    const leanSign = bw ? -1 : 1;
 
     // 髋部起伏（双步节奏）+ 行走时骨盆略降（让步幅可达，也符合人走路姿态）
-    const bounce = -WALK.bounce * Math.abs(Math.sin(2 * Math.PI * (o.gaitTime / T)));
+    const bounce = -WALK.bounce * Math.abs(Math.sin(2 * Math.PI * (t / T)));
     const hipY = this.HIP_Y + this.WALK_HIP_DROP + bounce + squat;
 
     // 可达横向步幅：由髋到地面高度与腿长决定
@@ -231,14 +280,14 @@ export class StickmanRenderer {
     const strideScale = Math.min(1, reachLimit / Math.max(1, relAmp / 2));
 
     // 步态：左右腿相差半周期
-    const fR = gaitFoot(o.gaitTime, 0, T, WALK.duty, speed, WALK.stepHeight);
-    const fL = gaitFoot(o.gaitTime, 0.5, T, WALK.duty, speed, WALK.stepHeight);
+    const fR = gaitFoot(t, 0, T, WALK.duty, speed, WALK.stepHeight);
+    const fL = gaitFoot(t, 0.5, T, WALK.duty, speed, WALK.stepHeight);
 
     const gyL = this.gyL(o) + squat;
     const gyR = this.gyR(o) + squat;
 
     // 重心左右转移（幅度小，避免“拖行”感）
-    const weightShift = Math.sin(2 * Math.PI * (o.gaitTime / T)) * 1.1;
+    const weightShift = Math.sin(2 * Math.PI * (t / T)) * 1.1;
     const hip: Vec2 = { x: weightShift, y: hipY };
 
     // 腿：步幅按可达范围缩放；左右脚各用各自的地面高度（斜面贴合）
@@ -247,18 +296,18 @@ export class StickmanRenderer {
 
     // 躯干：前倾（速度相关）+ 髋肩反向旋转（contrapposto）
     const leanT = Math.min(1, Math.abs(speedPxPerSec) / 350);
-    const phase = 2 * Math.PI * (o.gaitTime / T);
+    const phase = 2 * Math.PI * (t / T);
     const pelvisRot = Math.sin(phase) * 3.1;
     const shoulderRot = -Math.sin(phase) * 4.2;
-    const shoulder = this.drawTorso(g, o.color, hip, leanT * 5.6, pelvisRot + shoulderRot);
+    const shoulder = this.drawTorso(g, o.color, hip, leanT * 5.6 * leanSign, pelvisRot + shoulderRot);
 
     // 头：滞后于躯干（overlap）
-    const headBob = Math.sin(2 * Math.PI * ((o.gaitTime - this.FOLLOW_LAG) / T)) * 1.6;
-    this.drawHead(g, o.color, shoulder, leanT * 5.6, headBob);
+    const headBob = Math.sin(2 * Math.PI * ((t - this.FOLLOW_LAG) / T)) * 1.6;
+    this.drawHead(g, o.color, shoulder, leanT * 5.6 * leanSign, headBob);
 
     // 手臂：相位**滞后**腿（follow-through），摆幅随速度（不宜过大，否则显得腿没动）
     const armAmp = 17 + leanT * 8;
-    const armPhase = 2 * Math.PI * ((o.gaitTime - this.FOLLOW_LAG) / T);
+    const armPhase = 2 * Math.PI * ((t - this.FOLLOW_LAG) / T);
     const swingR = armAmp * Math.sin(armPhase);
     const swingL = -armAmp * Math.sin(armPhase);
     const elbowBase = 12 + leanT * 6;

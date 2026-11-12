@@ -14,8 +14,10 @@ export interface InputCommand {
   jumpHeld: boolean;
   /** 蹲下（P1: S / P2: 下方向键） */
   crouch: boolean;
-  /** 攻击（P1 鼠标左键 / P2 空格）—— M0 预留 */
+  /** 攻击：本帧刚按下（单发武器 / 近战用） */
   attack: boolean;
+  /** 攻击键是否按住（全自动武器连射用，如 AK47） */
+  attackHeld: boolean;
   /** 踢（P1 鼠标右键 / P2 Shift）—— M2 实现 */
   kick: boolean;
   /** 替换武器（P2 E；P1 右键上下文）—— M4 实现 */
@@ -34,6 +36,7 @@ export function emptyInput(): InputCommand {
     jumpHeld: false,
     crouch: false,
     attack: false,
+    attackHeld: false,
     kick: false,
     swap: false,
     aimAngle: null,

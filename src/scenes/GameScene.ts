@@ -13,9 +13,13 @@ import { MATERIALS } from '../config/materials';
 import { preloadMaterialTextures } from '../map/TextureLoader';
 import { WorldRegistry } from '../world/WorldRegistry';
 import { DestructionSystem } from '../world/DestructionSystem';
+import { PickupSystem } from '../world/PickupSystem';
+import { DropSystem } from '../world/DropSystem';
+import { FragmentSystem } from '../world/FragmentSystem';
 import { DamageSystem } from '../combat/DamageSystem';
 import { ProjectileSystem } from '../combat/ProjectileSystem';
 import { WeaponSystem } from '../combat/WeaponSystem';
+import { ExplosionSystem } from '../combat/ExplosionSystem';
 import { FxSystem } from '../fx/FxSystem';
 import { Hud } from '../ui/Hud';
 
@@ -37,63 +41,56 @@ export interface GameSceneData {
 
 /**
  * 主游戏场景。
- * - 构建竞技场（物理 + 渲染）
- * - 创建两个本地玩家（单机双人，为联机铺路的输入抽象已就绪）
- * - 镜头通过 CameraRig 平滑跟随"最后有输入的玩家"
+ *
+ * 系统接线（单向依赖，便于独立演进）：
+ *   FxSystem → DestructionSystem → DamageSystem
+ *   DamageSystem + WorldRegistry + ExplosionSystem → ProjectileSystem → WeaponSystem
+ *   PickupSystem ← DropSystem（天降武器） / WeaponSystem（弹匣打空掉落）
+ *   FragmentSystem ← object-destroyed 事件（破坏碎片）
  */
 export class GameScene extends Phaser.Scene {
   private inputManager!: InputManager;
   private players: Player[] = [];
-  /** 镜头跟随目标（最后活跃输入的玩家） */
   private cameraTarget: Player | null = null;
-  /** 镜头刚体：平滑跟随 + 预判 + 边界 clamp（camera-systems 技能） */
   private cameraRig!: CameraRig;
-  /** 游戏手感：屏幕震动（game-feel 技能） */
   private gameFeel!: GameFeel;
-  /** 地图物体运行时列表（单向平台处理/后续破坏系统使用） */
   private mapObjects: MapObjectRuntime[] = [];
-  /** 单向平台 body 缓存（每帧判断穿越用） */
   private oneWayBodies: MatterJS.BodyType[] = [];
-  /** 当前地图数据 */
   private mapData!: MapData;
-  /** 预制件表（编辑器测试时含草稿） */
   private prefabTable!: Record<string, PrefabData>;
-  /** 外部退出回调（编辑器 Play test → Esc 返回） */
   private onExit?: () => void;
 
   // ---- 伤害 / 破坏 / 表现 ----
-  /** 物理体 → 地图物体索引（射线命中反查用） */
   private worldRegistry!: WorldRegistry;
   private destruction!: DestructionSystem;
   private damageSystem!: DamageSystem;
+  private explosion!: ExplosionSystem;
   private fx!: FxSystem;
   private hud!: Hud;
-  /** body.id → 玩家（射线命中反查用） */
   private readonly bodyToPlayer = new Map<number, Player>();
-  /** 谁持有鼠标（瞄准归属）：0=P1 1=P2 */
   private aimOwner: 0 | 1 = 0;
-  /** 武器系统（装备/开火/弹药耐久） */
+
+  // ---- 武器 / 掉落 / 碎片 ----
   private weaponSystem!: WeaponSystem;
-  /** 逻辑弹道子弹系统 */
   private projectileSystem!: ProjectileSystem;
+  private pickups!: PickupSystem;
+  private drops!: DropSystem;
+  private fragments!: FragmentSystem;
 
   constructor() {
     super('GameScene');
   }
 
-  /** 每次 start 都会调用：地图可由外部传入（编辑器测试），否则用默认地图 */
   init(data: GameSceneData = {}): void {
     this.mapData = data.map ?? getDefaultMap();
     this.prefabTable = data.prefabs ?? getPrefabTable();
     this.onExit = data.onExit;
-    // 场景可能被重复 start，清空上一轮的引用
     this.players = [];
     this.mapObjects = [];
     this.oneWayBodies = [];
     this.bodyToPlayer.clear();
   }
 
-  /** 预加载材质贴图（纹理跨场景共享，因此每个场景启动时排一次队即可） */
   preload(): void {
     preloadMaterialTextures(
       this,
@@ -109,19 +106,34 @@ export class GameScene extends Phaser.Scene {
     const spawn = this.mapData.spawnPoints;
     this.players = spawn.map((p, i) => new Player(this, p.x, p.y, PLAYER_COLORS[i]));
     this.cameraTarget = this.players[0];
+    for (const player of this.players) {
+      this.bodyToPlayer.set(player.body.id, player);
+    }
 
-    // ---- 伤害 / 破坏 / 表现 接线 ----
+    // ---- 表现层 ----
+    this.fx = new FxSystem(this);
+
+    // ---- 破坏 / 伤害 ----
     this.worldRegistry = new WorldRegistry();
     this.worldRegistry.rebuild(this.mapObjects);
-    this.fx = new FxSystem(this);
     this.destruction = new DestructionSystem(this, this.worldRegistry, this.fx);
     this.damageSystem = new DamageSystem(this.fx, this.destruction);
+    this.explosion = new ExplosionSystem(
+      this,
+      this.damageSystem,
+      this.worldRegistry,
+      this.bodyToPlayer,
+      this.fx,
+    );
+
+    // ---- 武器 / 弹道 ----
     this.projectileSystem = new ProjectileSystem(
       this,
       this.damageSystem,
       this.worldRegistry,
       this.bodyToPlayer,
       this.fx,
+      (req) => this.explosion.explode(req),
     );
     this.weaponSystem = new WeaponSystem(
       this,
@@ -131,33 +143,71 @@ export class GameScene extends Phaser.Scene {
       this.bodyToPlayer,
       this.fx,
     );
+
+    // ---- 掉落 / 碎片 ----
+    this.pickups = new PickupSystem(this, this.bodyToPlayer, this.fx);
+    this.drops = new DropSystem(this, this.pickups, this.mapData);
+    this.fragments = new FragmentSystem(this);
+
     this.hud = new Hud(this);
     this.hud.bind(this.players);
     for (const player of this.players) {
-      this.bodyToPlayer.set(player.body.id, player);
       this.weaponSystem.equip(player, STARTING_WEAPON);
     }
 
     const cam = this.cameras.main;
     cam.setBackgroundColor('#1a1a2e');
     cam.setBounds(0, 0, this.mapData.width, this.mapData.height);
-
     this.cameraRig = new CameraRig(cam, this.mapData.width, this.mapData.height, CAMERA_ZOOM);
     this.gameFeel = new GameFeel();
 
-    // 受击反馈：屏幕震动
-    const onPlayerHit = (): void => this.gameFeel.addTrauma(0.35);
-    this.events.on('player-hit', onPlayerHit);
+    this.bindEvents();
+  }
 
-    // 场景重启（编辑器 Play test 反复进入）时必须摘掉监听、销毁 HUD，否则会累积泄漏
+  /** 事件接线（场景重启时必须解除，避免重复触发/泄漏） */
+  private bindEvents(): void {
+    const onPlayerHit = (): void => this.gameFeel.addTrauma(0.35);
+    const onExplosion = (_x: number, _y: number, radius: number): void => {
+      this.gameFeel.addTrauma(Math.min(0.85, 0.35 + radius / 400));
+    };
+    // 物体被破坏 → 炸出碎片
+    const onObjectDestroyed = (runtime: MapObjectRuntime, center: { x: number; y: number }): void => {
+      const colorHex = MATERIALS[runtime.material]?.colorHex ?? '#ffffff';
+      const pieces = runtime.material === 'cardboard' ? 4 : 6;
+      this.fragments.burst(center.x, center.y, colorHex, pieces);
+    };
+    // 弹匣打空 → 武器实体化掉在地上（可被任何人再捡起）
+    const onWeaponLost = (
+      player: Player,
+      weaponId: string,
+      reason: 'empty' | 'broken' | 'thrown',
+      snapshot?: { ammo: number; durability: number },
+    ): void => {
+      if (reason !== 'empty' || !snapshot) return;
+      this.pickups.spawn(weaponId, player.container.x, player.container.y + 20, {
+        ammo: snapshot.ammo,
+        durability: Math.max(1, snapshot.durability),
+        falling: false,
+      });
+    };
+
+    this.events.on('player-hit', onPlayerHit);
+    this.events.on('explosion', onExplosion);
+    this.events.on('object-destroyed', onObjectDestroyed);
+    this.events.on('weapon-lost', onWeaponLost);
+
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.events.off('player-hit', onPlayerHit);
+      this.events.off('explosion', onExplosion);
+      this.events.off('object-destroyed', onObjectDestroyed);
+      this.events.off('weapon-lost', onWeaponLost);
       this.projectileSystem.destroy();
+      this.pickups.destroy();
+      this.fragments.destroy();
       this.fx.destroy();
       this.hud.destroy();
     });
 
-    // 编辑器测试模式：Esc 返回
     if (this.onExit) {
       this.input.keyboard?.once('keydown-ESC', () => this.onExit?.());
     }
@@ -182,30 +232,32 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.weaponSystem.update(delta);
-    this.fireWeapons(cmds);
+    this.handleAttacks(cmds);
+    this.handleSecondary(cmds);
     this.projectileSystem.update(delta);
+    this.pickups.update(delta);
+    this.drops.update(delta);
+    this.fragments.update(delta);
     this.updateOneWayCollisions();
-    // 焊接体：把一个刚体同步到它的 Container 视觉上
     syncCompoundVisuals(this.mapObjects);
     this.updateCameraTarget(cmd1, cmd2);
     if (this.cameraTarget && this.cameraRig) {
       this.cameraRig.update(this.cameraTarget, delta);
     }
-    // 屏幕震动（在跟随之后叠加，避免跟随与震动打架）
     this.gameFeel.update(this.cameras.main, this.cameraRig.shakeOffset, delta);
     this.fx.update(delta);
     this.hud.update();
   }
 
   /**
-   * 瞄准归属：跟随“当前正在操作的玩家”；两人同时操作时 P1 拿鼠标、P2 用身体朝向。
-   * 与镜头跟随保持同一套归属规则，避免“镜头看 A、鼠标瞄 B”。
+   * 瞄准归属：跟随"当前正在操作的玩家"；两人同时操作时 P1 拿鼠标、P2 用身体朝向。
+   * 与镜头跟随保持同一套归属规则，避免"镜头看 A、鼠标瞄 B"。
    */
   private updateAim(cmds: InputCommand[]): void {
     const has1 = this.hasInput(cmds[0]);
     const has2 = this.hasInput(cmds[1]);
     if (has1 && has2) {
-      this.aimOwner = 0; // 两人同时操作 → P1 拿鼠标
+      this.aimOwner = 0;
     } else if (has1) {
       this.aimOwner = 0;
     } else if (has2) {
@@ -219,23 +271,41 @@ export class GameScene extends Phaser.Scene {
         const shoulder = player.shoulderWorld;
         cmds[i].aimAngle = Math.atan2(world.y - shoulder.y, world.x - shoulder.x);
       } else {
-        cmds[i].aimAngle = null; // 无鼠标玩家：用身体朝向
+        cmds[i].aimAngle = null;
       }
     });
   }
 
-  /** 按攻击键开火（走 WeaponSystem：射速/弹药/耐久都在那里管） */
-  private fireWeapons(cmds: InputCommand[]): void {
+  /** 主攻击：开火 / 刺击 / 投掷（全自动武器支持长按连射） */
+  private handleAttacks(cmds: InputCommand[]): void {
     this.players.forEach((player, i) => {
-      if (!cmds[i].attack) return;
-      this.weaponSystem.tryFire(player);
+      if (!cmds[i].attack && !cmds[i].attackHeld) return;
+      this.weaponSystem.tryAttack(player, {
+        attack: cmds[i].attack,
+        attackHeld: cmds[i].attackHeld,
+      });
     });
   }
 
   /**
-   * 单向平台：玩家在平台下方或上升中时忽略碰撞（可穿过）；
-   * 脚底贴着平台顶部时视为站立（可站立、可跳）。
+   * 副攻击（右键 / Shift / E）：先尝试"替换地上的武器"，
+   * 没替换成功才执行踢 / 投掷。
    */
+  private handleSecondary(cmds: InputCommand[]): void {
+    const intent = new Set<number>();
+    this.players.forEach((player, i) => {
+      if (cmds[i].kick || cmds[i].swap) intent.add(player.id);
+    });
+    if (intent.size === 0) return;
+
+    const consumed = this.pickups.tryPickup(intent);
+    for (const player of this.players) {
+      if (!intent.has(player.id) || consumed.has(player.id)) continue;
+      this.weaponSystem.trySecondary(player);
+    }
+  }
+
+  /** 单向平台：玩家在平台下方或上升中时忽略碰撞（可穿过） */
   private updateOneWayCollisions(): void {
     if (this.oneWayBodies.length === 0) return;
     for (const player of this.players) {
@@ -248,29 +318,22 @@ export class GameScene extends Phaser.Scene {
         const platformTop = body.bounds.min.y;
         const dx = player.container.x;
         const withinX = dx >= body.bounds.min.x - 6 && dx <= body.bounds.max.x + 6;
-
         if (!withinX) continue;
 
-        // 脚底贴着平台顶部（±8px 容差）且未上升 → 站在平台上
         if (Math.abs(feetY - platformTop) <= 8 && !rising) {
           standing = true;
         }
-        // 只有"明确在平台下方"（脚底深于平台顶部一个身位）或"上升中"才忽略碰撞；
-        // 下落时脚底接近平台顶部不忽略 → 平台能挡住玩家
         if (feetY > platformTop + 12 || rising) {
           ignore = true;
         }
       }
 
-      // 站立时不能忽略碰撞（否则会掉下去）
-      if (standing) {
-        ignore = false;
-      }
+      if (standing) ignore = false;
       player.setOneWayState(ignore, standing);
     }
   }
 
-  /** 镜头跟随最后有输入的玩家（输入优先：移动/跳跃/攻击等） */
+  /** 镜头跟随最后有输入的玩家 */
   private updateCameraTarget(cmd1: InputCommand, cmd2: InputCommand): void {
     const p1 = this.players[0];
     const p2 = this.players[1];
@@ -283,10 +346,8 @@ export class GameScene extends Phaser.Scene {
     } else if (hasInput2 && !hasInput1) {
       this.switchCameraTarget(p2);
     }
-    // 两人同时输入时保持当前跟随目标（不来回切换）
   }
 
-  /** 切换镜头目标时立即复位焦点，避免镜头横穿地图 */
   private switchCameraTarget(target: Player): void {
     if (this.cameraTarget === target) return;
     this.cameraTarget = target;
@@ -294,6 +355,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   private hasInput(cmd: InputCommand): boolean {
-    return cmd.moveX !== 0 || cmd.jump || cmd.attack || cmd.kick || cmd.swap;
+    return (
+      cmd.moveX !== 0 ||
+      cmd.jump ||
+      cmd.attack ||
+      cmd.attackHeld ||
+      cmd.kick ||
+      cmd.swap
+    );
   }
 }

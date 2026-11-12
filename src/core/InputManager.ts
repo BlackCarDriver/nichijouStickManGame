@@ -35,6 +35,7 @@ export class InputManager {
     const pointer = this.scene.input.activePointer;
     const attack = pointer.leftButtonDown();
     c.attack = attack && !this.prevP1Attack;
+    c.attackHeld = attack;
     this.prevP1Attack = attack;
 
     const kick = pointer.rightButtonDown();
@@ -63,6 +64,7 @@ export class InputManager {
     c.jumpHeld = this.p2.UP.isDown;
     c.crouch = this.p2.DOWN.isDown;
     c.attack = Phaser.Input.Keyboard.JustDown(this.p2.SPACE);
+    c.attackHeld = this.p2.SPACE.isDown;
     c.kick = Phaser.Input.Keyboard.JustDown(this.p2.SHIFT);
     c.swap = Phaser.Input.Keyboard.JustDown(this.p2.E);
     return c;
