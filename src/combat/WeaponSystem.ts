@@ -501,7 +501,6 @@ export class WeaponSystem {
     const bullet: BulletConfig = {
       kind: weapon.attackMode === 'melee' ? 'thrown' : 'grenade',
       speed: cfg.speed,
-      gravity: cfg.gravity ?? 800,
       range: cfg.range,
       size: weapon.visual.thickness * 0.6,
       color: weapon.visual.color,

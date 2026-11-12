@@ -7,6 +7,7 @@ import type { Player } from '../entities/Player';
 import { raycast, getWorldBodies } from './Raycast';
 import type { RayHit } from './Raycast';
 import type { BulletConfig, ExplosionConfig } from './WeaponFormat';
+import { resolveGravity } from './WeaponFormat';
 import type { ExplosionRequest } from './ExplosionSystem';
 
 /**
@@ -132,7 +133,7 @@ export class ProjectileSystem {
       y: options.y,
       vx: Math.cos(options.angle) * bullet.speed,
       vy: Math.sin(options.angle) * bullet.speed,
-      gravity: bullet.gravity ?? 0,
+      gravity: resolveGravity(bullet.gravity),
       range: bullet.range,
       traveled: 0,
       damage: options.damage,

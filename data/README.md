@@ -199,6 +199,7 @@ npm run validate
 ```json
 {
   "version": 1,
+  "projectileGravity": 520,        // **全局唯一弹道重力**：所有子弹/投掷物共用一个加速度
   "weapons": {
     "pistol": {
       "name": "手枪",
@@ -213,7 +214,7 @@ npm run validate
       "bullet": {
         "kind": "dot",                 // 外观：dot | streak | rocket | grenade | thrown
         "speed": 1600,                 // **弹速 px/秒 —— 决定"子弹飞行时间"**
-        "gravity": 520,                // **重力 px/秒² —— 决定抛物线下坠**（越小越平直）
+        // 子弹一般不写 gravity：统一用文件顶层 projectileGravity
         "range": 1500,                 // 最大飞行距离
         "size": 3,
         "color": "#ffe08a",
@@ -236,6 +237,12 @@ npm run validate
 - **`bullet.speed` 是"子弹飞行时间"的唯一来源**：子弹不是瞬时的，
   按 `speed × dt` 每帧步进，所以同一段距离下速度不同 → 到达时间不同。
   手枪 1600px/s 飞 800px ≈ 0.5s；火箭炮 700px/s ≈ 1.14s。
+- **重力是全局统一的**（`projectileGravity`，当前 520 px/s²）：
+  所有子弹与投掷物共用同一个加速度，因此
+  **下坠距离 = ½ · g · (距离 / 速度)²** —— 只由速度与距离决定。
+  实测同距离 600px：手枪(1600) 下坠 40px，AK47(2000) 下坠 27px。
+  想让整体弹道更弯/更平直，只改 `projectileGravity` 一个数；
+  单个武器要特殊表现时才在 `bullet.gravity` 里覆盖。
 - **弹速再快也不会穿墙**：每帧用「上帧位置 → 本帧位置」的射线求交，
   一帧跨多远都能检测到（不是只查当前点）。
 - **穿透/反弹由"材质 + 武器"两边共同决定**：

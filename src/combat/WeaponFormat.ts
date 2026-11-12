@@ -33,8 +33,12 @@ export interface BulletConfig {
   kind: BulletKind;
   /** 飞行速度（px/秒）—— 不同武器速度不同，直接决定"子弹飞行时间" */
   speed: number;
-  /** 重力（px/秒²）：>0 时子弹走抛物线（所有射击武器都有，只是大小不同） */
-  gravity: number;
+  /**
+   * 重力覆盖（px/秒²）。一般**不要填**：所有子弹共用文件顶层的
+   * `projectileGravity`，这样下坠距离只由速度和距离决定（物理上正确）。
+   * 只有特殊表现（例如想做一个"无重力"的弹种）才在这里覆盖。
+   */
+  gravity?: number;
   /** 最大飞行距离（px） */
   range: number;
   /** 弹头大小（px） */
@@ -139,10 +143,24 @@ export interface WeaponJson {
 
 interface WeaponsFile {
   version: number;
+  /** 所有子弹/投掷物共用的重力加速度（px/秒²） */
+  projectileGravity?: number;
   weapons: Record<string, WeaponJson>;
 }
 
 const file = rawWeapons as WeaponsFile;
+
+/**
+ * 全局弹道重力（px/秒²）。所有子弹与投掷物共用同一个值 ——
+ * 下坠距离 = ½ · g · (飞行距离 / 速度)²，因此只取决于速度与距离。
+ * 想整体调"弹道弧得多厉害"只改这一个数（data/weapons.json 的 projectileGravity）。
+ */
+export const PROJECTILE_GRAVITY = file.projectileGravity ?? 520;
+
+/** 解析某个弹种实际使用的重力：显式覆盖优先，否则用全局值 */
+export function resolveGravity(override?: number): number {
+  return override ?? PROJECTILE_GRAVITY;
+}
 
 /** 武器表（只读） */
 export const WEAPONS: Readonly<Record<string, WeaponJson>> = file.weapons;
