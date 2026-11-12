@@ -115,6 +115,23 @@ export interface DropZone {
   h: number;
 }
 
+/**
+ * 全局自动空投配置（**默认关闭**）。
+ *
+ * 关闭时地图只会通过 `weapons[]`（武器掉落点）产出武器；
+ * 开启后才会像以前那样"从天上随机掉，维持一定数量"。
+ */
+export interface AutoDropConfig {
+  /** 是否开启，默认 false */
+  enabled?: boolean;
+  /** 地图上维持的武器数量（默认 4） */
+  count?: number;
+  /** 检查间隔（ms，默认 2800） */
+  intervalMs?: number;
+  /** 开局立刻投放的数量（默认 3） */
+  initial?: number;
+}
+
 /** 关卡内固定生成点（医疗包等，type 对应物品表 data/items.json 的 id） */
 export interface MapItemSpawn {
   type: string;
@@ -168,4 +185,6 @@ export interface MapData {
   items?: MapItemSpawn[];
   /** 武器掉落点（固定武器 / 随机武器，可配置刷新间隔与次数） */
   weapons?: MapWeaponSpawn[];
+  /** 全局自动空投（默认关闭；开启后才会从天上随机掉武器维持数量） */
+  autoDrop?: AutoDropConfig;
 }

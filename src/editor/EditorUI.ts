@@ -1180,6 +1180,37 @@ function mapForm(): HTMLElement {
     h('div', { class: 'ed-row' }, [
       button('+ 在中心添加出生点', () => store.addSpawn(Math.round(map.width / 2), Math.round(map.height - 130))),
     ]),
+    h('h3', { class: 'ed-h3' }, ['自动空投（默认关闭）']),
+    h('p', { class: 'ed-help' }, [
+      '关闭时：地图只会从「武器掉落点」产出武器（推荐，可控）。',
+      '开启后：像以前那样从天上随机掉武器、维持指定数量；投放 x 范围用 weaponDropZones。',
+    ]),
+    h('label', { class: 'ed-check' }, [
+      checkbox(map.autoDrop?.enabled === true, (v) => {
+        map.autoDrop = { ...(map.autoDrop ?? {}), enabled: v };
+        store.commit();
+      }),
+      '启用全局自动空投',
+    ]),
+    ...(map.autoDrop?.enabled === true
+      ? [
+          h('div', { class: 'ed-grid2' }, [
+            field('维持数量', numberInput(map.autoDrop.count ?? 4, (v) => {
+              map.autoDrop = { ...(map.autoDrop ?? {}), count: Math.max(0, Math.round(v)) };
+              store.commit();
+            })),
+            field('检查间隔 ms', numberInput(map.autoDrop.intervalMs ?? 2800, (v) => {
+              map.autoDrop = { ...(map.autoDrop ?? {}), intervalMs: Math.max(200, Math.round(v)) };
+              store.commit();
+            })),
+          ]),
+          field('开局投放数量', numberInput(map.autoDrop.initial ?? 3, (v) => {
+            map.autoDrop = { ...(map.autoDrop ?? {}), initial: Math.max(0, Math.round(v)) };
+            store.commit();
+          })),
+        ]
+      : []),
+
     h('h3', { class: 'ed-h3' }, [`关节（${store.joints().length}）`]),
     h(
       'div',

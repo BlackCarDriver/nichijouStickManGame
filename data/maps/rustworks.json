@@ -406,19 +406,19 @@
   "prefabs": [
     {
       "id": "crate_a",
-      "ref": "crate_stack",
+      "ref": "boxs",
       "x": 720,
       "y": 1380
     },
     {
       "id": "crate_b",
-      "ref": "crate_stack",
+      "ref": "boxs",
       "x": 840,
       "y": 1380
     },
     {
       "id": "crate_c",
-      "ref": "crate_stack",
+      "ref": "boxs",
       "x": 960,
       "y": 1380
     },
@@ -448,6 +448,44 @@
         "x": 2630,
         "y": 1365
       }
+    }
+  ],
+  "weapons": [
+    {
+      "x": 2450,
+      "y": 1420,
+      "mode": "random",
+      "pool": [
+        "pistol",
+        "ak47",
+        "dagger"
+      ],
+      "respawnMs": 12000
+    },
+    {
+      "x": 2815,
+      "y": 1420,
+      "mode": "random",
+      "pool": [
+        "shotgun",
+        "spear",
+        "ak47"
+      ],
+      "respawnMs": 15000
+    },
+    {
+      "x": 200,
+      "y": 1240,
+      "mode": "fixed",
+      "weapon": "sniper",
+      "respawnMs": 20000
+    },
+    {
+      "x": 830,
+      "y": 1150,
+      "mode": "fixed",
+      "weapon": "rocket",
+      "respawnMs": 25000
     }
   ]
 }

@@ -192,7 +192,25 @@ npm run validate
 
 实现：`src/world/WeaponSpawnerSystem.ts`。它给每个掉落点打一个 `tag`（`wspawn:N`），
 靠"地上还有没有这个 tag 的武器"判断是否已被捡走，再按间隔/次数刷新。
-与 `weaponDropZones`（DropSystem 的全局随机空投）互不影响。
+
+### 全局自动空投（`autoDrop`，**默认关闭**）
+
+**默认情况下地图不会有任何自动掉落的武器**，武器只能来自 `weapons[]` 掉落点。
+需要"从天上随机掉、维持数量"的老玩法时，显式开启：
+
+```jsonc
+"autoDrop": { "enabled": true, "count": 4, "intervalMs": 2800, "initial": 3 }
+```
+
+| 字段 | 默认 | 说明 |
+|------|------|------|
+| `enabled` | `false` | 不开启就完全不自动掉落 |
+| `count` | 4 | 地图上维持的武器总数（只统计所有地面武器，含掉落点刷的） |
+| `intervalMs` | 2800 | 多久检查一次并补投 |
+| `initial` | 3 | 开局立刻投放几把 |
+
+投放的 x 范围用 `weaponDropZones`（不填则用地图中间 60% 区域）。
+编辑器"地图"Tab 的地图属性里有对应开关（关闭时显示说明，开启后才展开数值项）。
 
 ### prefabs/*.json
 

@@ -268,5 +268,36 @@
         "y": 1098
       }
     }
+  ],
+  "weapons": [
+    {
+      "x": 300,
+      "y": 1120,
+      "mode": "random",
+      "pool": [
+        "pistol",
+        "ak47",
+        "spear"
+      ],
+      "respawnMs": 12000
+    },
+    {
+      "x": 1200,
+      "y": 600,
+      "mode": "random",
+      "pool": [
+        "sniper",
+        "shotgun",
+        "laser"
+      ],
+      "respawnMs": 18000
+    },
+    {
+      "x": 2100,
+      "y": 1120,
+      "mode": "fixed",
+      "weapon": "dagger",
+      "respawnMs": 15000
+    }
   ]
 }

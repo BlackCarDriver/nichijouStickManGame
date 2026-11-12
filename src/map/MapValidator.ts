@@ -250,6 +250,24 @@ export function validateMap(map: unknown, ctx: ValidateContext): Issue[] {
       });
     }
   }
+  if (m.autoDrop !== undefined) {
+    const ad = m.autoDrop as Record<string, unknown>;
+    if (typeof ad !== 'object' || ad === null) {
+      issues.push(err('autoDrop', '必须是对象'));
+    } else {
+      if (ad.enabled !== undefined && typeof ad.enabled !== 'boolean') {
+        issues.push(err('autoDrop.enabled', '必须是布尔值'));
+      }
+      for (const key of ['count', 'intervalMs', 'initial'] as const) {
+        if (ad[key] !== undefined && (!isFiniteNumber(ad[key]) || (ad[key] as number) < 0)) {
+          issues.push(err(`autoDrop.${key}`, '必须是 >= 0 的数字'));
+        }
+      }
+      if (ad.enabled !== true && (ad.count !== undefined || ad.intervalMs !== undefined)) {
+        issues.push(warn('autoDrop', 'enabled 不为 true 时，count/intervalMs 不会生效'));
+      }
+    }
+  }
   if (m.weapons !== undefined) {
     if (!Array.isArray(m.weapons)) {
       issues.push(err('weapons', '必须是数组'));

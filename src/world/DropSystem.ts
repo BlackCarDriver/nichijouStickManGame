@@ -4,8 +4,11 @@ import type { MapData } from '../map/MapFormat';
 import { listWeaponIds } from '../combat/WeaponFormat';
 
 /**
- * 天降武器系统（需求 6）：地图上始终维持一定数量的武器，
- * 不足时从地图上方随机位置投放，空中即可被拾取。
+ * 天降武器系统（全局自动空投）。
+ *
+ * **默认关闭**：地图只通过 `weapons[]`（武器掉落点）产出武器。
+ * 需要"从天上随机掉、维持数量"的老玩法时，在地图里写：
+ *   "autoDrop": { "enabled": true, "count": 4, "intervalMs": 2800, "initial": 3 }
  *
  * 投放位置优先使用地图的 `weaponDropZones`（编辑器里画的区域），
  * 没有配置时退化为地图宽度的中间安全区。
@@ -16,12 +19,16 @@ export class DropSystem {
   private readonly map: MapData;
   private timer = 0;
 
+  /** 是否开启全局自动空投（默认关闭） */
+  private readonly enabled: boolean;
   /** 地图上维持的武器数量 */
-  private static readonly TARGET_COUNT = 4;
-  /** 补给检查间隔（ms）。调慢一倍：原来 1400ms 一次，掉落太密集 */
-  private static readonly CHECK_INTERVAL = 2800;
-  /** 开场立刻投放的数量（避免玩家开局没枪） */
-  private static readonly INITIAL_COUNT = 3;
+  private readonly targetCount: number;
+  /** 补给检查间隔（ms） */
+  private readonly checkInterval: number;
+
+  private static readonly DEFAULT_COUNT = 4;
+  private static readonly DEFAULT_INTERVAL = 2800;
+  private static readonly DEFAULT_INITIAL = 3;
 
   private static readonly DROP_POOL = [
     'pistol',
@@ -41,17 +48,31 @@ export class DropSystem {
     this.pickups = pickups;
     this.map = map;
 
-    for (let i = 0; i < DropSystem.INITIAL_COUNT; i++) {
+    const cfg = map.autoDrop ?? {};
+    this.enabled = cfg.enabled === true;
+    this.targetCount = Math.max(0, cfg.count ?? DropSystem.DEFAULT_COUNT);
+    this.checkInterval = Math.max(200, cfg.intervalMs ?? DropSystem.DEFAULT_INTERVAL);
+
+    // 关闭时一个都不投：地图的武器完全由 weapons[]（武器掉落点）决定
+    if (!this.enabled) return;
+    const initial = Math.max(0, cfg.initial ?? DropSystem.DEFAULT_INITIAL);
+    for (let i = 0; i < initial; i++) {
       this.dropOne();
     }
   }
 
+  /** 是否开启了全局自动空投（状态栏/调试用） */
+  get isEnabled(): boolean {
+    return this.enabled;
+  }
+
   update(deltaMs: number): void {
+    if (!this.enabled) return;
     this.timer += deltaMs;
-    if (this.timer < DropSystem.CHECK_INTERVAL) return;
+    if (this.timer < this.checkInterval) return;
     this.timer = 0;
 
-    if (this.pickups.count < DropSystem.TARGET_COUNT) {
+    if (this.pickups.count < this.targetCount) {
       this.dropOne();
     }
   }
