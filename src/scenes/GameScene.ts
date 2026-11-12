@@ -29,10 +29,30 @@ import { AimSightSystem } from '../combat/AimSightSystem';
 import { GrenadeSystem } from '../combat/GrenadeSystem';
 import { FxSystem } from '../fx/FxSystem';
 import { Hud } from '../ui/Hud';
+import { getFakeProfiles } from '../config/playerProfiles';
 import { DamageNumbers } from '../ui/DamageNumbers';
 import { SlashTrail } from '../fx/SlashTrail';
 
-const PLAYER_COLORS = [0xe74c3c, 0x3498db];
+/**
+ * 玩家配色（按出生点顺序取用）。
+ * 目前本地双人只用到前两个，但**配色不限于两种**：
+ * 联机 4~8 人时按顺序取色，HUD / 骨骼 / 光刀颜色都会自动跟随该值。
+ */
+const PLAYER_COLORS = [
+  0xe74c3c, // 红
+  0x3498db, // 蓝
+  0x2ecc71, // 绿
+  0xf1c40f, // 黄
+  0x9b59b6, // 紫
+  0xe67e22, // 橙
+  0x1abc9c, // 青
+  0xecf0f1, // 白
+];
+
+/** 取第 i 个玩家的颜色（玩家数超过配色表时循环） */
+function playerColor(i: number): number {
+  return PLAYER_COLORS[i % PLAYER_COLORS.length];
+}
 /** 空的"按下集合"（自动拾取不需要按键） */
 const EMPTY_PRESSED: ReadonlySet<number> = new Set<number>();
 /** 镜头缩放（固定，聚焦单角色时画面清晰） */
@@ -148,7 +168,7 @@ export class GameScene extends Phaser.Scene {
     this.oneWayBodies = this.mapObjects.filter((o) => o.oneWay && o.body).map((o) => o.body!);
 
     const spawn = this.mapData.spawnPoints;
-    this.players = spawn.map((p, i) => new Player(this, p.x, p.y, PLAYER_COLORS[i]));
+    this.players = spawn.map((p, i) => new Player(this, p.x, p.y, playerColor(i)));
     this.cameraTarget = this.players[0];
     for (const player of this.players) {
       this.bodyToPlayer.set(player.body.id, player);
@@ -204,7 +224,8 @@ export class GameScene extends Phaser.Scene {
     this.damageNumbers = new DamageNumbers(this);
     this.slashTrail = new SlashTrail(this);
     this.hud = new Hud(this);
-    this.hud.bind(this.players);
+    // 昵称/头像：现阶段用假资料占位，接联机后换成房间玩家列表
+    this.hud.bind(this.players, getFakeProfiles(this.players.length));
     this.hud.bindKills(this.kills);
     // 出生空手：所有武器一律靠捡（天降武器 + 场上掉落物）
 
