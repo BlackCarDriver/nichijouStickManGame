@@ -219,7 +219,7 @@
       "throw": {
         "speed": 640,
         "range": 900,
-        "fuseMs": 1500,
+        "fuseMs": 5000,
         "bounceAny": true,
         "bounceRestitution": 0.45
       },

@@ -40,15 +40,15 @@ const KICK = {
   damage: 12,
   /** 水平击退（px/帧）：要把人明显弹飞 */
   knockback: 17,
-  /** 上抛分量（px/帧，负值向上） */
-  lift: 9,
+  /** 上抛分量（px/帧，负值向上）：只给一点离地感，不要踢上天（5 ≈ 腾空 30px） */
+  lift: 7,
   cooldownSec: 0.42,
   /** 判定角度容差（弧度）：只踢前方半圆 */
   halfAngle: Math.PI * 0.55,
   /** 对可推物体的期望速度变化（px/帧） */
   objectImpulse: 14,
   /** 对可推物体的上抛（px/帧） */
-  objectLift: 7,
+  objectLift: 4,
 } as const;
 
 /**
