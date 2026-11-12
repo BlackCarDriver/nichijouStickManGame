@@ -125,7 +125,34 @@ export class FxSystem {
     this.rings.push({ x, y, radius, life: lifeMs, maxLife: lifeMs, color });
   }
 
-  /** 受击闪白：在物体 AABB 上叠一个白色矩形，短暂淡出 */
+  /**
+   * 受击闪白：按物体的**真实多边形**叠加白色，短暂淡出。
+   *
+   * 不能用 AABB（原实现）：倾斜的长方体/三角形用包围盒画，白块会溢出物体轮廓。
+   * 这里直接拿 Matter body 的世界顶点画填充多边形，形状永远贴合。
+   */
+  flashShape(vertices: ReadonlyArray<{ x: number; y: number }> | undefined, color = 0xffffff): void {
+    if (!vertices || vertices.length < 3) return;
+    const g = this.scene.add.graphics();
+    g.setDepth(880);
+    g.fillStyle(color, 0.55);
+    g.beginPath();
+    g.moveTo(vertices[0].x, vertices[0].y);
+    for (let i = 1; i < vertices.length; i++) {
+      g.lineTo(vertices[i].x, vertices[i].y);
+    }
+    g.closePath();
+    g.fillPath();
+    this.scene.tweens.add({
+      targets: g,
+      alpha: 0,
+      duration: 130,
+      ease: 'Quad.easeOut',
+      onComplete: () => g.destroy(),
+    });
+  }
+
+  /** 受击闪白（AABB 版，保留给无顶点的场合） */
   flashBounds(bounds: MatterJS.IBound | undefined, color = 0xffffff): void {
     if (!bounds) return;
     const w = bounds.max.x - bounds.min.x;

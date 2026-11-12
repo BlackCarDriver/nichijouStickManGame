@@ -42,7 +42,7 @@ export interface StickmanDrawOptions {
   /** 是否倒着走（面向与移动方向相反 → 步态反向 + 身体后仰） */
   backward?: boolean;
   /** 当前攻击动作类型 */
-  attackKind?: 'stab' | 'kick' | 'slash' | null;
+  attackKind?: 'stab' | 'thrust' | 'kick' | 'slash' | null;
   /** 攻击动作进度 0→1 */
   attackProgress?: number;
   /**
@@ -107,10 +107,21 @@ export class StickmanRenderer {
     this.lastAimHand = null;
     const speedPxPerSec = Math.abs(o.velocityX) * 60;
 
-    // 踢腿动作优先（短暂覆盖行走/站立姿势）
-    if (o.attackKind === 'kick' && (o.attackProgress ?? 0) > 0) {
-      this.drawKick(g, o);
-      return;
+    // 攻击动作优先（短暂覆盖行走/站立姿势）
+    const progress = o.attackProgress ?? 0;
+    if (progress > 0) {
+      if (o.attackKind === 'kick') {
+        this.drawKick(g, o);
+        return;
+      }
+      if (o.attackKind === 'thrust') {
+        this.drawThrust(g, o);
+        return;
+      }
+      if (o.attackKind === 'slash') {
+        this.drawSlash(g, o);
+        return;
+      }
     }
 
     switch (o.pose) {
@@ -217,6 +228,53 @@ export class StickmanRenderer {
     const lagSway = Math.sin((t - this.FOLLOW_LAG) * 0.9) * 3;
     this.drawArmFK(g, o, shoulder, 1, 10 - sway + lagSway, 0.32);
     this.drawArmFK(g, o, shoulder, -1, -10 - sway + lagSway, 0.32);
+  }
+
+  // ---------------- 近战：突刺 / 挥砍 ----------------
+
+  /**
+   * 突刺（匕首/长矛）：弓步前压 + 后腿蹬直 + 后臂后收。
+   * 持械的前臂由 aim 覆盖，始终指向准星，所以"刺"的方向与瞄准一致。
+   */
+  private static drawThrust(g: Phaser.GameObjects.Graphics, o: StickmanDrawOptions): void {
+    const p = Math.min(1, Math.max(0, o.attackProgress ?? 0));
+    // 0→1→0：前段猛地前压，后段回收
+    const ext = Math.sin(Math.min(1, p * 1.15) * Math.PI);
+    const groundY = GROUND_OFFSET;
+    const hip: Vec2 = { x: 4 + 9 * ext, y: this.HIP_Y + 3 + 3 * ext };
+
+    // 前腿弓步迈出，后腿蹬直
+    this.drawLegIK(g, o.color, hip, { x: 14 + 14 * ext, y: groundY });
+    this.drawLegIK(g, o.color, hip, { x: -12 - 10 * ext, y: groundY });
+
+    // 躯干前压
+    const shoulder = this.drawTorso(g, o.color, hip, 10 + 12 * ext, 3);
+    this.drawHead(g, o.color, shoulder, 12 + 12 * ext, 0);
+
+    // 前臂（aim 覆盖）向前刺，后臂后收保持平衡
+    this.drawArmFK(g, o, shoulder, 1, 60, 8);
+    this.drawArmFK(g, o, shoulder, -1, -34 - 26 * ext, 28);
+  }
+
+  /**
+   * 挥砍（光刀）：双腿开立稳住重心 + 躯干随挥砍扭转。
+   * 手臂扫过由 aim + slashOffset 驱动，所以整条臂与刀身一起画弧。
+   */
+  private static drawSlash(g: Phaser.GameObjects.Graphics, o: StickmanDrawOptions): void {
+    const p = Math.min(1, Math.max(0, o.attackProgress ?? 0));
+    const swing = Math.sin(Math.min(1, p * 1.2) * Math.PI);
+    const groundY = GROUND_OFFSET;
+    const hip: Vec2 = { x: 2 - 4 * swing, y: this.HIP_Y + 4 };
+
+    this.drawLegIK(g, o.color, hip, { x: -15, y: groundY });
+    this.drawLegIK(g, o.color, hip, { x: 15, y: groundY });
+
+    // 躯干前倾 + 侧向扭转（跟着挥砍方向走）
+    const shoulder = this.drawTorso(g, o.color, hip, 8 + 7 * swing, -8 * swing);
+    this.drawHead(g, o.color, shoulder, 8 + 7 * swing, 0);
+
+    this.drawArmFK(g, o, shoulder, 1, 40, 10);
+    this.drawArmFK(g, o, shoulder, -1, -18 - 20 * swing, 32);
   }
 
   // ---------------- 踢腿 ----------------

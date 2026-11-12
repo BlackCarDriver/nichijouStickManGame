@@ -4,7 +4,6 @@ import type { MapObjectRuntime } from '../map/MapLoader';
 import type { WorldRegistry } from './WorldRegistry';
 import type { FxSystem } from '../fx/FxSystem';
 import type { DamageInfo } from '../combat/DamageInfo';
-import { asBounds } from '../combat/Raycast';
 
 export interface DestructionResult {
   /** 实际生效的伤害（0 = 不可破坏 / 已销毁） */
@@ -65,7 +64,8 @@ export class DestructionSystem {
 
     // 受击反馈：闪白 + 火花
     if (runtime.body) {
-      this.fx.flashBounds(asBounds(runtime.body));
+      // 用真实顶点闪白（倾斜方块/三角形不会溢出轮廓）
+      this.fx.flashShape(runtime.body.vertices, 0xffffff);
     }
     if (info.point) {
       this.fx.hitSpark(info.point, info.normal, material?.color ?? 0xffffff);

@@ -619,7 +619,7 @@ export class WeaponSystem {
     const melee = weapon.melee;
     if (!melee) return false;
 
-    player.setAttack('slash', 280);
+    player.setAttack('slash', 300);
     const from = player.handWorld;
     const aim = player.aim;
     const halfArc = ((melee.arc ?? 40) * Math.PI) / 180;
@@ -730,7 +730,8 @@ export class WeaponSystem {
     const from = player.handWorld;
     const angle = player.aim;
     const dir = { x: Math.cos(angle), y: Math.sin(angle) };
-    player.setAttack('stab', 200);
+    // 近战刺击用专门的弓步突刺动作（枪械的后坐仍用 stab）
+    player.setAttack('thrust', 220);
 
     const hits = raycast(getWorldBodies(this.scene), from, dir, melee.reach, {
       ignore: [player.body],

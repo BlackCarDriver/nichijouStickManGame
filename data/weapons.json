@@ -115,7 +115,7 @@
       "durability": 80,
       "durabilityPerShot": 2,
       "melee": { "reach": 62, "arc": 40 },
-      "throw": { "speed": 900, "range": 600, "stickMs": 10000, "damage": 18 },
+      "throw": { "speed": 900, "range": 3000, "stickMs": 10000, "damage": 18 },
       "recoil": { "push": 0, "climbDeg": 0, "climbMaxDeg": 0, "recoverMs": 0 },
       "visual": { "style": "dagger", "length": 26, "thickness": 4, "color": "#cfd8e3" }
     },
@@ -131,7 +131,7 @@
       "durability": 110,
       "durabilityPerShot": 2,
       "melee": { "reach": 92, "arc": 30 },
-      "throw": { "speed": 820, "range": 700, "stickMs": 10000, "damage": 26 },
+      "throw": { "speed": 820, "range": 3000, "stickMs": 10000, "damage": 26 },
       "recoil": { "push": 0, "climbDeg": 0, "climbMaxDeg": 0, "recoverMs": 0 },
       "visual": { "style": "spear", "length": 62, "thickness": 3, "color": "#b98b4e" }
     },
@@ -176,7 +176,7 @@
       "bullet": {
         "kind": "dot",
         "speed": 1350,
-        "range": 420,
+        "range": 840,
         "size": 2.4,
         "color": "#ffd8a8",
         "trail": 10,
@@ -185,7 +185,7 @@
         "pierceDamageMul": 1,
         "piercePlayers": false,
         "pellets": 7,
-        "spreadDeg": 16
+        "spreadDeg": 5.3
       },
       "recoil": { "push": 7.0, "climbDeg": 2.0, "climbMaxDeg": 8.0, "recoverMs": 2600 },
       "visual": { "style": "shotgun", "length": 46, "thickness": 7, "color": "#5a3d2b" }

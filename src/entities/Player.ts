@@ -11,6 +11,7 @@ import type { DamageInfo } from '../combat/DamageInfo';
 import { getWeapon } from '../combat/WeaponFormat';
 import type { HeldWeapon } from '../combat/WeaponFormat';
 import { drawHeldWeapon } from '../render/WeaponRenderer';
+import { raycast, getWorldBodies } from '../combat/Raycast';
 
 export const PLAYER_CONFIG = {
   /** 碰撞体尺寸（火柴人总高约 111px，碰撞体略小于视觉） */
@@ -29,6 +30,11 @@ export const PLAYER_CONFIG = {
   jumpVelocity: -17,
   /** 最大下落速度：防穿透（同时抬高摔落伤害的可测区间） */
   maxFallSpeed: 32,
+  /**
+   * 自动上台阶的高度（px）。
+   * 地上的木板/薄板（16~24px）不该把玩家卡住，应该能直接踩上去。
+   */
+  stepHeight: 34,
   /** 摔落伤害阈值：低于此落地速度不掉血（普通跳跃落地应低于它） */
   fallSafeSpeed: 21,
   /** 摔落伤害系数：每超速 1 点造成多少伤害 */
@@ -137,7 +143,7 @@ export class Player extends Entity {
   private handLocal = { x: 0, y: StickmanRenderer.SHOULDER_Y };
 
   // ---- 攻击动作（刺击/踢）----
-  private attackKind: 'stab' | 'kick' | 'slash' | null = null;
+  private attackKind: 'stab' | 'thrust' | 'kick' | 'slash' | null = null;
   private attackTimer = 0;
   private attackDuration = 1;
 
@@ -464,14 +470,14 @@ export class Player extends Entity {
   }
 
   /** 触发一次攻击动作（刺击/踢），供武器系统调用 */
-  setAttack(kind: 'stab' | 'kick' | 'slash', durationMs: number): void {
+  setAttack(kind: 'stab' | 'thrust' | 'kick' | 'slash', durationMs: number): void {
     this.attackKind = kind;
     this.attackTimer = durationMs;
     this.attackDuration = Math.max(1, durationMs);
   }
 
   /** 当前攻击类型（无攻击时为 null） */
-  get attack(): 'stab' | 'kick' | 'slash' | null {
+  get attack(): 'stab' | 'thrust' | 'kick' | 'slash' | null {
     return this.attackTimer > 0 ? this.attackKind : null;
   }
 
@@ -607,6 +613,11 @@ export class Player extends Entity {
     const cappedVx = Phaser.Math.Clamp(targetVx, -PLAYER_CONFIG.maxHorizontalSpeed, PLAYER_CONFIG.maxHorizontalSpeed);
     this.container.setVelocityX(cappedVx);
 
+    // 走出低矮障碍（木板/薄板）：自动抬上台阶，而不是被卡住
+    if (cmd.moveX !== 0) {
+      this.tryStepUp(cmd.moveX);
+    }
+
     // ===== 跳跃求解：缓冲 + 土狼时间同时满足才跳（一起消耗，防二段跳）=====
     if (this.jumpBufferTimer > 0 && this.coyoteTimer > 0) {
       this.container.setVelocityY(PLAYER_CONFIG.jumpVelocity);
@@ -680,6 +691,40 @@ export class Player extends Entity {
         this.groundNormal.y = ny;
       }
     }
+  }
+
+  /**
+   * 自动上台阶。
+   *
+   * 做法：在身体前方（半个身位外）从「脚底上方 stepHeight」向下探一条竖线，
+   * 命中面的高度差在 (3, stepHeight] 区间内就把人抬上去。
+   *
+   * 为什么能区分"矮台阶"和"高墙"：
+   * 竖直探测若**从墙体内部开始**，射线会先打到墙的**下边缘**（≈ 地面高度），
+   * 高度差≈0 → 直接被 `rise < 3` 过滤掉，所以高墙不会把人"吸"上去。
+   */
+  private tryStepUp(moveDir: number): void {
+    if (!this.isGrounded) return;
+
+    const feetY = this.feetY;
+    const probeX = this.container.x + Math.sign(moveDir) * (PLAYER_CONFIG.bodyWidth / 2 + 4);
+    const startY = feetY - PLAYER_CONFIG.stepHeight;
+
+    const hits = raycast(
+      getWorldBodies(this.scene),
+      { x: probeX, y: startY },
+      { x: 0, y: 1 },
+      PLAYER_CONFIG.stepHeight + 4,
+      { ignore: [this.body], maxHits: 1 },
+    );
+    const hit = hits[0];
+    if (!hit) return;
+
+    const rise = feetY - hit.point.y;
+    if (rise < 3 || rise > PLAYER_CONFIG.stepHeight) return;
+
+    // 抬到台阶面上（留 1px 余量，避免正好卡在边界）
+    this.container.setPosition(this.container.x, this.container.y - rise - 1);
   }
 
   /**
