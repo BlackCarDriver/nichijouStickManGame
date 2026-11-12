@@ -25,6 +25,8 @@ export interface Issue {
 export interface ValidateContext {
   materialIds: string[];
   prefabs: Record<string, PrefabData>;
+  /** 可用道具 id（data/items.json）。提供时校验 map.items[].type */
+  itemIds?: string[];
 }
 
 /** 单张地图的物理体数量超过该值时给出警告（Matter 性能考虑） */
@@ -253,6 +255,14 @@ export function validateMap(map: unknown, ctx: ValidateContext): Issue[] {
       m.items.forEach((it, i) => {
         const o = it as Record<string, unknown>;
         if (typeof o?.type !== 'string') issues.push(err(`items[${i}].type`, '缺少物品类型'));
+        else if (ctx.itemIds && !ctx.itemIds.includes(o.type)) {
+          issues.push(
+            err(
+              `items[${i}].type`,
+              `未知道具类型 "${o.type}"（可用：${ctx.itemIds.join(', ')}）`,
+            ),
+          );
+        }
         if (!isFiniteNumber(o?.x) || !isFiniteNumber(o?.y)) {
           issues.push(err(`items[${i}]`, '坐标必须是有限数字'));
         }
@@ -396,11 +406,15 @@ export function validateMaterialsFile(
   return issues;
 }
 
-/** 便捷入口：把材料表 + 预制件表打包成上下文 */
-export function makeContext(materialIds: string[], prefabs: PrefabData[]): ValidateContext {
+/** 便捷入口：把材料表 + 预制件表（+ 可选道具表）打包成上下文 */
+export function makeContext(
+  materialIds: string[],
+  prefabs: PrefabData[],
+  itemIds?: string[],
+): ValidateContext {
   const table: Record<string, PrefabData> = {};
   for (const p of prefabs) table[p.id] = p;
-  return { materialIds, prefabs: table };
+  return { materialIds, prefabs: table, itemIds };
 }
 
 /** 类型收窄辅助：把 unknown 当 MapData 使用（调用前应先 validateMap） */

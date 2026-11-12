@@ -17,6 +17,8 @@ import { WorldRegistry } from '../world/WorldRegistry';
 import { DestructionSystem } from '../world/DestructionSystem';
 import { PickupSystem } from '../world/PickupSystem';
 import { DropSystem } from '../world/DropSystem';
+import { ItemDropSystem } from '../world/ItemDropSystem';
+import { getWeapon } from '../combat/WeaponFormat';
 import { FragmentSystem } from '../world/FragmentSystem';
 import { ImpactDamageSystem } from '../world/ImpactDamageSystem';
 import { DamageSystem } from '../combat/DamageSystem';
@@ -92,6 +94,7 @@ export class GameScene extends Phaser.Scene {
   private grenades!: GrenadeSystem;
   private pickups!: PickupSystem;
   private drops!: DropSystem;
+  private itemDrops!: ItemDropSystem;
   private fragments!: FragmentSystem;
   private impactDamage!: ImpactDamageSystem;
 
@@ -178,6 +181,8 @@ export class GameScene extends Phaser.Scene {
     // ---- 掉落 / 碎片 ----
     this.pickups = new PickupSystem(this, this.bodyToPlayer, this.fx);
     this.drops = new DropSystem(this, this.pickups, this.mapData);
+    // 补给道具（医疗包/防弹衣）：地图固定点 + 维持数量
+    this.itemDrops = new ItemDropSystem(this, this.pickups, this.mapData);
     this.fragments = new FragmentSystem(this);
     this.impactDamage = new ImpactDamageSystem(this, this.damageSystem, this.worldRegistry);
 
@@ -236,6 +241,40 @@ export class GameScene extends Phaser.Scene {
       this.pickups.spawn(weaponId, x, y, { falling: true });
     };
 
+    // 拾取武器：如果这个武器带 super 配置（光刀）→ 自动进入超级战士
+    const onWeaponPicked = (player: Player, weaponId: string): void => {
+      const superCfg = getWeapon(weaponId)?.super;
+      if (superCfg) player.enterSuperMode(superCfg);
+    };
+
+    // 道具生效（医疗包回血 / 防弹衣加护盾）→ 头顶气泡（绿 +40 / 灰 +100）
+    const onItemUsed = (player: Player, itemId: string, amount: number): void => {
+      this.damageNumbers.show(player, amount, {
+        kind: itemId === 'medkit' ? 'heal' : 'shield',
+      });
+    };
+
+    // 护盾吸收伤害 → 火花 + 轻微顿帧 + 音效（不弹伤害数字，避免误读成掉血）
+    const onPlayerShielded = (player: Player, absorbed: number, _kind: string): void => {
+      this.hitStop.trigger(HitStop.durationForDamage(absorbed) * 0.6);
+      this.audio.play('hit');
+      this.fx.hitSpark(
+        { x: player.container.x, y: player.container.y - 20 },
+        { x: 0, y: -1 },
+        player.isSuperMode ? 0xffe066 : 0xc8d0dc,
+      );
+    };
+
+    // 超级战士开/关 → 光环特效 + 音效 + 镜头冲击
+    const onSuperMode = (player: Player, active: boolean): void => {
+      const cx = player.container.x;
+      const cy = player.container.y - 20;
+      this.fx.burst({ x: cx, y: cy }, 0xffe066);
+      this.fx.ring(cx, cy, 70, 0xffe066, 420);
+      this.audio.play('pickup');
+      if (active) this.gameFeel.addTrauma(0.25);
+    };
+
     // 重武器后坐力 → 轻微镜头震动（火箭/霰弹/狙击手感更"重"）
     const onWeaponRecoil = (_player: Player, push: number): void => {
       if (push < 4) return;
@@ -279,6 +318,10 @@ export class GameScene extends Phaser.Scene {
     this.events.on('object-destroyed', onObjectDestroyed);
     this.events.on('weapon-lost', onWeaponLost);
     this.events.on('thrown-blocked', onThrownBlocked);
+    this.events.on('weapon-picked', onWeaponPicked);
+    this.events.on('item-used', onItemUsed);
+    this.events.on('player-shielded', onPlayerShielded);
+    this.events.on('super-mode', onSuperMode);
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.events.off('player-hit', onPlayerHit);
@@ -296,6 +339,10 @@ export class GameScene extends Phaser.Scene {
       this.events.off('object-destroyed', onObjectDestroyed);
       this.events.off('weapon-lost', onWeaponLost);
       this.events.off('thrown-blocked', onThrownBlocked);
+      this.events.off('weapon-picked', onWeaponPicked);
+      this.events.off('item-used', onItemUsed);
+      this.events.off('player-shielded', onPlayerShielded);
+      this.events.off('super-mode', onSuperMode);
       this.projectileSystem.destroy();
       this.sights.destroy();
       this.grenades.destroy();
@@ -359,6 +406,7 @@ export class GameScene extends Phaser.Scene {
     this.pickups.tryPickup(EMPTY_PRESSED);
     this.pickups.update(delta);
     this.drops.update(delta);
+    this.itemDrops.update(delta);
     this.fragments.update(delta);
     this.updateOneWayCollisions();
     syncCompoundVisuals(this.mapObjects);

@@ -9,7 +9,9 @@ import { emptyInput } from '../core/InputCommand';
 import { Health } from './Health';
 import type { DamageInfo } from '../combat/DamageInfo';
 import { getWeapon } from '../combat/WeaponFormat';
+import { parseColor } from '../config/materials';
 import type { HeldWeapon } from '../combat/WeaponFormat';
+import type { SuperModeConfig } from '../combat/WeaponFormat';
 import { drawHeldWeapon, drawWeaponGlow } from '../render/WeaponRenderer';
 import { raycast, getWorldBodies } from '../combat/Raycast';
 
@@ -129,6 +131,8 @@ export class Player extends Entity {
   private readonly graphics: Phaser.GameObjects.Graphics;
   /** 光刀的发光层（ADD 混合，叠在角色之上） */
   private readonly glowGraphics: Phaser.GameObjects.Graphics;
+  /** 超级战士身体光晕层（ADD 混合，画在角色背后） */
+  private readonly bodyGlowGraphics: Phaser.GameObjects.Graphics;
   readonly body: MatterJS.BodyType;
   readonly color: number;
 
@@ -144,7 +148,9 @@ export class Player extends Entity {
   lastLandingSpeed = 0;
 
   // ---- 生命值 ----
-  readonly health = new Health({ maxHp: PLAYER_CONFIG.maxHp });
+  /** 护盾上限（防弹衣/超级战士共用同一个上限） */
+  static readonly MAX_SHIELD = 500;
+  readonly health = new Health({ maxHp: PLAYER_CONFIG.maxHp, maxShield: Player.MAX_SHIELD });
   /** 死亡后剩余复活倒计时（ms） */
   private respawnTimer = 0;
   /** 出生点（复活用） */
@@ -174,6 +180,18 @@ export class Player extends Entity {
   grenadeCount = 0;
   /** 是否正握着手榴弹（此时左键=投掷，武器暂存在 heldWeapon 里不渲染） */
   grenadeMode = false;
+
+  // ---- 增益 / 超级战士 ----
+  /** 是否处于超级战士状态（光刀专属） */
+  private superMode = false;
+  /** 移速倍率（超级战士等增益） */
+  private buffSpeedMul = 1;
+  /** 跳跃初速度倍率（>1 = 跳得更高） */
+  private buffJumpMul = 1;
+  /** 武器槽是否锁定（超级战士不能换武器） */
+  weaponLocked = false;
+  /** 超级战士身体光晕颜色 */
+  private superGlowColor = 0xffe066;
   /**
    * 手部位置（visual 局部坐标）：由 StickmanRenderer 在瞄准时输出。
    * 武器从这里画、子弹从这里出，保证"枪口 = 子弹起点"。
@@ -260,6 +278,10 @@ export class Player extends Entity {
     this.glowGraphics = scene.add.graphics();
     this.glowGraphics.setBlendMode(Phaser.BlendModes.ADD);
     this.visual.add(this.glowGraphics);
+    // 身体光晕层（超级战士）：插到最底层，才能"从身体后面透出来"
+    this.bodyGlowGraphics = scene.add.graphics();
+    this.bodyGlowGraphics.setBlendMode(Phaser.BlendModes.ADD);
+    this.visual.addAt(this.bodyGlowGraphics, 0);
     this.container.add(this.visual);
 
     // 主碰撞体
@@ -397,22 +419,32 @@ export class Player extends Entity {
     const sameAttack = info.attackId !== undefined && info.attackId === this.lastHitAttackId;
     const bypass = info.ignoreInvuln === true || sameAttack;
 
-    const applied = this.health.applyDamage(info.amount, bypass);
-    if (applied <= 0) return 0;
+    const outcome = this.health.applyDamage(info.amount, bypass);
+    const hpApplied = outcome.hp;
+    const absorbed = outcome.shield;
+    if (hpApplied <= 0 && absorbed <= 0) return 0;
 
     if (info.attackId !== undefined) this.lastHitAttackId = info.attackId;
     this.lastDamageSourceId = info.sourceId;
-    // 广播：顿帧 / 音效 / 表现层都监听这个
-    // 第 5 个参数是"本次攻击的伤害值"（未按剩余血量截断）：
-    // 血量只剩 1 时挨 100 伤害，气泡应该显示 100 而不是 1
-    this.scene.events.emit(
-      'player-damaged',
-      this,
-      applied,
-      info.kind,
-      info.critical === true,
-      info.amount,
-    );
+
+    if (absorbed > 0) {
+      // 护盾吸收：拿出来血事件（顿帧/音效/火花），但不弹伤害数字
+      this.scene.events.emit('player-shielded', this, absorbed, info.kind);
+    }
+
+    if (hpApplied > 0) {
+      // 广播：顿帧 / 音效 / 表现层都监听这个
+      // 第 5 个参数是"本次攻击的伤害值"（未按剩余血量截断）：
+      // 血量只剩 1 时挨 100 伤害，气泡应该显示 100 而不是 1
+      this.scene.events.emit(
+        'player-damaged',
+        this,
+        hpApplied,
+        info.kind,
+        info.critical === true,
+        info.amount,
+      );
+    }
 
     // 击退 + 受击姿态（hit() 内部会广播 player-hit → 屏幕震动）
     // 高频低伤（激光 tick）用短后仰，否则会被持续锁在受击姿势里
@@ -423,7 +455,37 @@ export class Player extends Entity {
     if (!light) this.health.setInvulnerable(Player.HIT_INVULN_MS);
 
     if (this.health.isDead) this.die();
-    return applied;
+    return hpApplied;
+  }
+
+  // ==========================================================
+  //  增益 / 超级战士（光刀）
+  // ==========================================================
+
+  get isSuperMode(): boolean {
+    return this.superMode;
+  }
+
+  /** 拾取光刀 → 超级战士：叠加护盾 + 加速跳跃 + 身体发光，且锁定武器槽 */
+  enterSuperMode(cfg: SuperModeConfig): void {
+    if (this.superMode) return;
+    this.superMode = true;
+    this.weaponLocked = true;
+    this.buffSpeedMul = cfg.speedMul ?? 1.3;
+    this.buffJumpMul = cfg.jumpMul ?? 1.1;
+    if (cfg.glow) this.superGlowColor = parseColor(cfg.glow, this.superGlowColor);
+    this.health.addShield(cfg.shield ?? 0);
+    this.scene.events.emit('super-mode', this, true);
+  }
+
+  /** 退出超级战士（死亡/失去光刀时）*/ 
+  exitSuperMode(): void {
+    if (!this.superMode) return;
+    this.superMode = false;
+    this.weaponLocked = false;
+    this.buffSpeedMul = 1;
+    this.buffJumpMul = 1;
+    this.scene.events.emit('super-mode', this, false);
   }
 
   /** 治疗（医疗包用） */
@@ -465,6 +527,8 @@ export class Player extends Entity {
 
   private die(): void {
     this.grenadeMode = false;
+    // 死亡 → 超级战士解除（增益/武器锁找回，护盾随 health.reset() 清空）
+    this.exitSuperMode();
     // 死亡 → 武器消失（最初确认的规则；近战武器因为取消了耐久度，
     // 需要靠"死亡掉落"来维持流转，否则一旦拿到光刀就永久持有）
     if (this.heldWeapon) {
@@ -674,16 +738,18 @@ export class Player extends Entity {
     this.crouching = cmd.crouch;
     this.setCrouchBody(this.crouching);
     const speedMul = this.crouching ? 0.45 : 1;
+    const buffMul = this.buffSpeedMul;
+    const maxVx = PLAYER_CONFIG.maxHorizontalSpeed * buffMul;
     // 着地且无输入 → 精确归零（避免在斜面上因碰撞法线推力而缓慢滑落）
     const targetVx =
       cmd.moveX !== 0
-        ? cmd.moveX * PLAYER_CONFIG.moveSpeed * speedMul
+        ? cmd.moveX * PLAYER_CONFIG.moveSpeed * speedMul * buffMul
         : this.pushTimer > 0
           ? this.body.velocity.x * 0.94 // 后坐力击退中：只做轻微衰减，让它滑出去
           : this.isGrounded
             ? 0
             : this.body.velocity.x * 0.85;
-    const cappedVx = Phaser.Math.Clamp(targetVx, -PLAYER_CONFIG.maxHorizontalSpeed, PLAYER_CONFIG.maxHorizontalSpeed);
+    const cappedVx = Phaser.Math.Clamp(targetVx, -maxVx, maxVx);
     this.container.setVelocityX(cappedVx);
 
     // 走出低矮障碍（木板/薄板）：自动抬上台阶，而不是被卡住
@@ -693,7 +759,7 @@ export class Player extends Entity {
 
     // ===== 跳跃求解：缓冲 + 土狼时间同时满足才跳（一起消耗，防二段跳）=====
     if (this.jumpBufferTimer > 0 && this.coyoteTimer > 0) {
-      this.container.setVelocityY(PLAYER_CONFIG.jumpVelocity);
+      this.container.setVelocityY(PLAYER_CONFIG.jumpVelocity * this.buffJumpMul);
       this.jumpBufferTimer = 0;
       this.coyoteTimer = 0;
       this.jumpLockout = PLAYER_CONFIG.jumpLockout;
@@ -970,6 +1036,9 @@ export class Player extends Entity {
       y: StickmanRenderer.SHOULDER_Y + StickmanRenderer.SHOULDER_DY + StickmanRenderer.ARM_REACH,
     };
 
+    // 超级战士身体光晕（每帧重画，非超级状态时清空）
+    this.drawBodyGlow();
+
     // 光刀发光层（每帧重画；非光刀时清空）
     this.glowGraphics.clear();
     if (
@@ -1047,8 +1116,31 @@ export class Player extends Entity {
     super.destroy();
     this.scene.matter.world.off('collisionactive', this.handleCollisionActive, this);
     this.scene.matter.world.remove(this.body);
+    this.bodyGlowGraphics.destroy();
     this.glowGraphics.destroy();
     this.visual.destroy();
     this.container.destroy();
+  }
+
+  /**
+   * 身体光晕（超级战士）：多层同心圆 + ADD 混合 + 呼吸脉动。
+   * 画在 visual 最底层（角色背后），所以只能是“从身体边缘透出来的淡淡黄光”。
+   */
+  private drawBodyGlow(): void {
+    const g = this.bodyGlowGraphics;
+    g.clear();
+    if (!this.superMode || this.health.isDead) return;
+
+    // 呼吸脉动（1.4s 一轮）
+    const t = (this.scene.time.now % 1400) / 1400;
+    const pulse = 0.6 + 0.4 * Math.sin(t * Math.PI * 2);
+    const color = this.superGlowColor;
+
+    g.fillStyle(color, 0.06 * pulse);
+    g.fillCircle(0, -18, 66);
+    g.fillStyle(color, 0.09 * pulse);
+    g.fillCircle(0, -18, 46);
+    g.fillStyle(color, 0.13 * pulse);
+    g.fillCircle(0, -18, 28);
   }
 }

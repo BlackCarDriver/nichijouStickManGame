@@ -24,8 +24,12 @@ export class Hud {
   private static readonly BAR_H = 14;
   private static readonly MARGIN = 24;
   private static readonly TOP = 24;
+  /** 护盾条高度（血条下方的小进度条） */
+  private static readonly SHIELD_H = 5;
+  /** 护盾条与血条的间距 */
+  private static readonly SHIELD_GAP = 3;
   /** 武器信息行相对血条底部的偏移 */
-  private static readonly WEAPON_ROW_GAP = 22;
+  private static readonly WEAPON_ROW_GAP = 32;
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -58,7 +62,7 @@ export class Hud {
       nameText.setDepth(1001);
       this.labels.push(nameText);
 
-      const weaponText = this.scene.add.text(x, Hud.TOP + Hud.BAR_H + 6, '', {
+      const weaponText = this.scene.add.text(x, Hud.TOP + Hud.WEAPON_ROW_GAP - 4, '', {
         fontFamily: 'monospace',
         fontSize: '12px',
         color: '#c8d0dc',
@@ -67,7 +71,7 @@ export class Hud {
       weaponText.setDepth(1001);
       this.weaponLabels.push(weaponText);
 
-      const grenadeText = this.scene.add.text(x + 58, Hud.TOP + Hud.BAR_H + 24, '', {
+      const grenadeText = this.scene.add.text(x + 58, Hud.TOP + Hud.WEAPON_ROW_GAP + 14, '', {
         fontFamily: 'monospace',
         fontSize: '11px',
         color: '#9fe870',
@@ -108,11 +112,31 @@ export class Hud {
         this.g.fillRoundedRect(x - 2, y - 2, Hud.BAR_W + 4, Hud.BAR_H + 4, 4);
       }
 
+      // ---- 护盾条（血条下方的灰色小进度条）----
+      this.drawShieldBar(player, x, y + Hud.BAR_H + Hud.SHIELD_GAP);
+
       // ---- 武器信息 ----
       this.drawWeaponInfo(player, x, y + Hud.WEAPON_ROW_GAP - 4);
       // ---- 手榴弹背包 ----
       this.drawGrenadeInfo(player, x, y + Hud.WEAPON_ROW_GAP + 16);
     });
+  }
+
+  /** 护盾条：灰色小进度条，有护盾时才显示 */
+  private drawShieldBar(player: Player, x: number, y: number): void {
+    const shield = player.health.shield;
+    if (shield <= 0) return;
+    const ratio = Phaser.Math.Clamp(player.health.shieldRatio, 0, 1);
+
+    // 底槽
+    this.g.fillStyle(0x000000, 0.55);
+    this.g.fillRoundedRect(x - 2, y - 1, Hud.BAR_W + 4, Hud.SHIELD_H + 2, 3);
+    // 护盾本体（灰色；超级战士的护盾更亮一点）
+    const color = player.isSuperMode ? 0xf2e6a8 : 0x9aa5b1;
+    this.g.fillStyle(color, 1);
+    if (ratio > 0) {
+      this.g.fillRoundedRect(x, y, Hud.BAR_W * ratio, Hud.SHIELD_H, 2);
+    }
   }
 
   /** 手榴弹行：数量点 + 持握提示 */

@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "items": {
+    "medkit": {
+      "name": "医疗包",
+      "kind": "heal",
+      "heal": 40,
+      "maintain": 2,
+      "pickupRadius": 52,
+      "color": "#4ade80",
+      "glow": "#86efac"
+    },
+    "armor": {
+      "name": "防弹衣",
+      "kind": "shield",
+      "shield": 100,
+      "maintain": 1,
+      "pickupRadius": 52,
+      "color": "#9aa5b1",
+      "glow": "#c8d0dc"
+    }
+  }
+}

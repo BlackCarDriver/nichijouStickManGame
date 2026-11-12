@@ -156,6 +156,21 @@ export interface WeaponVisual {
   glow?: string;
 }
 
+/**
+ * 超级战士增益（拾取该武器时自动获得，不能换武器）。
+ * 目前只有光刀使用。
+ */
+export interface SuperModeConfig {
+  /** 拾取时获得的护盾值 */
+  shield: number;
+  /** 移速倍率（1 = 不变） */
+  speedMul?: number;
+  /** 跳跃初速度倍率（>1 = 跳得更高） */
+  jumpMul?: number;
+  /** 身体光晕颜色（hex） */
+  glow?: string;
+}
+
 export interface WeaponJson {
   name: string;
   attackMode: AttackMode;
@@ -178,6 +193,8 @@ export interface WeaponJson {
   sight?: SightConfig;
   /** 后坐力（不填 = 无后坐力，如近战武器） */
   recoil?: RecoilConfig;
+  /** 拾取后自动进入的超级战士状态（不填 = 普通武器） */
+  super?: SuperModeConfig;
   visual: WeaponVisual;
 }
 

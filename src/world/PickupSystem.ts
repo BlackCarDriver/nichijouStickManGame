@@ -5,14 +5,14 @@ import { drawHeldWeapon } from '../render/WeaponRenderer';
 import { raycast, getWorldBodies } from '../combat/Raycast';
 import type { FxSystem } from '../fx/FxSystem';
 import { GrenadeSystem } from '../combat/GrenadeSystem';
+import { getItem, itemPickupRadius, type ItemJson } from './ItemFormat';
+import { parseColor } from '../config/materials';
 
 /** 手榴弹背包上限（PickupSystem 与 GrenadeSystem 共用同一常量） */
 const GRENADE_MAX = GrenadeSystem.MAX;
 
-/** 地面上的一件武器（可拾取） */
-export interface WeaponPickup {
-  weaponId: string;
-  ammo: number;
+/** 地面上的一件掉落物（武器或道具）共有字段 */
+interface GroundPickupBase {
   x: number;
   y: number;
   vy: number;
@@ -21,6 +21,24 @@ export interface WeaponPickup {
   bob: number;
 }
 
+/** 地面上的武器（可拾取，占用武器槽） */
+export interface WeaponGroundPickup extends GroundPickupBase {
+  kind: 'weapon';
+  weaponId: string;
+  ammo: number;
+}
+
+/** 地面上的道具（医疗包/防弹衣，触碰即用，不占武器槽） */
+export interface ItemGroundPickup extends GroundPickupBase {
+  kind: 'item';
+  itemId: string;
+}
+
+export type GroundPickup = WeaponGroundPickup | ItemGroundPickup;
+
+/** 兼容旧名字（武器掉落物） */
+export type WeaponPickup = WeaponGroundPickup;
+
 export interface PickupSpawnOptions {
   ammo?: number;
   /** 是否从空中掉落（穿过物体落到地面） */
@@ -28,19 +46,24 @@ export interface PickupSpawnOptions {
 }
 
 /**
- * 武器拾取系统。
+ * 拾取系统（武器 + 道具）。
  *
- * 规则（需求）：
+ * 武器规则：
  * - 空手靠近 → **自动拾取**
  * - 已有武器 + 靠近 + 按替换键 → **替换**（旧武器留在原地）
  * - 武器可从空中被拾取（下落过程中也能捡）
- * - 弹药打空的武器会被丢在地上，仍可被捡起（弹匣为 0，捡起后无法开火直到 W5+ 补弹）
+ * - 超级战士状态（光刀）→ **武器槽锁死**，不能替换
+ *
+ * 道具规则：
+ * - 医疗包：**非满血**时靠近 → 自动拾取并当场使用（回血）
+ * - 防弹衣：**护盾未满**时靠近 → 自动拾取并获得护盾
+ * - 不需要按键，也不占用武器槽
  */
 export class PickupSystem {
   private readonly scene: Phaser.Scene;
   private readonly bodyToPlayer: Map<number, Player>;
   private readonly fx: FxSystem;
-  private items: WeaponPickup[] = [];
+  private items: GroundPickup[] = [];
 
   /** 自动拾取半径 */
   private static readonly AUTO_RADIUS = 46;
@@ -59,31 +82,62 @@ export class PickupSystem {
     this.fx = fx;
   }
 
+  /** 地图上**武器**的数量（DropSystem 维持数量用，不含道具） */
   get count(): number {
-    return this.items.length;
+    let n = 0;
+    for (const item of this.items) if (item.kind === 'weapon') n++;
+    return n;
   }
 
-  get list(): readonly WeaponPickup[] {
+  /** 地图上某种**道具**的数量（ItemDropSystem 维持数量用） */
+  itemCount(itemId: string): number {
+    let n = 0;
+    for (const item of this.items) if (item.kind === 'item' && item.itemId === itemId) n++;
+    return n;
+  }
+
+  /** 所有掉落物（含武器与道具） */
+  get list(): readonly GroundPickup[] {
     return this.items;
   }
 
   /** 生成一件武器掉落物 */
-  spawn(weaponId: string, x: number, y: number, options: PickupSpawnOptions = {}): WeaponPickup | null {
+  spawn(weaponId: string, x: number, y: number, options: PickupSpawnOptions = {}): WeaponGroundPickup | null {
     const weapon = getWeapon(weaponId);
     if (!weapon) return null;
 
-    const gfx = this.scene.add.graphics();
-    gfx.setDepth(820);
-    const item: WeaponPickup = {
+    const item: WeaponGroundPickup = {
+      kind: 'weapon',
       weaponId,
       ammo: options.ammo ?? weapon.ammo,
       x,
       y,
       vy: 0,
       falling: options.falling ?? false,
-      gfx,
+      gfx: this.scene.add.graphics(),
       bob: Math.random() * Math.PI * 2,
     };
+    item.gfx.setDepth(820);
+    this.items.push(item);
+    this.redraw(item);
+    return item;
+  }
+
+  /** 生成一件道具掉落物（医疗包/防弹衣） */
+  spawnItem(itemId: string, x: number, y: number, options: PickupSpawnOptions = {}): ItemGroundPickup | null {
+    if (!getItem(itemId)) return null;
+
+    const item: ItemGroundPickup = {
+      kind: 'item',
+      itemId,
+      x,
+      y,
+      vy: 0,
+      falling: options.falling ?? false,
+      gfx: this.scene.add.graphics(),
+      bob: Math.random() * Math.PI * 2,
+    };
+    item.gfx.setDepth(820);
     this.items.push(item);
     this.redraw(item);
     return item;
@@ -158,6 +212,16 @@ export class PickupSystem {
       for (const item of [...this.items]) {
         const dist = Phaser.Math.Distance.Between(player.container.x, player.container.y, item.x, item.y);
 
+        if (item.kind === 'item') {
+          if (this.tryPickItem(player, item, dist)) {
+            this.remove(item);
+            consumed.add(player.id);
+            break;
+          }
+          continue;
+        }
+
+        // ---- 武器 ----
         // 手榴弹是道具：进背包，不占用/替换武器槽
         if (item.weaponId === 'grenade') {
           if (dist <= PickupSystem.AUTO_RADIUS * 1.4 && player.grenadeCount < GRENADE_MAX) {
@@ -181,7 +245,8 @@ export class PickupSystem {
         }
 
         // 已有武器 + 按替换键 → 替换（旧武器留在原地）
-        if (holding && wantSwap && dist <= PickupSystem.SWAP_RADIUS) {
+        // 超级战士（光刀）锁定武器槽 → 不能替换
+        if (holding && wantSwap && !player.weaponLocked && dist <= PickupSystem.SWAP_RADIUS) {
           const old = holding;
           this.give(player, item);
           this.remove(item);
@@ -197,8 +262,38 @@ export class PickupSystem {
     return consumed;
   }
 
-  /** 把掉落物塞给玩家 */
-  private give(player: Player, item: WeaponPickup): void {
+  /**
+   * 尝试拾取一件道具。返回 true = 已消耗（从地上移除）。
+   * 医疗包/防弹衣都是"触碰即用"，但不满足条件时留在地上。
+   */
+  private tryPickItem(player: Player, item: ItemGroundPickup, dist: number): boolean {
+    const def = getItem(item.itemId);
+    if (!def) return true; // 未知道具：直接清掉，避免残留
+    if (dist > itemPickupRadius(def)) return false;
+
+    if (def.kind === 'heal') {
+      // 满血不捡（留在地上给缺血的人）
+      if (player.health.hp >= player.health.maxHp) return false;
+      const healed = player.heal(def.heal ?? 0);
+      if (healed <= 0) return false;
+      this.fx.burst({ x: item.x, y: item.y }, parseColor(def.glow ?? def.color));
+      this.scene.events.emit('item-used', player, 'medkit', healed);
+      this.scene.events.emit('sfx', 'pickup');
+      return true;
+    }
+
+    // shield（防弹衣）
+    if (player.health.shield >= player.health.maxShield) return false;
+    const added = player.health.addShield(def.shield ?? 0);
+    if (added <= 0) return false;
+    this.fx.burst({ x: item.x, y: item.y }, parseColor(def.glow ?? def.color));
+    this.scene.events.emit('item-used', player, 'armor', added);
+    this.scene.events.emit('sfx', 'pickup');
+    return true;
+  }
+
+  /** 把武器掉落物塞给玩家 */
+  private give(player: Player, item: WeaponGroundPickup): void {
     player.heldWeapon = createHeldWeapon(item.weaponId) ?? null;
     if (player.heldWeapon) {
       player.heldWeapon.ammo = item.ammo;
@@ -208,20 +303,26 @@ export class PickupSystem {
     this.scene.events.emit('sfx', 'pickup');
   }
 
-  private remove(item: WeaponPickup): void {
+  private remove(item: GroundPickup): void {
     item.gfx.destroy();
     const idx = this.items.indexOf(item);
     if (idx >= 0) this.items.splice(idx, 1);
   }
 
-  /** 重画掉落物：地面上的武器外形 + 浮动 + 光晕 */
-  private redraw(item: WeaponPickup): void {
-    const weapon = getWeapon(item.weaponId);
-    if (!weapon) return;
+  /** 重画掉落物：浮动 + 光晕 + 外形 */
+  private redraw(item: GroundPickup): void {
     const g = item.gfx;
     g.clear();
     const bobY = item.falling ? 0 : Math.sin(item.bob) * 3;
     g.setPosition(item.x, item.y + bobY);
+
+    if (item.kind === 'item') {
+      this.redrawItem(g, item);
+      return;
+    }
+
+    const weapon = getWeapon(item.weaponId);
+    if (!weapon) return;
 
     // 光晕
     g.fillStyle(0x9ad0ff, item.falling ? 0.2 : 0.14);
@@ -241,6 +342,42 @@ export class PickupSystem {
     if (item.ammo === 0) {
       g.fillStyle(0x666666, 0.9);
       g.fillCircle(0, 14, 3);
+    }
+  }
+
+  /** 道具外形：医疗包 = 白底绿十字；防弹衣 = 灰色护盾 */
+  private redrawItem(g: Phaser.GameObjects.Graphics, item: ItemGroundPickup): void {
+    const def: ItemJson | undefined = getItem(item.itemId);
+    if (!def) return;
+    const color = parseColor(def.color);
+    const glow = parseColor(def.glow ?? def.color);
+
+    // 光晕
+    g.fillStyle(glow, item.falling ? 0.22 : 0.16);
+    g.fillCircle(0, 0, 17);
+
+    if (def.kind === 'heal') {
+      // 药箱：白底 + 绿十字
+      g.fillStyle(0xf2f5f7, 1);
+      g.fillRoundedRect(-11, -9, 22, 18, 3);
+      g.lineStyle(1.5, color, 1);
+      g.strokeRoundedRect(-11, -9, 22, 18, 3);
+      g.fillStyle(color, 1);
+      g.fillRect(-2.5, -6, 5, 12);
+      g.fillRect(-6, -2.5, 12, 5);
+    } else {
+      // 护盾：上平下尖
+      g.fillStyle(color, 1);
+      g.beginPath();
+      g.moveTo(-10, -10);
+      g.lineTo(10, -10);
+      g.lineTo(10, 2);
+      g.lineTo(0, 11);
+      g.lineTo(-10, 2);
+      g.closePath();
+      g.fillPath();
+      g.lineStyle(1.5, 0xffffff, 0.55);
+      g.strokePath();
     }
   }
 

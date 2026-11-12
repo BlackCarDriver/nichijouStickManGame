@@ -83,13 +83,19 @@ function main(): void {
   }
   errorCount += printIssues(`data/prefabs  (${prefabs.length} 个)`, prefabIssues);
 
+  // ---- items（道具表：用于校验 map.items[].type）----
+  const itemsPath = join(DATA, 'items.json');
+  const itemIds = existsSync(itemsPath)
+    ? Object.keys((readJson<{ items?: Record<string, unknown> }>(itemsPath).items ?? {}))
+    : [];
+
   // ---- maps ----
   const mapDir = join(DATA, 'maps');
   const mapFiles = existsSync(mapDir) ? readdirSync(mapDir).filter((f) => f.endsWith('.json')).sort() : [];
   const mapIssues: Issue[] = [];
   for (const file of mapFiles) {
     const raw = readJson<unknown>(join(mapDir, file));
-    const ctx = makeContext(materialIds, prefabs);
+    const ctx = makeContext(materialIds, prefabs, itemIds);
     mapIssues.push(...validateMap(raw, ctx).map((i) => ({ ...i, path: `maps/${file} → ${i.path}` })));
   }
   errorCount += printIssues(`data/maps  (${mapFiles.length} 张地图)`, mapIssues);
