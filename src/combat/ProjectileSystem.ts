@@ -7,6 +7,8 @@ import type { Player } from '../entities/Player';
 import { raycast, getWorldBodies } from './Raycast';
 import type { RayHit } from './Raycast';
 import type { BulletConfig, ExplosionConfig } from './WeaponFormat';
+import { getWeapon } from './WeaponFormat';
+import { drawHeldWeapon } from '../render/WeaponRenderer';
 import { resolveGravity } from './WeaponFormat';
 import type { ExplosionRequest } from './ExplosionSystem';
 
@@ -72,6 +74,8 @@ interface Projectile {
   /** 当前单位飞行方向（渲染拖尾用） */
   dirX: number;
   dirY: number;
+  /** 投掷物的独立视觉（用真实武器模型绘制，跟随飞行方向旋转） */
+  gfx?: Phaser.GameObjects.Graphics;
 }
 
 /** 插在目标上的投掷物（停留一段时间后消失） */
@@ -129,7 +133,8 @@ export class ProjectileSystem {
 
   spawn(options: ProjectileSpawnOptions): void {
     if (this.projectiles.length >= ProjectileSystem.MAX_PROJECTILES) {
-      this.projectiles.shift();
+      const dropped = this.projectiles.shift();
+      dropped?.gfx?.destroy();
     }
     const { bullet } = options;
     this.projectiles.push({
@@ -160,6 +165,24 @@ export class ProjectileSystem {
       dirX: Math.cos(options.angle),
       dirY: Math.sin(options.angle),
     });
+
+    // 投掷武器：用与手持完全相同的模型渲染（不是画一根相似颜色的长条）
+    const spawned = this.projectiles[this.projectiles.length - 1];
+    if (bullet.kind === 'thrown') {
+      const visual = getWeapon(options.weaponId)?.visual;
+      if (visual) {
+        const gfx = this.scene.add.graphics();
+        gfx.setDepth(852);
+        // 在局部把武器画成"朝 +x 方向、以自身中心为原点"，之后靠 position/rotation 跟随飞行
+        drawHeldWeapon(gfx, {
+          visual,
+          facing: 1,
+          aim: 0,
+          hand: { x: -visual.length / 2, y: 0 },
+        });
+        spawned.gfx = gfx;
+      }
+    }
   }
 
   /** 每帧推进所有子弹并重绘 */
@@ -169,6 +192,9 @@ export class ProjectileSystem {
         if (!p.alive) continue;
         this.step(p, deltaMs);
         if (p.alive) this.emitSmoke(p, deltaMs);
+      }
+      for (const p of this.projectiles) {
+        if (!p.alive) p.gfx?.destroy();
       }
       this.projectiles = this.projectiles.filter((p) => p.alive);
     }
@@ -459,22 +485,12 @@ export class ProjectileSystem {
     for (const p of this.projectiles) {
       const { bullet } = p;
 
-      // 投掷武器（匕首/长矛）：画出整把武器，而不是一个点
+      // 投掷武器用独立 Graphics（真实武器模型），这里只同步位置与旋转
       if (bullet.kind === 'thrown') {
-        const len = Math.max(12, bullet.trail);
-        const dirX = p.dirX;
-        const dirY = p.dirY;
-        // 尾 → 头
-        this.g.lineStyle(Math.max(2, bullet.size), p.color, 1);
-        this.g.lineBetween(p.x - dirX * len, p.y - dirY * len, p.x, p.y);
-        // 高光刃口
-        this.g.lineStyle(Math.max(1, bullet.size * 0.35), 0xffffff, 0.55);
-        this.g.lineBetween(
-          p.x - dirX * len * 0.55,
-          p.y - dirY * len * 0.55,
-          p.x,
-          p.y,
-        );
+        if (p.gfx) {
+          p.gfx.setPosition(p.x, p.y);
+          p.gfx.setRotation(Math.atan2(p.dirY, p.dirX));
+        }
         continue;
       }
 
@@ -511,6 +527,7 @@ export class ProjectileSystem {
   }
 
   destroy(): void {
+    for (const p of this.projectiles) p.gfx?.destroy();
     this.projectiles = [];
     this.stuck = [];
     this.g.destroy();

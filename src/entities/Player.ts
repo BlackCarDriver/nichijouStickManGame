@@ -65,6 +65,36 @@ export const PLAYER_CONFIG = {
   spawnInvulnMs: 900,
 } as const;
 
+/**
+ * 挥砍的角度曲线（弧度，叠加在瞄准角上）。
+ * 按 spine-animation 的阶段划分：**预备 → 出击 → 跟随收势**，
+ * 而不是一条匀速扫过去的直线（那样读不出"发力"）。
+ *   - 预备 0~18%：向后上方抬刀（反向蓄力，幅度小、时间短）
+ *   - 出击 18~55%：快速扫下（ease-out，冲击段加速明显）
+ *   - 收势 55~100%：缓慢归位（跟随动作）
+ */
+function slashSwingCurve(p: number): number {
+  const WINDUP_START = 0.5;
+  const WINDUP_END = -0.6;
+  const SWEEP_END = 0.75;
+
+  if (p < 0.18) {
+    const t = p / 0.18;
+    // 快速抬到预备位（ease-out）
+    const e = 1 - Math.pow(1 - t, 2);
+    return WINDUP_START + (WINDUP_END - WINDUP_START) * e;
+  }
+  if (p < 0.55) {
+    const t = (p - 0.18) / 0.37;
+    // 出击：先慢后快再略缓（力量的"甩"感）
+    const e = t * t * (3 - 2 * t);
+    return WINDUP_END + (SWEEP_END - WINDUP_END) * e;
+  }
+  const t = (p - 0.55) / 0.45;
+  // 收势：指数归位，末端几乎不动
+  return SWEEP_END * (1 - (1 - Math.pow(1 - t, 3)));
+}
+
 /** matter.add.gameObject 返回的容器（运行时带 Matter body 与组件方法） */
 interface MatterContainer extends Phaser.GameObjects.Container {
   body: MatterJS.BodyType;
@@ -492,9 +522,7 @@ export class Player extends Entity {
    */
   get slashOffset(): number {
     if (this.attack !== 'slash') return 0;
-    const p = this.attackProgress;
-    const eased = 1 - Math.pow(1 - p, 2); // 前段快、后段收
-    return -0.95 + 1.7 * eased;
+    return slashSwingCurve(this.attackProgress);
   }
 
   /** 肩部位置（世界坐标）：瞄准角计算与枪口起点基准 */
@@ -790,6 +818,12 @@ export class Player extends Entity {
     // 动作细节计时器递减（spine-animation：冲击吸收/预备都需要“衰减恢复”）
     this.landImpact = Math.max(0, this.landImpact - deltaMs);
     this.jumpAnticipation = Math.max(0, this.jumpAnticipation - deltaMs);
+
+    // 攻击动作计时器（没有这一行 → attackProgress 恒为 0，姿势永远不显示）
+    if (this.attackTimer > 0) {
+      this.attackTimer = Math.max(0, this.attackTimer - deltaMs);
+      if (this.attackTimer === 0) this.attackKind = null;
+    }
 
     if (this.hitTimer > 0) {
       this.hitTimer -= deltaMs;

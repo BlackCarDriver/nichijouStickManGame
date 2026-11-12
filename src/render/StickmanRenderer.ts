@@ -233,48 +233,78 @@ export class StickmanRenderer {
   // ---------------- 近战：突刺 / 挥砍 ----------------
 
   /**
-   * 突刺（匕首/长矛）：弓步前压 + 后腿蹬直 + 后臂后收。
+   * 三段式动作曲线（spine-animation：预备 → 出击 → 跟随/收势）。
+   * 返回 -0.35~1 的"发力值"：负值=反向预备，1=打到底。
+   *
+   * 为什么不用简单的 0→1→0 正弦：正弦没有"蓄力"和"急停"，
+   * 读起来像慢悠悠地挥一下，没有打击感。
+   */
+  private static strikeCurve(p: number, windup = 0.2, strikeEnd = 0.5): number {
+    if (p < windup) {
+      // 预备：反向蓄力（值到 -0.35）
+      const t = p / windup;
+      return -0.35 * (1 - Math.pow(1 - t, 2));
+    }
+    if (p < strikeEnd) {
+      // 出击：从 -0.35 冲到 1（先慢后快，冲击段加速）
+      const t = (p - windup) / (strikeEnd - windup);
+      const e = t * t * (3 - 2 * t);
+      return -0.35 + 1.35 * e;
+    }
+    // 收势：从 1 缓回 0
+    const t = (p - strikeEnd) / Math.max(0.01, 1 - strikeEnd);
+    return 1 - Math.pow(t, 0.6);
+  }
+
+  /**
+   * 突刺（匕首/长矛）：**预备 → 弓步突进 → 收势**。
    * 持械的前臂由 aim 覆盖，始终指向准星，所以"刺"的方向与瞄准一致。
    */
   private static drawThrust(g: Phaser.GameObjects.Graphics, o: StickmanDrawOptions): void {
     const p = Math.min(1, Math.max(0, o.attackProgress ?? 0));
-    // 0→1→0：前段猛地前压，后段回收
-    const ext = Math.sin(Math.min(1, p * 1.15) * Math.PI);
+    const k = this.strikeCurve(p); // -0.35(蓄力) → 1(打到底) → 0
     const groundY = GROUND_OFFSET;
-    const hip: Vec2 = { x: 4 + 9 * ext, y: this.HIP_Y + 3 + 3 * ext };
 
-    // 前腿弓步迈出，后腿蹬直
-    this.drawLegIK(g, o.color, hip, { x: 14 + 14 * ext, y: groundY });
-    this.drawLegIK(g, o.color, hip, { x: -12 - 10 * ext, y: groundY });
+    // 髋部：蓄力时后坐，出击时前压
+    const hip: Vec2 = { x: -3 + 13 * k, y: this.HIP_Y + 3 + 3 * Math.max(0, k) };
 
-    // 躯干前压
-    const shoulder = this.drawTorso(g, o.color, hip, 10 + 12 * ext, 3);
-    this.drawHead(g, o.color, shoulder, 12 + 12 * ext, 0);
+    // 前腿弓步迈出；蓄力时后腿略收（重心后压）
+    this.drawLegIK(g, o.color, hip, { x: 10 + 18 * k, y: groundY });
+    this.drawLegIK(g, o.color, hip, { x: -12 - 12 * Math.max(0, k) + 4 * Math.min(0, k), y: groundY });
 
-    // 前臂（aim 覆盖）向前刺，后臂后收保持平衡
+    // 躯干：前压（出击）/ 后仰（蓄力）
+    const shoulder = this.drawTorso(g, o.color, hip, 6 + 16 * k, 3);
+    this.drawHead(g, o.color, shoulder, 8 + 14 * k, 0);
+
+    // 后臂：与出击反向摆动（配重，跟随动作）
+    this.drawArmFK(g, o, shoulder, -1, -30 - 34 * k, 30);
+    // 前臂（aim 覆盖时会被替换成"指向准星"）
     this.drawArmFK(g, o, shoulder, 1, 60, 8);
-    this.drawArmFK(g, o, shoulder, -1, -34 - 26 * ext, 28);
   }
 
   /**
    * 挥砍（光刀）：双腿开立稳住重心 + 躯干随挥砍扭转。
-   * 手臂扫过由 aim + slashOffset 驱动，所以整条臂与刀身一起画弧。
+   * 手臂扫过由 aim + slashOffset 驱动（Player 的 slashSwingCurve 已含预备/出击/收势），
+   * 这里让身体跟着走：出击瞬间前倾下沉最明显。
    */
   private static drawSlash(g: Phaser.GameObjects.Graphics, o: StickmanDrawOptions): void {
     const p = Math.min(1, Math.max(0, o.attackProgress ?? 0));
-    const swing = Math.sin(Math.min(1, p * 1.2) * Math.PI);
+    const power = this.strikeCurve(p, 0.18, 0.55);
     const groundY = GROUND_OFFSET;
-    const hip: Vec2 = { x: 2 - 4 * swing, y: this.HIP_Y + 4 };
+    const hip: Vec2 = { x: 2 - 5 * power, y: this.HIP_Y + 4 + 2 * Math.max(0, power) };
 
-    this.drawLegIK(g, o.color, hip, { x: -15, y: groundY });
-    this.drawLegIK(g, o.color, hip, { x: 15, y: groundY });
+    // 双腿开立（发力时前腿吃重，后腿撑住）
+    this.drawLegIK(g, o.color, hip, { x: -16 - 4 * Math.max(0, power), y: groundY });
+    this.drawLegIK(g, o.color, hip, { x: 16 + 6 * power, y: groundY });
 
-    // 躯干前倾 + 侧向扭转（跟着挥砍方向走）
-    const shoulder = this.drawTorso(g, o.color, hip, 8 + 7 * swing, -8 * swing);
-    this.drawHead(g, o.color, shoulder, 8 + 7 * swing, 0);
+    // 躯干：前倾 + 侧向扭转（跟随挥砍方向）
+    const shoulder = this.drawTorso(g, o.color, hip, 6 + 10 * power, -10 * power);
+    this.drawHead(g, o.color, shoulder, 7 + 9 * power, 0);
 
+    // 后臂随挥砍甩开
+    this.drawArmFK(g, o, shoulder, -1, -16 - 26 * power, 34);
+    // 前臂由 aim 覆盖（跟着刀扫）
     this.drawArmFK(g, o, shoulder, 1, 40, 10);
-    this.drawArmFK(g, o, shoulder, -1, -18 - 20 * swing, 32);
   }
 
   // ---------------- 踢腿 ----------------

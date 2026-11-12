@@ -27,6 +27,7 @@ import { AimSightSystem } from '../combat/AimSightSystem';
 import { GrenadeSystem } from '../combat/GrenadeSystem';
 import { FxSystem } from '../fx/FxSystem';
 import { Hud } from '../ui/Hud';
+import { DamageNumbers } from '../ui/DamageNumbers';
 
 const PLAYER_COLORS = [0xe74c3c, 0x3498db];
 /** 空的"按下集合"（自动拾取不需要按键） */
@@ -78,6 +79,7 @@ export class GameScene extends Phaser.Scene {
   private explosion!: ExplosionSystem;
   private fx!: FxSystem;
   private hud!: Hud;
+  private damageNumbers!: DamageNumbers;
   private readonly bodyToPlayer = new Map<number, Player>();
   private aimOwner: 0 | 1 = 0;
 
@@ -177,6 +179,7 @@ export class GameScene extends Phaser.Scene {
     this.fragments = new FragmentSystem(this);
     this.impactDamage = new ImpactDamageSystem(this, this.damageSystem, this.worldRegistry);
 
+    this.damageNumbers = new DamageNumbers(this);
     this.hud = new Hud(this);
     this.hud.bind(this.players);
     this.hud.bindKills(this.kills);
@@ -246,6 +249,8 @@ export class GameScene extends Phaser.Scene {
         this.hitStop.trigger(HitStop.durationForDamage(amount));
       }
       this.audio.play('hit');
+      // 伤害气泡（短时间内的连续伤害会合并成一个数字）
+      this.damageNumbers.show(_player, amount, { crit: amount >= 40 });
     };
     // 死亡 → 音效 + 击杀计数（记录凶手）
     const onPlayerDied = (victim: Player, killerId?: number): void => {
@@ -294,6 +299,7 @@ export class GameScene extends Phaser.Scene {
       this.impactDamage.destroy();
       this.weaponSystem.destroy();
       this.fx.destroy();
+      this.damageNumbers.destroy();
       this.hud.destroy();
     });
 
@@ -356,6 +362,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.gameFeel.update(this.cameras.main, this.cameraRig.shakeOffset, delta);
     this.fx.update(delta);
+    this.damageNumbers.update(delta);
     this.hud.update();
   }
 
