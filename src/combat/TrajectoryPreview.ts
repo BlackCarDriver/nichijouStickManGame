@@ -31,6 +31,11 @@ export class TrajectoryPreview {
   private static readonly DOT_SCROLL = 55;
   private static readonly SIM_DT = 1 / 60;
   private static readonly SIM_MAX_STEPS = 240;
+  /**
+   * 预览只画前面这么长的一段（px）。
+   * 投掷类武器不再显示完整落点 —— 全画出来就没有"预判"的乐趣了。
+   */
+  static readonly PREVIEW_LENGTH = 260;
 
   constructor(scene: Phaser.Scene, depth = 828) {
     this.scene = scene;
@@ -48,13 +53,18 @@ export class TrajectoryPreview {
     this.g.clear();
   }
 
-  /** 模拟一段抛物线弹道 */
+  /**
+   * 模拟一段抛物线弹道。
+   * @param maxPathLength 只模拟这么长的路径（px）。用于"只显示前一段"预览：
+   *        完整抛物线会把落点也画出来，投掷时反而没有悬念。
+   */
   compute(
     from: Vec2,
     aim: number,
     speed: number,
     range: number,
     ignore: Array<MatterJS.BodyType | undefined | null>,
+    maxPathLength?: number,
   ): PreviewPath {
     const bodies = getWorldBodies(this.scene);
     let x = from.x;
@@ -89,6 +99,7 @@ export class TrajectoryPreview {
       traveled += stepLen;
       points.push({ x, y });
       if (traveled >= range) break;
+      if (maxPathLength !== undefined && traveled >= maxPathLength) break;
     }
 
     return { points, hit: null };

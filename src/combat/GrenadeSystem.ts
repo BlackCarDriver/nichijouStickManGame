@@ -96,7 +96,14 @@ export class GrenadeSystem {
       const weapon = getWeapon('grenade');
       const cfg = weapon?.throw;
       if (!weapon || !cfg) continue;
-      const path = this.preview.compute(player.muzzle, player.aim, cfg.speed, cfg.range, [player.body]);
+      const path = this.preview.compute(
+        player.muzzle,
+        player.aim,
+        cfg.speed,
+        cfg.range,
+        [player.body],
+        TrajectoryPreview.PREVIEW_LENGTH,
+      );
       this.preview.drawPath(path, weapon.visual.color, 1);
     }
   }

@@ -459,6 +459,13 @@ export class Player extends Entity {
 
   private die(): void {
     this.grenadeMode = false;
+    // 死亡 → 武器消失（最初确认的规则；近战武器因为取消了耐久度，
+    // 需要靠"死亡掉落"来维持流转，否则一旦拿到光刀就永久持有）
+    if (this.heldWeapon) {
+      const id = this.heldWeapon.id;
+      this.heldWeapon = null;
+      this.scene.events.emit('weapon-lost', this, id, 'death', { ammo: 0 });
+    }
     this.respawnTimer = PLAYER_CONFIG.respawnDelayMs;
     this.scene.events.emit('player-died', this, this.lastDamageSourceId);
   }

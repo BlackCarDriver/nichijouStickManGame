@@ -159,6 +159,7 @@ export class WeaponSystem {
       cfg.speed,
       cfg.range,
       [player.body],
+      TrajectoryPreview.PREVIEW_LENGTH,
     );
     preview.drawPath(path, weapon.visual.color, 0.9);
   }

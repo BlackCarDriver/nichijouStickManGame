@@ -222,7 +222,7 @@ export class GameScene extends Phaser.Scene {
     const onWeaponLost = (
       _player: Player,
       _weaponId: string,
-      _reason: 'empty' | 'thrown',
+      _reason: 'empty' | 'thrown' | 'death',
       _snapshot?: { ammo: number },
     ): void => {
       // 目前只做表现层反馈（在 WeaponSystem 里已播放特效）
