@@ -127,8 +127,8 @@
         "shrapnel": {
           "count": 20,
           "damage": 9,
-          "speed": 760,
-          "range": 380
+          "speed": 1100,
+          "range": 220
         }
       },
       "recoil": {
@@ -336,8 +336,8 @@
         "shrapnel": {
           "count": 20,
           "damage": 9,
-          "speed": 760,
-          "range": 380
+          "speed": 1100,
+          "range": 220
         }
       },
       "recoil": {
