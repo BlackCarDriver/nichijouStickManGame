@@ -21,7 +21,7 @@ export class DropSystem {
   /** 补给检查间隔（ms） */
   private static readonly CHECK_INTERVAL = 1400;
   /** 开场立刻投放的数量（避免玩家开局没枪） */
-  private static readonly INITIAL_COUNT = 2;
+  private static readonly INITIAL_COUNT = 3;
 
   private static readonly DROP_POOL = [
     'pistol',

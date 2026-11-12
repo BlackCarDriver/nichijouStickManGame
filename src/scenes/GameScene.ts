@@ -26,8 +26,6 @@ import { Hud } from '../ui/Hud';
 const PLAYER_COLORS = [0xe74c3c, 0x3498db];
 /** 镜头缩放（固定，聚焦单角色时画面清晰） */
 const CAMERA_ZOOM = 0.9;
-/** 出生时默认装备的武器 */
-const STARTING_WEAPON = 'pistol';
 
 /** 启动场景时可传入的数据（编辑器 Play test 用） */
 export interface GameSceneData {
@@ -151,9 +149,7 @@ export class GameScene extends Phaser.Scene {
 
     this.hud = new Hud(this);
     this.hud.bind(this.players);
-    for (const player of this.players) {
-      this.weaponSystem.equip(player, STARTING_WEAPON);
-    }
+    // 出生空手：所有武器一律靠捡（天降武器 + 场上掉落物）
 
     const cam = this.cameras.main;
     cam.setBackgroundColor('#1a1a2e');
@@ -219,13 +215,6 @@ export class GameScene extends Phaser.Scene {
 
     this.players[0]?.update(cmd1, delta);
     this.players[1]?.update(cmd2, delta);
-
-    // 武器切换（数字键 → 当前操作中的玩家）
-    const switchTo = this.inputManager.readWeaponSwitch();
-    if (switchTo !== undefined) {
-      const owner = this.players[this.aimOwner];
-      if (owner) this.weaponSystem.equip(owner, switchTo);
-    }
 
     this.weaponSystem.update(delta);
     this.handleAttacks(cmds);

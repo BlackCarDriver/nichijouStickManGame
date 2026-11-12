@@ -17,6 +17,14 @@ export interface AttackInput {
   attackHeld: boolean;
 }
 
+/** 空手出拳（无武器时的基础攻击） */
+const PUNCH = {
+  reach: 46,
+  damage: 7,
+  knockback: 4,
+  cooldownSec: 0.36,
+} as const;
+
 const KICK = {
   range: 76,
   damage: 12,
@@ -91,8 +99,16 @@ export class WeaponSystem {
    * 全自动武器在按住时持续开火；单发武器只在按下的那一帧开火。
    */
   tryAttack(player: Player, input: AttackInput): boolean {
+    if (player.health.isDead) return false;
+
+    // 空手 → 出拳（单发，不能长按连打）
     const held = player.heldWeapon;
-    if (!held || player.health.isDead) return false;
+    if (!held) {
+      if (!input.attack) return false;
+      if (this.cooldowns.has(player.id)) return false;
+      this.cooldowns.set(player.id, PUNCH.cooldownSec);
+      return this.punch(player);
+    }
 
     const weapon = getWeapon(held.id);
     if (!weapon) return false;
@@ -148,6 +164,49 @@ export class WeaponSystem {
       return false;
     }
     return this.kick(player);
+  }
+
+  /** 空手出拳：手部向前的短射线，伤害低但能用 */
+  private punch(player: Player): boolean {
+    player.setAttack('stab', 150);
+    const from = player.handWorld;
+    const aim = player.aim;
+    const dir = { x: Math.cos(aim), y: Math.sin(aim) };
+
+    const hits = raycast(getWorldBodies(this.scene), from, dir, PUNCH.reach, {
+      ignore: [player.body],
+      maxHits: 1,
+    });
+    const hit = hits[0];
+    if (!hit) return true;
+
+    const knockback = { x: dir.x * PUNCH.knockback, y: dir.y * PUNCH.knockback * 0.4 - 1.5 };
+    const target = this.bodyToPlayer.get(hit.body.id);
+    if (target) {
+      this.damageSystem.damagePlayer(target, {
+        amount: PUNCH.damage,
+        kind: 'melee',
+        sourceId: player.id,
+        point: hit.point,
+        normal: hit.normal,
+        knockback,
+      });
+      this.fx.hitSpark(hit.point, hit.normal, 0xffffff);
+      return true;
+    }
+
+    const runtime = this.registry.resolve(hit.body);
+    if (runtime) {
+      this.damageSystem.damageObject(runtime, {
+        amount: PUNCH.damage,
+        kind: 'melee',
+        sourceId: player.id,
+        point: hit.point,
+        normal: hit.normal,
+      });
+      this.fx.hitSpark(hit.point, hit.normal, 0xffffff);
+    }
+    return true;
   }
 
   /** 踢：把敌人弹飞（伤害较小，击退很大），同时推开面前的可推物体 */
