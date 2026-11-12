@@ -4,6 +4,8 @@ import type { InputCommand } from '../core/InputCommand';
 import { Player } from '../entities/Player';
 import { CameraRig } from '../camera/CameraRig';
 import { GameFeel } from '../feel/GameFeel';
+import { HitStop } from '../feel/HitStop';
+import { AudioSystem } from '../audio/AudioSystem';
 import { getDefaultMap, getPrefabTable } from '../map/MapRegistry';
 import type { PrefabData } from '../map/PrefabFormat';
 import type { MapData } from '../map/MapFormat';
@@ -55,6 +57,12 @@ export class GameScene extends Phaser.Scene {
   private cameraTarget: Player | null = null;
   private cameraRig!: CameraRig;
   private gameFeel!: GameFeel;
+  private hitStop!: HitStop;
+  private audio!: AudioSystem;
+  /** 顿帧期间物理是否已被暂停（避免重复 pause/resume） */
+  private physicsFrozen = false;
+  /** playerId → 击杀数 */
+  private readonly kills = new Map<number, number>();
   private mapObjects: MapObjectRuntime[] = [];
   private oneWayBodies: MatterJS.BodyType[] = [];
   private mapData!: MapData;
@@ -80,6 +88,11 @@ export class GameScene extends Phaser.Scene {
   private drops!: DropSystem;
   private fragments!: FragmentSystem;
   private impactDamage!: ImpactDamageSystem;
+
+  /** 首次用户手势时启动 AudioContext（浏览器自动播放策略） */
+  private readonly unlockAudio = (): void => {
+    this.audio.unlock();
+  };
 
   constructor() {
     super('GameScene');
@@ -161,6 +174,7 @@ export class GameScene extends Phaser.Scene {
 
     this.hud = new Hud(this);
     this.hud.bind(this.players);
+    this.hud.bindKills(this.kills);
     // 出生空手：所有武器一律靠捡（天降武器 + 场上掉落物）
 
     const cam = this.cameras.main;
@@ -168,6 +182,16 @@ export class GameScene extends Phaser.Scene {
     cam.setBounds(0, 0, this.mapData.width, this.mapData.height);
     this.cameraRig = new CameraRig(cam, this.mapData.width, this.mapData.height, CAMERA_ZOOM);
     this.gameFeel = new GameFeel();
+    this.hitStop = new HitStop();
+    this.audio = new AudioSystem();
+    this.kills.clear();
+    this.physicsFrozen = false;
+
+    // AudioContext 必须在用户手势后才能启动
+    this.input.on('pointerdown', this.unlockAudio);
+    this.input.keyboard?.on('keydown', this.unlockAudio);
+    // M 键静音切换
+    this.input.keyboard?.on('keydown-M', () => this.audio.toggleMute());
 
     this.bindEvents();
   }
@@ -206,8 +230,35 @@ export class GameScene extends Phaser.Scene {
       this.gameFeel.addTrauma(Math.min(0.3, push / 40));
     };
 
+    // 受伤 → 顿帧（按伤害量缩放）+ 命中音效
+    const onPlayerDamaged = (
+      _player: Player,
+      amount: number,
+      kind: string,
+    ): void => {
+      if (kind !== 'env') {
+        this.hitStop.trigger(HitStop.durationForDamage(amount));
+      }
+      this.audio.play('hit');
+    };
+    // 死亡 → 音效 + 击杀计数（记录凶手）
+    const onPlayerDied = (victim: Player, killerId?: number): void => {
+      this.audio.play('death');
+      if (killerId !== undefined && killerId !== victim.id) {
+        this.kills.set(killerId, (this.kills.get(killerId) ?? 0) + 1);
+      }
+    };
+    // 统一音效路由
+    const onSfx = (name: string): void => {
+      this.audio.playWeapon(name);
+    };
+
     this.events.on('player-hit', onPlayerHit);
     this.events.on('weapon-recoil', onWeaponRecoil);
+    this.events.on('player-damaged', onPlayerDamaged);
+    this.events.on('player-died', onPlayerDied);
+    this.events.on('sfx', onSfx);
+    this.events.on('explosion', () => this.audio.play('explosion'));
     this.events.on('explosion', onExplosion);
     this.events.on('object-destroyed', onObjectDestroyed);
     this.events.on('weapon-lost', onWeaponLost);
@@ -216,6 +267,15 @@ export class GameScene extends Phaser.Scene {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.events.off('player-hit', onPlayerHit);
       this.events.off('weapon-recoil', onWeaponRecoil);
+      this.events.off('player-damaged', onPlayerDamaged);
+      this.events.off('player-died', onPlayerDied);
+      this.events.off('sfx', onSfx);
+      this.input.off('pointerdown', this.unlockAudio);
+      this.input.keyboard?.off('keydown', this.unlockAudio);
+      if (this.physicsFrozen) {
+        this.matter.world.resume();
+        this.physicsFrozen = false;
+      }
       this.events.off('explosion', onExplosion);
       this.events.off('object-destroyed', onObjectDestroyed);
       this.events.off('weapon-lost', onWeaponLost);
@@ -237,6 +297,20 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number): void {
+    // ---- 命中顿帧：冻结世界（含物理步进）极短时间 ----
+    this.hitStop.update(delta);
+    if (this.hitStop.active) {
+      if (!this.physicsFrozen) {
+        this.matter.world.pause();
+        this.physicsFrozen = true;
+      }
+      return;
+    }
+    if (this.physicsFrozen) {
+      this.matter.world.resume();
+      this.physicsFrozen = false;
+    }
+
     const cmd1 = this.inputManager.readP1();
     const cmd2 = this.inputManager.readP2();
     const cmds = [cmd1, cmd2];

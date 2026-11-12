@@ -232,6 +232,7 @@ export class WeaponSystem {
 
     this.consume(player, weapon, held.ammo > 0);
     this.applyRecoil(player, weapon);
+    this.scene.events.emit('sfx', weapon.visual.style === 'lightsaber' ? 'melee' : (player.heldWeapon?.id ?? ''));
     return true;
   }
 
@@ -267,6 +268,7 @@ export class WeaponSystem {
   /** 空手出拳：手部向前的短射线，伤害低但能用 */
   private punch(player: Player): boolean {
     player.setAttack('stab', 150);
+    this.scene.events.emit('sfx', 'melee');
     const from = player.handWorld;
     const aim = player.aim;
     const dir = { x: Math.cos(aim), y: Math.sin(aim) };
@@ -316,6 +318,7 @@ export class WeaponSystem {
     if (this.kickCooldowns.has(player.id)) return false;
     this.kickCooldowns.set(player.id, KICK.cooldownSec);
     player.setAttack('kick', 260);
+    this.scene.events.emit('sfx', 'kick');
 
     const aim = player.aim;
     const fromX = player.container.x;
@@ -801,6 +804,8 @@ export class WeaponSystem {
       fuseMs: cfg.fuseMs,
       stickMs: cfg.stickMs,
     });
+
+    this.scene.events.emit('sfx', 'throw');
 
     // 近战投掷：武器脱手（超出后就没有了）
     if (weapon.attackMode === 'melee') {

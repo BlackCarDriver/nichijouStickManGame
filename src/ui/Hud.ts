@@ -17,6 +17,8 @@ export class Hud {
   /** 手榴弹提示文本 */
   private readonly grenadeLabels: Phaser.GameObjects.Text[] = [];
   private players: Player[] = [];
+  /** playerId → 击杀数（与 GameScene 共享同一个 Map） */
+  private kills: Map<number, number> | null = null;
 
   private static readonly BAR_W = 220;
   private static readonly BAR_H = 14;
@@ -33,6 +35,10 @@ export class Hud {
   }
 
   /** 绑定玩家列表（场景创建玩家后调用） */
+  bindKills(kills: Map<number, number>): void {
+    this.kills = kills;
+  }
+
   bind(players: Player[]): void {
     this.players = players;
     for (const label of this.labels) label.destroy();
@@ -75,6 +81,12 @@ export class Hud {
   update(): void {
     this.g.clear();
     this.players.forEach((player, i) => {
+      const label = this.labels[i];
+      if (label) {
+        const k = this.kills?.get(player.id) ?? 0;
+        label.setText(`P${i + 1}  击杀 ${k}`);
+      }
+
       const x = i === 0 ? Hud.MARGIN : this.scene.scale.width - Hud.MARGIN - Hud.BAR_W;
       const y = Hud.TOP;
       const ratio = Phaser.Math.Clamp(player.health.ratio, 0, 1);

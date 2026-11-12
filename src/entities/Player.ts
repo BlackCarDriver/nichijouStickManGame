@@ -143,6 +143,8 @@ export class Player extends Entity {
 
   /** 最近一次命中自己的攻击批次 id（同批次可重复命中，如霰弹枪多弹丸） */
   private lastHitAttackId: number | undefined;
+  /** 最近一次伤害的来源实体 id（击杀归属） */
+  private lastDamageSourceId: number | undefined;
 
   private static readonly HIT_INVULN_MS = 180;
 
@@ -338,6 +340,9 @@ export class Player extends Entity {
     if (applied <= 0) return 0;
 
     if (info.attackId !== undefined) this.lastHitAttackId = info.attackId;
+    this.lastDamageSourceId = info.sourceId;
+    // 广播：顿帧 / 音效 / 表现层都监听这个
+    this.scene.events.emit('player-damaged', this, applied, info.kind);
 
     // 击退 + 受击姿态（hit() 内部会广播 player-hit → 屏幕震动）
     // 高频低伤（激光 tick）用短后仰，否则会被持续锁在受击姿势里
@@ -391,7 +396,7 @@ export class Player extends Entity {
   private die(): void {
     this.grenadeMode = false;
     this.respawnTimer = PLAYER_CONFIG.respawnDelayMs;
-    this.scene.events.emit('player-died', this);
+    this.scene.events.emit('player-died', this, this.lastDamageSourceId);
   }
 
   /** 复活：回到出生点、满血、短无敌 */

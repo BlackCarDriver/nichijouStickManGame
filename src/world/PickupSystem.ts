@@ -142,6 +142,7 @@ export class PickupSystem {
             this.remove(item);
             this.fx.hitSpark({ x: item.x, y: item.y }, { x: 0, y: -1 }, 0x8fd06a);
             this.scene.events.emit('grenade-picked', player, player.grenadeCount);
+            this.scene.events.emit('sfx', 'pickup');
           }
           continue;
         }
@@ -183,6 +184,7 @@ export class PickupSystem {
     }
     this.fx.hitSpark({ x: item.x, y: item.y }, { x: 0, y: -1 }, 0x9ad0ff);
     this.scene.events.emit('weapon-picked', player, item.weaponId);
+    this.scene.events.emit('sfx', 'pickup');
   }
 
   private remove(item: WeaponPickup): void {
