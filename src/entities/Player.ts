@@ -353,6 +353,18 @@ export class Player extends Entity {
     this.hitTimer = durationMs;
     this.hitPhase = 0;
     this.hitTilt = (Math.random() < 0.5 ? -1 : 1) * Player.HIT_TILT_MAX;
+
+    /**
+     * 关键：击退必须开一个"推力窗口"。
+     * 否则站在地面的玩家下一帧就会被移动控制（无输入 → 水平速度归零）抹掉，
+     * 表现就是"被打中只是抖了一下，完全没被踢飞"。
+     * 窗口长度按击退强度给：轻武器短短一下就够，踢/爆炸给足滑行时间。
+     */
+    this.pushTimer = Math.max(
+      this.pushTimer,
+      Math.min(280, 40 + Math.abs(knockbackX) * 12 + Math.abs(knockbackY) * 4),
+    );
+
     this.container.setVelocityX(knockbackX);
     this.container.setVelocityY(knockbackY);
     this.scene.events.emit('player-hit', this);
@@ -677,8 +689,15 @@ export class Player extends Entity {
     }
 
     // ===== 反弹抑制：着地后向上速度归零（避免在铁球/弹性物体上反复弹跳）=====
-    // 注意：起跳后的短暂锁定期（jumpLockout）内保留向上速度，否则会吃掉跳跃
-    if (this.isGrounded && this.body.velocity.y < 0 && this.jumpLockout <= 0) {
+    // 注意：以下两种情况必须保留向上速度，否则会被"抹掉"
+    //   1. 起跳后的短暂锁定期（jumpLockout）—— 否则跳跃被吃掉
+    //   2. 受击推力窗口（pushTimer）—— 否则被踢飞/爆炸时上抛不生效，只是横向滑出去
+    if (
+      this.isGrounded &&
+      this.body.velocity.y < 0 &&
+      this.jumpLockout <= 0 &&
+      this.pushTimer <= 0
+    ) {
       this.container.setVelocityY(0);
     }
 

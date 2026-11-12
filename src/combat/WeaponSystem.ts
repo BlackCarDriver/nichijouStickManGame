@@ -36,12 +36,19 @@ const PUNCH = {
 } as const;
 
 const KICK = {
-  range: 76,
+  range: 80,
   damage: 12,
-  knockback: 13,
+  /** 水平击退（px/帧）：要把人明显弹飞 */
+  knockback: 17,
+  /** 上抛分量（px/帧，负值向上） */
+  lift: 9,
   cooldownSec: 0.42,
   /** 判定角度容差（弧度）：只踢前方半圆 */
   halfAngle: Math.PI * 0.55,
+  /** 对可推物体的期望速度变化（px/帧） */
+  objectImpulse: 14,
+  /** 对可推物体的上抛（px/帧） */
+  objectLift: 7,
 } as const;
 
 /**
@@ -346,7 +353,7 @@ export class WeaponSystem {
         point: { x: other.container.x, y: other.container.y },
         knockback: {
           x: dirX * KICK.knockback,
-          y: dirY * KICK.knockback * 0.4 - 7,
+          y: dirY * KICK.knockback * 0.35 - KICK.lift,
         },
       });
       hitSomething = true;
@@ -363,10 +370,13 @@ export class WeaponSystem {
       if (dist > KICK.range + 20) continue;
       const dot = dist < 1 ? 1 : (dx * dirX + dy * dirY) / dist;
       if (dot < cosHalf) continue;
-      const k = body.mass * 6 * (1 / 277);
+      // 按 mass 归一：力 = mass × 期望速度变化 ÷ dt²(≈277)
+      // 这样纸箱和金属球获得相同的速度变化，轻的不会飞天、重的也不会纹丝不动
+      const k = body.mass * KICK.objectImpulse * (1 / 277);
+      const lift = body.mass * KICK.objectLift * (1 / 277);
       this.scene.matter.body.applyForce(body, body.position, {
         x: dirX * k,
-        y: (dirY * k) - body.mass * 2 * (1 / 277),
+        y: dirY * k * 0.4 - lift,
       });
       hitSomething = true;
     }
