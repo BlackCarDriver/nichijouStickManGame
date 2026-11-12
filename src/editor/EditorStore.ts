@@ -1203,8 +1203,28 @@ export class EditorStore {
   }
 
   // ---------------- 渲染数据 ----------------
-  /** 当前 Tab 下编辑器画布应渲染的地图 */
-  renderMap(): MapData {
+  /**
+   * 编辑器**画布**当前显示的场景。
+   *
+   * 设计原则：画布永远显示"你正在编辑的东西"——
+   * 地图/材质/动作 Tab 都显示你选中的那张地图（材质是给地图里的物体用的，
+   * 切到材质 Tab 不该把你的地图换掉）；只有预制件 Tab 例外，
+   * 因为预制件本身就是在工作台里编辑的。
+   *
+   * 材质/预制件的"样品试手感"走 testMap()（▶ 测试），不要动画布。
+   */
+  canvasMap(): MapData {
+    if (this.tab === 'prefab') return this.prefabRig();
+    return this.map;
+  }
+
+  /**
+   * **▶ 测试**要运行的地图（按当前 Tab 选场景）。
+   *   - 地图 Tab  → 当前地图草稿
+   *   - 预制件 Tab → 预制件工作台
+   *   - 材质 Tab  → 材质工作台（同材质的固定/动态对照）
+   */
+  testMap(): MapData {
     if (this.tab === 'prefab') return this.prefabRig();
     if (this.tab === 'material') return this.materialRig();
     return this.map;

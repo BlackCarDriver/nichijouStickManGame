@@ -211,7 +211,7 @@ export class EditorScene extends Phaser.Scene {
     }
     // 贴图按需加载：新增/替换贴图后加载完再重建一次
     // 材质贴图 + 地图物体自带的对象级贴图（后者可能是编辑器里刚填的路径）
-    const objectTextureRefs = (store.renderMap().objects ?? [])
+    const objectTextureRefs = (store.canvasMap().objects ?? [])
       .map((o) => (o.type === 'rect' ? o.texture : undefined))
       .filter((t): t is string => !!t);
     ensureMaterialTextures(
@@ -230,7 +230,7 @@ export class EditorScene extends Phaser.Scene {
     } catch {
       /* ignore */
     }
-    this.runtime = buildMap(this, store.renderMap(), store.prefabTable());
+    this.runtime = buildMap(this, store.canvasMap(), store.prefabTable());
     this.drawGrid();
     this.drawReferenceFigure();
     this.drawOverlay();
@@ -283,7 +283,7 @@ export class EditorScene extends Phaser.Scene {
       return;
     }
     g.setVisible(true);
-    const map = store.renderMap();
+    const map = store.canvasMap();
     const spawn = map.spawnPoints[0] ?? { x: 200, y: PREFAB_RIG.groundY - 48 };
     // 预制件 Tab 把参照放到预制件左侧，避免和部件重叠
     const fx = store.tab === 'prefab' ? store.prefabRigOrigin().x - 260 : spawn.x;
@@ -315,7 +315,7 @@ export class EditorScene extends Phaser.Scene {
   }
 
   private actionOrigin(): Vec {
-    const map = editorStore.renderMap();
+    const map = editorStore.canvasMap();
     return { x: map.width / 2, y: map.height / 2 + 80 };
   }
 
@@ -382,19 +382,21 @@ export class EditorScene extends Phaser.Scene {
     g.fillCircle(front.joint.x, front.joint.y, 2.2);
     g.fillCircle(back.joint.x, back.joint.y, 2.2);
 
-    if (weapon === 'spear') {
-      const visual = getWeapon('spear')?.visual;
+    if (weapon !== 'none') {
+      const weaponId = weapon === 'spear' ? 'spear' : weapon === 'dagger' ? 'dagger' : 'lightsaber';
+      const visual = getWeapon(weaponId)?.visual;
       if (visual) {
-        const aim = Math.atan2(front.end.y - back.end.y, front.end.x - back.end.x);
-        drawHeldWeapon(g, {
-          visual,
-          facing: 1,
-          aim,
-          hand: {
-            x: (front.end.x + back.end.x) * 0.5,
-            y: (front.end.y + back.end.y) * 0.5,
-          },
-        });
+        const twoHanded = weapon === 'spear';
+        const aim = twoHanded
+          ? Math.atan2(front.end.y - back.end.y, front.end.x - back.end.x)
+          : Math.atan2(front.end.y - frontRoot.y, front.end.x - frontRoot.x);
+        const hand = twoHanded
+          ? {
+              x: (front.end.x + back.end.x) * 0.5,
+              y: (front.end.y + back.end.y) * 0.5,
+            }
+          : front.end;
+        drawHeldWeapon(g, { visual, facing: 1, aim, hand });
       }
     }
   }
@@ -1167,7 +1169,7 @@ export class EditorScene extends Phaser.Scene {
 
   // ---------------- 相机 ----------------
   fitToMap(): void {
-    const map = editorStore.renderMap();
+    const map = editorStore.canvasMap();
     const cam = this.cameras.main;
     const zoom = Math.min(cam.width / map.width, cam.height / map.height) * 0.88;
     cam.setZoom(Phaser.Math.Clamp(zoom, 0.08, 3));
@@ -1237,6 +1239,10 @@ export class EditorScene extends Phaser.Scene {
       this.drawOverlay();
       return;
     }
+
+    // 只有地图 Tab 才允许"编辑地图"（放置/选择/关节/尺子）。
+    // 材质/动作 Tab 画布显示的是同一张地图，但在那里误点不该改到地图数据。
+    if (store.tab !== 'map') return;
 
     const shiftKey = (pointer.event as MouseEvent | undefined)?.shiftKey === true;
     // 地图 Tab：选择工具下优先响应多边形顶点手柄 / gizmo 手柄

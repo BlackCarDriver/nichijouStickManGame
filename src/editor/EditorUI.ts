@@ -570,7 +570,9 @@ function actionLeftPanel(): HTMLElement {
     h('div', { class: 'ed-list ed-list-scroll' }, actionStore.actions.map((item) =>
       h('button', { class: `ed-list-row ${item.id === actionStore.activeId ? 'active' : ''}`, onclick: () => actionStore.select(item.id) }, [
         h('span', { class: 'ed-list-main' }, [item.name]),
-        h('span', { class: 'ed-list-sub' }, [`${item.weapon === 'spear' ? '长矛' : '无武器'} · ${item.id}`]),
+        h('span', { class: 'ed-list-sub' }, [
+          `${item.weapon === 'spear' ? '长矛' : item.weapon === 'dagger' ? '匕首' : item.weapon === 'lightsaber' ? '光刀' : '无武器'} · ${item.id}`,
+        ]),
       ]),
     )),
     h('div', { class: 'ed-row' }, [
@@ -583,10 +585,12 @@ function actionLeftPanel(): HTMLElement {
     field('类型', selectInput(
       [
         { value: 'none', label: '无武器' },
+        { value: 'dagger', label: '匕首' },
         { value: 'spear', label: '长矛' },
+        { value: 'lightsaber', label: '光刀' },
       ],
       action.weapon,
-      (v) => actionStore.updateMeta({ weapon: v as 'none' | 'spear' }),
+      (v) => actionStore.updateMeta({ weapon: v as 'none' | 'dagger' | 'spear' | 'lightsaber' }),
     )),
     field('时长（毫秒）', numberInput(action.durationMs, (v) => actionStore.updateMeta({ durationMs: v }), 10)),
     h('label', { class: 'ed-check' }, [checkbox(action.loop, (v) => actionStore.updateMeta({ loop: v })), '循环播放']),
@@ -1261,6 +1265,7 @@ function materialForm(): HTMLElement {
         ? '当前：固定 —— 用此材质新建的物体默认钉在原地，不会掉落/被推动（地图物体/预制件部件里仍可单独覆盖）。'
         : '当前：动态 —— 用此材质新建的物体默认会掉落、可被推动/踢飞。',
       '测试场景里：左边两个是「固定」对照（悬空也不动），右边三个会从空中落下 —— 能掉下来就说明是动态的。',
+      '画布始终显示你正在编辑的那张地图（切换 Tab 不会换掉它）；点右上「▶ 测试」才进入材质工作台试手感。',
     ]),
     h('div', { class: 'ed-grid2' }, [
       field('密度', numberInput(mat.density, (v) => upd({ density: Math.max(0.0001, v) }), 0.001)),
@@ -1584,9 +1589,9 @@ function startPlayTest(): void {
   testing = true;
   document.body.classList.add('testing');
   try {
-    // Play Test 运行"当前 Tab 对应的场景"：
-    //   地图 Tab → 当前地图草稿；预制件 Tab → 预制件工作台；材质 Tab → 材质工作台
-    const map = JSON.parse(JSON.stringify(store.renderMap()));
+    // ▶ 测试 运行"当前 Tab 该测的场景"（testMap），与画布显示的内容（canvasMap）无关：
+    //   地图/动作 Tab → 当前地图草稿；预制件 Tab → 预制件工作台；材质 Tab → 材质工作台
+    const map = JSON.parse(JSON.stringify(store.testMap()));
     game.scene.stop('GameScene');
     game.scene.stop('EditorScene');
     game.scene.start('GameScene', {

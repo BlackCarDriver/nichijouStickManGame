@@ -69,7 +69,11 @@ export class ActionStore {
       if (!raw) return;
       const saved = JSON.parse(raw) as SavedActions;
       if (saved?.v === 1 && Array.isArray(saved.actions) && saved.actions.length > 0) {
-        this.actions = saved.actions;
+        const savedIds = new Set(saved.actions.map((action) => action.id));
+        this.actions = [
+          ...saved.actions,
+          ...defaultActions().filter((action) => !savedIds.has(action.id)),
+        ];
         this.activeId = saved.activeId;
       }
     } catch {

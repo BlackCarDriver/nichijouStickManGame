@@ -7,7 +7,7 @@
  * 这样拖动编辑时不会改变骨骼长度。
  */
 
-export type ActionWeapon = 'none' | 'spear';
+export type ActionWeapon = 'none' | 'dagger' | 'spear' | 'lightsaber';
 
 export interface ActionPose {
   rootX: number;
@@ -153,6 +153,18 @@ export function makeAction(
 
 export function defaultActions(): ActionClip[] {
   const unarmed = makeAction('unarmed_idle', '无武器待机', 'none', 1000);
+  const unarmedWalk = makeAction('unarmed_walk', '无武器行走', 'none', 450);
+  const unarmedJump = makeAction('unarmed_jump', '无武器起跳', 'none', 260);
+  const unarmedFall = makeAction('unarmed_fall', '无武器下落', 'none', 260);
+  const unarmedCrouch = makeAction('unarmed_crouch', '无武器蹲下', 'none', 500);
+  const unarmedHit = makeAction('unarmed_hit', '无武器受击', 'none', 190);
+  const unarmedPunch = makeAction('unarmed_punch', '无武器出拳', 'none', 170);
+  const unarmedKick = makeAction('unarmed_kick', '无武器踢腿', 'none', 260);
+  const daggerIdle = makeAction('dagger_idle', '匕首持握', 'dagger', 1000);
+  const daggerThrust = makeAction('dagger_thrust', '匕首刺击', 'dagger', 220);
+  const daggerThrow = makeAction('dagger_throw', '匕首投掷', 'dagger', 160);
+  const lightsaberIdle = makeAction('lightsaber_idle', '光刀持握', 'lightsaber', 1000);
+  const lightsaberSlash = makeAction('lightsaber_slash', '光刀挥砍', 'lightsaber', 300);
   const spearIdle = makeAction('spear_idle', '长矛持握', 'spear', 1000);
   const spearThrust = makeAction('spear_thrust', '长矛突刺', 'spear', 360);
   const spearThrow = makeAction('spear_throw', '长矛投掷', 'spear', 420);
@@ -217,5 +229,22 @@ export function defaultActions(): ActionClip[] {
     { timeMs: 420, pose: defaultPose('spear') },
   ];
 
-  return [unarmed, spearIdle, spearThrust, spearThrow];
+  return [
+    unarmed,
+    unarmedWalk,
+    unarmedJump,
+    unarmedFall,
+    unarmedCrouch,
+    unarmedHit,
+    unarmedPunch,
+    unarmedKick,
+    daggerIdle,
+    daggerThrust,
+    daggerThrow,
+    spearIdle,
+    spearThrust,
+    spearThrow,
+    lightsaberIdle,
+    lightsaberSlash,
+  ];
 }
