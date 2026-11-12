@@ -160,8 +160,14 @@ function rayVsPolygon(
   return best;
 }
 
-/** 从场景物理世界取全部 body 列表 */
+/**
+ * 从场景物理世界取用于**射线检测**的 body 列表。
+ *
+ * 会剔除破坏碎片（label = 'fragment'）：碎块是纯视觉残留，
+ * 只有 4~11px 大、1.2 秒后消失，但它是真实物理体 —— 若参与射线，
+ * 会随机挡住子弹/激光/瞄准线（实测激光会莫名少打一两跳）。
+ */
 export function getWorldBodies(scene: Phaser.Scene): MatterJS.BodyType[] {
   const world = scene.matter.world.localWorld as unknown as { bodies: MatterJS.BodyType[] };
-  return world.bodies;
+  return world.bodies.filter((b) => b.label !== 'fragment');
 }

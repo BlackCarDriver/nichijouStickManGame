@@ -4,6 +4,10 @@ import { getWeapon, createHeldWeapon } from '../combat/WeaponFormat';
 import { drawHeldWeapon } from '../render/WeaponRenderer';
 import { raycast, getWorldBodies } from '../combat/Raycast';
 import type { FxSystem } from '../fx/FxSystem';
+import { GrenadeSystem } from '../combat/GrenadeSystem';
+
+/** 手榴弹背包上限（PickupSystem 与 GrenadeSystem 共用同一常量） */
+const GRENADE_MAX = GrenadeSystem.MAX;
 
 /** 地面上的一件武器（可拾取） */
 export interface WeaponPickup {
@@ -130,6 +134,18 @@ export class PickupSystem {
 
       for (const item of [...this.items]) {
         const dist = Phaser.Math.Distance.Between(player.container.x, player.container.y, item.x, item.y);
+
+        // 手榴弹是道具：进背包，不占用/替换武器槽
+        if (item.weaponId === 'grenade') {
+          if (dist <= PickupSystem.AUTO_RADIUS * 1.4 && player.grenadeCount < GRENADE_MAX) {
+            player.grenadeCount += 1;
+            this.remove(item);
+            this.fx.hitSpark({ x: item.x, y: item.y }, { x: 0, y: -1 }, 0x8fd06a);
+            this.scene.events.emit('grenade-picked', player, player.grenadeCount);
+          }
+          continue;
+        }
+
         const wantSwap = swapRequested.has(player.id);
 
         // 空手 → 自动拾取

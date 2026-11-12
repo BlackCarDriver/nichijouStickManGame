@@ -104,6 +104,10 @@ export class Player extends Entity {
   private aimAngle = 0;
   /** 手持武器（null = 空手）。由 WeaponSystem 装备 */
   heldWeapon: HeldWeapon | null = null;
+  /** 手榴弹背包数量（上限见 GRENADE_MAX） */
+  grenadeCount = 0;
+  /** 是否正握着手榴弹（此时左键=投掷，武器暂存在 heldWeapon 里不渲染） */
+  grenadeMode = false;
   /**
    * 手部位置（visual 局部坐标）：由 StickmanRenderer 在瞄准时输出。
    * 武器从这里画、子弹从这里出，保证"枪口 = 子弹起点"。
@@ -319,6 +323,7 @@ export class Player extends Entity {
   }
 
   private die(): void {
+    this.grenadeMode = false;
     this.respawnTimer = PLAYER_CONFIG.respawnDelayMs;
     this.scene.events.emit('player-died', this);
   }
@@ -670,7 +675,10 @@ export class Player extends Entity {
       groundYR: this.smSurfRight - this.smSurfCenter,
       crouching: this.crouching,
       // 持枪时前臂指向瞄准方向（挥砍时跟随刀身扫过）
-      aim: this.heldWeapon && !this.health.isDead ? this.aimAngle + this.slashOffset : null,
+      aim:
+        (this.heldWeapon || this.grenadeMode) && !this.health.isDead
+          ? this.aimAngle + this.slashOffset
+          : null,
       backward: this.backward,
       attackKind: this.attack,
       attackProgress: this.attackProgress,
@@ -682,8 +690,18 @@ export class Player extends Entity {
       y: StickmanRenderer.SHOULDER_Y + StickmanRenderer.SHOULDER_DY + StickmanRenderer.ARM_REACH,
     };
 
-    // 手持武器（画在手臂末端 → 枪口与子弹起点一致）
-    if (this.heldWeapon && !this.health.isDead) {
+    // 握着的手榴弹（优先于武器）
+    if (this.grenadeMode && !this.health.isDead) {
+      const grenadeVisual = getWeapon('grenade')?.visual;
+      if (grenadeVisual) {
+        drawHeldWeapon(this.graphics, {
+          visual: grenadeVisual,
+          facing: this.facing,
+          aim: this.aimAngle,
+          hand: this.handLocal,
+        });
+      }
+    } else if (this.heldWeapon && !this.health.isDead) {
       const visual = getWeapon(this.heldWeapon.id)?.visual;
       if (visual) {
         // 刺击时武器沿瞄准方向前送（近战戳得远，枪械只有轻微后坐）

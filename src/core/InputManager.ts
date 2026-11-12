@@ -12,6 +12,8 @@ export class InputManager {
   private readonly scene: Phaser.Scene;
   private readonly p1: Record<string, Phaser.Input.Keyboard.Key>;
   private readonly p2: Record<string, Phaser.Input.Keyboard.Key>;
+  /** G 键：取出/收起手榴弹（作用于"当前操作中的玩家"） */
+  private readonly grenadeKey: Phaser.Input.Keyboard.Key;
   private prevP1Attack = false;
   private prevP1Kick = false;
 
@@ -20,6 +22,7 @@ export class InputManager {
     const kb = scene.input.keyboard!;
     this.p1 = kb.addKeys('W,A,S,D') as Record<string, Phaser.Input.Keyboard.Key>;
     this.p2 = kb.addKeys('UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,E') as Record<string, Phaser.Input.Keyboard.Key>;
+    this.grenadeKey = kb.addKey('G');
   }
 
   readP1(): InputCommand {
@@ -39,6 +42,11 @@ export class InputManager {
     c.kick = kick && !this.prevP1Kick;
     this.prevP1Kick = kick;
     return c;
+  }
+
+  /** G 键（本帧刚按下）：切换手榴弹持握状态 */
+  readGrenadeToggle(): boolean {
+    return Phaser.Input.Keyboard.JustDown(this.grenadeKey);
   }
 
   readP2(): InputCommand {

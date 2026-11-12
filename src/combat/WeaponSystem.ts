@@ -113,6 +113,8 @@ export class WeaponSystem {
    */
   tryAttack(player: Player, input: AttackInput): boolean {
     if (player.health.isDead) return false;
+    // 手持手榴弹时，左键交给 GrenadeSystem 处理投掷
+    if (player.grenadeMode) return false;
 
     // 空手 → 出拳（单发，不能长按连打）
     const held = player.heldWeapon;

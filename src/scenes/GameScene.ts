@@ -21,6 +21,7 @@ import { ProjectileSystem } from '../combat/ProjectileSystem';
 import { WeaponSystem } from '../combat/WeaponSystem';
 import { ExplosionSystem } from '../combat/ExplosionSystem';
 import { AimSightSystem } from '../combat/AimSightSystem';
+import { GrenadeSystem } from '../combat/GrenadeSystem';
 import { FxSystem } from '../fx/FxSystem';
 import { Hud } from '../ui/Hud';
 
@@ -73,6 +74,7 @@ export class GameScene extends Phaser.Scene {
   private weaponSystem!: WeaponSystem;
   private projectileSystem!: ProjectileSystem;
   private sights!: AimSightSystem;
+  private grenades!: GrenadeSystem;
   private pickups!: PickupSystem;
   private drops!: DropSystem;
   private fragments!: FragmentSystem;
@@ -146,6 +148,8 @@ export class GameScene extends Phaser.Scene {
 
     // ---- 瞄准辅助线（狙击枪红外线）----
     this.sights = new AimSightSystem(this);
+    // ---- 手榴弹（背包道具）----
+    this.grenades = new GrenadeSystem(this, this.projectileSystem);
 
     // ---- 掉落 / 碎片 ----
     this.pickups = new PickupSystem(this, this.bodyToPlayer, this.fx);
@@ -200,6 +204,7 @@ export class GameScene extends Phaser.Scene {
       this.events.off('weapon-lost', onWeaponLost);
       this.projectileSystem.destroy();
       this.sights.destroy();
+      this.grenades.destroy();
       this.pickups.destroy();
       this.fragments.destroy();
       this.fx.destroy();
@@ -229,7 +234,14 @@ export class GameScene extends Phaser.Scene {
     });
     this.handleAttacks(cmds);
     this.handleSecondary(cmds);
+    // G 键：为"当前操作中的玩家"取出/收起手榴弹
+    if (this.inputManager.readGrenadeToggle()) {
+      const owner = this.players[this.aimOwner];
+      if (owner) this.grenades.toggle(owner);
+    }
+
     this.sights.update(this.players);
+    this.grenades.update(delta, this.players);
     this.projectileSystem.update(delta);
     this.pickups.update(delta);
     this.drops.update(delta);
@@ -272,10 +284,16 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  /** 主攻击：开火 / 刺击 / 投掷（全自动武器支持长按连射） */
+  /** 主攻击：手持手榴弹时投掷，否则开火 / 刺击 / 挥砍 */
   private handleAttacks(cmds: InputCommand[]): void {
     this.players.forEach((player, i) => {
       if (!cmds[i].attack && !cmds[i].attackHeld) return;
+
+      if (player.grenadeMode) {
+        if (cmds[i].attack) this.grenades.throwGrenade(player);
+        return;
+      }
+
       this.weaponSystem.tryAttack(player, {
         attack: cmds[i].attack,
         attackHeld: cmds[i].attackHeld,
