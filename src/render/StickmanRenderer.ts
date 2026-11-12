@@ -6,6 +6,7 @@ import {
   LEG_LENGTH,
   gaitFoot,
   solveLegIK,
+  solveLegIKWithHint,
   chain2,
   upVec,
 } from './StickmanRig';
@@ -278,8 +279,8 @@ export class StickmanRenderer {
     const hip = { x: pose.rootX, y: pose.rootY };
     const footL = { x: hip.x + pose.footLX, y: hip.y + pose.footLY };
     const footR = { x: hip.x + pose.footRX, y: hip.y + pose.footRY };
-    this.drawLegIK(g, o.color, hip, footL);
-    this.drawLegIK(g, o.color, hip, footR);
+    this.drawLegIK(g, o.color, hip, footL, { x: pose.kneeLHintX, y: pose.kneeLHintY });
+    this.drawLegIK(g, o.color, hip, footR, { x: pose.kneeRHintX, y: pose.kneeRHintY });
 
     const shoulder = this.drawTorso(g, o.color, hip, pose.torsoTilt, pose.torsoTwist);
     this.drawHead(g, o.color, shoulder, pose.headTilt, pose.headOffsetY);
@@ -638,6 +639,7 @@ export class StickmanRenderer {
     color: number,
     hip: Vec2,
     footTarget: Vec2,
+    kneeHint?: Vec2,
   ): void {
     // 目标超出可达范围时收回到可达圆上（否则脚会悬空在目标外的实际上）
     const dx = footTarget.x - hip.x;
@@ -651,7 +653,10 @@ export class StickmanRenderer {
       tx = hip.x + dx * k;
       ty = hip.y + dy * k;
     }
-    const { thighAngle, kneeBend } = solveLegIK(hip.x, hip.y, tx, ty, 1);
+    const solved = kneeHint
+      ? solveLegIKWithHint(hip.x, hip.y, tx, ty, hip.x + kneeHint.x, hip.y + kneeHint.y)
+      : solveLegIK(hip.x, hip.y, tx, ty, 1);
+    const { thighAngle, kneeBend } = solved;
     const { joint, end } = chain2(
       hip.x,
       hip.y,

@@ -631,6 +631,11 @@ const ACTION_POSE_RANGES: Record<keyof ActionPose, { min: number; max: number; s
   footLY: { min: 0, max: 110, step: 1 },
   footRX: { min: -100, max: 100, step: 1 },
   footRY: { min: 0, max: 110, step: 1 },
+  // 膝盖 IK 提示点偏移（px）：默认值约 ±3/±23，给 ±60 的调节范围
+  kneeLHintX: { min: -60, max: 60, step: 1 },
+  kneeLHintY: { min: -60, max: 60, step: 1 },
+  kneeRHintX: { min: -60, max: 60, step: 1 },
+  kneeRHintY: { min: -60, max: 60, step: 1 },
 };
 
 function actionPoseField(label: string, pose: ActionPose, key: keyof ActionPose): HTMLElement {

@@ -46,7 +46,7 @@ export interface ActionClip {
 }
 
 export function clonePose(pose: ActionPose): ActionPose {
-  return { ...pose };
+  return { ...defaultPose(), ...pose };
 }
 
 export function defaultPose(weapon: ActionWeapon = 'none'): ActionPose {
@@ -96,9 +96,17 @@ export function defaultPose(weapon: ActionWeapon = 'none'): ActionPose {
 
 export function interpolatePose(a: ActionPose, b: ActionPose, t: number): ActionPose {
   const k = Math.max(0, Math.min(1, t));
+  const defaults = defaultPose();
   const out = {} as ActionPose;
-  for (const key of Object.keys(a) as Array<keyof ActionPose>) {
-    out[key] = a[key] + (b[key] - a[key]) * k;
+  const keys = new Set<keyof ActionPose>([
+    ...(Object.keys(defaults) as Array<keyof ActionPose>),
+    ...(Object.keys(a) as Array<keyof ActionPose>),
+    ...(Object.keys(b) as Array<keyof ActionPose>),
+  ]);
+  for (const key of keys) {
+    const av = a[key] ?? defaults[key];
+    const bv = b[key] ?? defaults[key];
+    out[key] = av + (bv - av) * k;
   }
   return out;
 }
