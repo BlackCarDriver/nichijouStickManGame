@@ -256,14 +256,41 @@ export function validateMap(map: unknown, ctx: ValidateContext): Issue[] {
     } else {
       m.weapons.forEach((it, i) => {
         const o = it as Record<string, unknown>;
-        if (typeof o?.type !== 'string') issues.push(err(`weapons[${i}].type`, '缺少武器类型'));
-        else if (ctx.weaponIds && !ctx.weaponIds.includes(o.type)) {
-          issues.push(
-            err(`weapons[${i}].type`, `未知武器 "${o.type}"（可用：${ctx.weaponIds.join(', ')}）`),
-          );
-        }
+        const path = `weapons[${i}]`;
         if (!isFiniteNumber(o?.x) || !isFiniteNumber(o?.y)) {
-          issues.push(err(`weapons[${i}]`, '坐标必须是有限数字'));
+          issues.push(err(path, '坐标必须是有限数字'));
+        }
+        // 模式：默认 fixed（兼容只有 type 的旧格式）
+        const mode = o?.mode === undefined ? 'fixed' : o.mode;
+        if (mode !== 'fixed' && mode !== 'random') {
+          issues.push(err(`${path}.mode`, `mode 只能是 "fixed" 或 "random"（当前 "${String(o.mode)}"）`));
+        }
+        const checkWeapon = (id: unknown, field: string): void => {
+          if (typeof id !== 'string' || !id) {
+            issues.push(err(`${path}.${field}`, '需要武器 id 字符串'));
+            return;
+          }
+          if (ctx.weaponIds && !ctx.weaponIds.includes(id)) {
+            issues.push(err(`${path}.${field}`, `未知武器 "${id}"（可用：${ctx.weaponIds.join(', ')}）`));
+          }
+        };
+        if (mode === 'fixed') {
+          if (typeof o?.weapon === 'string') checkWeapon(o.weapon, 'weapon');
+          else if (typeof o?.type === 'string') checkWeapon(o.type, 'type');
+          else issues.push(err(path, '固定武器模式需要 weapon（或旧字段 type）'));
+        }
+        if (mode === 'random' && o?.pool !== undefined) {
+          if (!Array.isArray(o.pool) || o.pool.length === 0) {
+            issues.push(err(`${path}.pool`, 'pool 必须是非空数组（不填 = 全部武器）'));
+          } else {
+            (o.pool as unknown[]).forEach((id, k) => checkWeapon(id, `pool[${k}]`));
+          }
+        }
+        if (o?.respawnMs !== undefined && (!isFiniteNumber(o.respawnMs) || o.respawnMs < 0)) {
+          issues.push(err(`${path}.respawnMs`, '刷新间隔必须 >= 0（0 = 不刷新）'));
+        }
+        if (o?.maxRespawns !== undefined && (!isFiniteNumber(o.maxRespawns) || o.maxRespawns < 0)) {
+          issues.push(err(`${path}.maxRespawns`, '刷新次数必须 >= 0（不填 = 无限）'));
         }
       });
     }

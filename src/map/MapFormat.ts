@@ -122,11 +122,33 @@ export interface MapItemSpawn {
   y: number;
 }
 
-/** 地图内指定的武器投放点（type 对应武器表 data/weapons.json 的 id），开局直接放在地上 */
+/**
+ * 武器掉落点（地图上的"补给站"）。
+ *
+ * - mode = 'fixed'  ：固定武器（weapon 指定 data/weapons.json 的 id）
+ * - mode = 'random' ：从候选池 pool 随机（不填 pool = 全部武器）
+ * - respawnMs       ：被拾取后多久重新刷新（0/不填 = 只刷一次，不刷新）
+ * - maxRespawns     ：最多刷新次数（不填 = 无限）
+ *
+ * 兼容旧格式：`{ type: "ak47", x, y }` 等价于 `{ mode: "fixed", weapon: "ak47", ... }`
+ */
 export interface MapWeaponSpawn {
-  type: string;
+  /** 唯一 id（编辑器选中/关节引用用，可选） */
+  id?: string;
   x: number;
   y: number;
+  /** 掉落模式，默认 fixed */
+  mode?: 'fixed' | 'random';
+  /** 固定武器 id（mode=fixed） */
+  weapon?: string;
+  /** 旧字段：等价于 weapon（mode 视为 fixed） */
+  type?: string;
+  /** 随机模式的候选武器池（不填 = 全部武器） */
+  pool?: string[];
+  /** 拾取后重新刷新的间隔（ms）；0/不填 = 不刷新 */
+  respawnMs?: number;
+  /** 最多刷新次数；不填 = 无限 */
+  maxRespawns?: number;
 }
 
 export interface MapData {
@@ -144,6 +166,6 @@ export interface MapData {
   weaponDropZones?: DropZone[];
   /** 场景内物品生成点（医疗包/防弹衣等） */
   items?: MapItemSpawn[];
-  /** 场景内指定的武器生成点（开局即在地上，不走随机空投） */
+  /** 武器掉落点（固定武器 / 随机武器，可配置刷新间隔与次数） */
   weapons?: MapWeaponSpawn[];
 }

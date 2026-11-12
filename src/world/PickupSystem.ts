@@ -19,6 +19,8 @@ interface GroundPickupBase {
   falling: boolean;
   gfx: Phaser.GameObjects.Graphics;
   bob: number;
+  /** 来源标记（武器掉落点用：判断"这个点上的武器是否已被捡走"） */
+  tag?: string;
 }
 
 /** 地面上的武器（可拾取，占用武器槽） */
@@ -43,6 +45,8 @@ export interface PickupSpawnOptions {
   ammo?: number;
   /** 是否从空中掉落（穿过物体落到地面） */
   falling?: boolean;
+  /** 来源标记（武器掉落点用） */
+  tag?: string;
 }
 
 /**
@@ -114,6 +118,7 @@ export class PickupSystem {
       y,
       vy: 0,
       falling: options.falling ?? false,
+      tag: options.tag,
       gfx: this.scene.add.graphics(),
       bob: Math.random() * Math.PI * 2,
     };
@@ -121,6 +126,11 @@ export class PickupSystem {
     this.items.push(item);
     this.redraw(item);
     return item;
+  }
+
+  /** 某个 tag 的掉落物是否还在地上（武器掉落点判断是否该刷新） */
+  hasTag(tag: string): boolean {
+    return this.items.some((item) => item.tag === tag);
   }
 
   /** 生成一件道具掉落物（医疗包/防弹衣） */
@@ -134,6 +144,7 @@ export class PickupSystem {
       y,
       vy: 0,
       falling: options.falling ?? false,
+      tag: options.tag,
       gfx: this.scene.add.graphics(),
       bob: Math.random() * Math.PI * 2,
     };

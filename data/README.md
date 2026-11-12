@@ -154,10 +154,45 @@ npm run validate
     { "id": "seesaw_pivot", "type": "revolute", "bodyA": "seesaw_plank",
       "anchor": { "x": 2170, "y": 998 } }   // bodyB 省略 = 固定在世界锚点
   ],
-  "weaponDropZones": [{ "x": 200, "y": 80, "w": 2000, "h": 100 }],   // 预留(M4)
-  "items": [{ "type": "medkit", "x": 1200, "y": 1100 }]              // 预留(M4)
+  "weaponDropZones": [{ "x": 200, "y": 80, "w": 2000, "h": 100 }],   // 全局随机空投的 x 范围
+  "items": [{ "type": "medkit", "x": 1200, "y": 1100 }],             // 固定补给点（医疗包/防弹衣）
+  "weapons": [                                                       // 武器掉落点（补给站）
+    { "x": 500, "y": 1120, "mode": "fixed", "weapon": "sniper",
+      "respawnMs": 12000 },
+    { "x": 900, "y": 1120, "mode": "random", "pool": ["pistol", "ak47"],
+      "respawnMs": 8000, "maxRespawns": 3 }
+  ]
 }
 ```
+
+### 武器掉落点（`weapons[]`）
+
+地图上的"补给站"：开局从空中落下一把武器，可配置被捡走后是否重新刷新。
+
+| 字段 | 说明 |
+|------|------|
+| `x` / `y` | 落点坐标（武器从 y-240 处落下，落到这个位置附近的地面/平台上） |
+| `mode` | `fixed`（默认）= 固定武器；`random` = 从候选池随机 |
+| `weapon` | `mode: fixed` 时的武器 id（必填）。旧字段 `type` 等价 |
+| `pool` | `mode: random` 的候选武器 id 数组；**不填或空数组 = 全部武器** |
+| `respawnMs` | 被捡走后多久重新刷新（ms）。**0 或不填 = 只刷一次，不刷新** |
+| `maxRespawns` | 最多刷新几次。**不填 = 无限**；`0` = 不刷新 |
+
+```jsonc
+{ "x": 500, "y": 1120, "mode": "fixed", "weapon": "sniper", "respawnMs": 12000 }
+// 无限刷新：每 12 秒补一把狙击枪
+
+{ "x": 900, "y": 1120, "mode": "random", "pool": ["pistol", "ak47"],
+  "respawnMs": 8000, "maxRespawns": 3 }
+// 每 8 秒从手枪/AK 里随机补一把，最多补 3 次
+
+{ "x": 900, "y": 1120, "type": "dagger" }
+// 旧格式：等价于 mode:fixed, weapon:dagger，只刷一次
+```
+
+实现：`src/world/WeaponSpawnerSystem.ts`。它给每个掉落点打一个 `tag`（`wspawn:N`），
+靠"地上还有没有这个 tag 的武器"判断是否已被捡走，再按间隔/次数刷新。
+与 `weaponDropZones`（DropSystem 的全局随机空投）互不影响。
 
 ### prefabs/*.json
 

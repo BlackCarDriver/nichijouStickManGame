@@ -33,6 +33,7 @@ import {
 import type { MaterialConfig, MaterialJson, MaterialsFile } from '../config/materials';
 import { forgetTextureFailures } from '../map/TextureLoader';
 import { listItemIds } from '../world/ItemFormat';
+import { listWeaponIds } from '../combat/WeaponFormat';
 import {
   makeContext,
   validateMap,
@@ -657,9 +658,24 @@ export class EditorStore {
   }
 
   /** 投放一件武器（select=true 时选中它，便于立刻拖动/改类型） */
-  addWeaponSpawn(type: string, x: number, y: number, select = true): void {
+  /**
+   * 新增一个武器掉落点（默认固定武器 + 10 秒刷新一次）。
+   * @param weaponId 固定武器 id（mode=fixed 时使用）
+   * @param mode     fixed = 指定武器；random = 从候选池随机
+   */
+  addWeaponSpawn(
+    weaponId: string,
+    x: number,
+    y: number,
+    select = true,
+    mode: 'fixed' | 'random' = 'fixed',
+  ): void {
     if (!this.map.weapons) this.map.weapons = [];
-    this.map.weapons.push({ type, x, y });
+    const point: MapWeaponSpawn =
+      mode === 'random'
+        ? { x, y, mode: 'random', pool: [], respawnMs: 10000, maxRespawns: 0 }
+        : { x, y, mode: 'fixed', weapon: weaponId, respawnMs: 10000, maxRespawns: 0 };
+    this.map.weapons.push(point);
     if (select) this.selection = [`weapon:${this.map.weapons.length - 1}`];
     this.commit();
   }
@@ -1366,7 +1382,7 @@ export class EditorStore {
     if (this.issuesCache && this.issuesCacheRev === this.rev && this.issuesCacheTab === this.tab) {
       return this.issuesCache;
     }
-    const ctx = makeContext(materialIds(), Object.values(this.prefabTable()), listItemIds());
+    const ctx = makeContext(materialIds(), Object.values(this.prefabTable()), listItemIds(), listWeaponIds());
     const issues =
       this.tab === 'prefab'
         ? validatePrefab(this.prefabDraft, ctx)
@@ -1399,7 +1415,7 @@ export class EditorStore {
     } catch (e) {
       return { ok: false, issues: [{ level: 'error', path: 'json', message: `JSON 解析失败：${(e as Error).message}` }] };
     }
-    const ctx = makeContext(materialIds(), Object.values(this.prefabTable()), listItemIds());
+    const ctx = makeContext(materialIds(), Object.values(this.prefabTable()), listItemIds(), listWeaponIds());
     const issues = validateMap(parsed, ctx);
     const fatal = issues.filter((i) => i.level === 'error');
     if (fatal.length > 0) return { ok: false, issues };
@@ -1419,7 +1435,7 @@ export class EditorStore {
     } catch (e) {
       return { ok: false, issues: [{ level: 'error', path: 'json', message: `JSON 解析失败：${(e as Error).message}` }] };
     }
-    const ctx = makeContext(materialIds(), Object.values(this.prefabTable()), listItemIds());
+    const ctx = makeContext(materialIds(), Object.values(this.prefabTable()), listItemIds(), listWeaponIds());
     const issues = validatePrefab(parsed, ctx);
     if (issues.some((i) => i.level === 'error')) return { ok: false, issues };
     this.prefabDraft = parsed as PrefabData;

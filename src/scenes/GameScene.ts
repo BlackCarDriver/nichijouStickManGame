@@ -22,6 +22,7 @@ import { ItemDropSystem } from '../world/ItemDropSystem';
 import { getWeapon } from '../combat/WeaponFormat';
 import { FragmentSystem } from '../world/FragmentSystem';
 import { ShrapnelSystem } from '../world/ShrapnelSystem';
+import { WeaponSpawnerSystem } from '../world/WeaponSpawnerSystem';
 import { ImpactDamageSystem } from '../world/ImpactDamageSystem';
 import { DamageSystem } from '../combat/DamageSystem';
 import { ProjectileSystem } from '../combat/ProjectileSystem';
@@ -122,6 +123,7 @@ export class GameScene extends Phaser.Scene {
   private itemDrops!: ItemDropSystem;
   private fragments!: FragmentSystem;
   private shrapnel!: ShrapnelSystem;
+  private weaponSpawner!: WeaponSpawnerSystem;
   private impactDamage!: ImpactDamageSystem;
 
   /** 首次用户手势时启动 AudioContext（浏览器自动播放策略） */
@@ -229,12 +231,8 @@ export class GameScene extends Phaser.Scene {
     this.drops = new DropSystem(this, this.pickups, this.mapData);
     // 补给道具（医疗包/防弹衣）：地图固定点 + 维持数量
     this.itemDrops = new ItemDropSystem(this, this.pickups, this.mapData);
-    // 地图指定的武器：开局即摆在地上（不走随机空投）
-    for (const w of this.mapData.weapons ?? []) {
-      if (!this.pickups.spawn(w.type, w.x, w.y, { falling: false })) {
-        console.warn(`[GameScene] 未知武器 ${w.type}（地图 ${this.mapData.name}）`);
-      }
-    }
+    // 武器掉落点（固定/随机武器，可配刷新）
+    this.weaponSpawner = new WeaponSpawnerSystem(this, this.pickups, this.mapData);
     this.fragments = new FragmentSystem(this);
     // 爆炸破片（手榴弹/火箭炮）：真刚体 + 命中伤害
     this.shrapnel = new ShrapnelSystem(
@@ -456,6 +454,7 @@ export class GameScene extends Phaser.Scene {
       ['pickups', () => this.pickups.destroy()],
       ['fragments', () => this.fragments.destroy()],
       ['shrapnel', () => this.shrapnel.destroy()],
+      ['weaponSpawner', () => this.weaponSpawner.destroy()],
       ['impactDamage', () => this.impactDamage.destroy()],
       ['weapon', () => this.weaponSystem.destroy()],
       ['fx', () => this.fx.destroy()],
@@ -520,6 +519,7 @@ export class GameScene extends Phaser.Scene {
     this.itemDrops.update(delta);
     this.fragments.update(delta);
     this.shrapnel.update(delta);
+    this.weaponSpawner.update(delta);
     this.updateOneWayCollisions();
     syncCompoundVisuals(this.mapObjects);
     this.updateCameraTarget(cmd1, cmd2);

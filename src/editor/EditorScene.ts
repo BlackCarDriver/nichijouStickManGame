@@ -1050,11 +1050,27 @@ export class EditorScene extends Phaser.Scene {
         g.lineStyle(selected ? 3 : 2, selected ? 0xffffff : 0xf5d76e, 1);
         g.strokeCircle(w.x, w.y, 20);
         // 小型"枪"图形，便于和出生点区分
-        g.lineStyle(3, 0xf5d76e, 1);
+        const isRandom = (w.mode ?? 'fixed') === 'random';
+        const color = isRandom ? 0x66d9ef : 0xf5d76e;
+        g.lineStyle(3, color, 1);
         g.lineBetween(w.x - 9, w.y, w.x + 9, w.y);
         g.lineBetween(w.x + 4, w.y - 5, w.x + 9, w.y);
-        g.fillStyle(0xf5d76e, 1);
+        g.fillStyle(color, 1);
         g.fillCircle(w.x - 10, w.y + 3, 3);
+        // 随机点：右下角画一个"?"（圆弧 + 点）
+        if (isRandom) {
+          g.lineStyle(1.8, color, 1);
+          g.beginPath();
+          g.arc(w.x + 12, w.y + 11, 4.5, Math.PI * 0.9, Math.PI * 2.3, false);
+          g.strokePath();
+          g.fillStyle(color, 1);
+          g.fillCircle(w.x + 12, w.y + 20, 1.7);
+        }
+        // 允许刷新：左下角绿点
+        if ((w.respawnMs ?? 0) > 0) {
+          g.fillStyle(0x54d2b0, 1);
+          g.fillCircle(w.x - 12, w.y + 13, 3.2);
+        }
       });
 
       // 关节：主体中心 → 锚点（锚点可点选、可拖动）
@@ -1301,9 +1317,19 @@ export class EditorScene extends Phaser.Scene {
       case 'weapon': {
         if (store.activeWeaponId) {
           const sp = store.snapPoint(p);
-          store.addWeaponSpawn(store.activeWeaponId, sp.x, sp.y);
+          // '__random__' 是左栏"随机武器"的哨兵值
+          const isRandom = store.activeWeaponId === '__random__';
+          store.addWeaponSpawn(
+            isRandom ? '' : store.activeWeaponId,
+            sp.x,
+            sp.y,
+            true,
+            isRandom ? 'random' : 'fixed',
+          );
           store.tool = 'select';
-          store.message = '已投放武器（已切回选择工具）';
+          store.message = isRandom
+            ? '已放置随机武器掉落点（已切回选择工具）'
+            : '已放置武器掉落点（已切回选择工具）';
           store.touch();
         } else {
           store.message = '请先在左侧选择要投放的武器';

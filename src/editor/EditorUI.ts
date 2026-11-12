@@ -110,6 +110,9 @@ let toastEl!: HTMLElement;
 let actionTimelineRange: HTMLInputElement | null = null;
 let actionTimelineLabel: HTMLElement | null = null;
 
+/** 左栏【随机武器】选项的哨兵值（不是真实武器 id） */
+const RANDOM_WEAPON_SENTINEL = '__random__';
+
 const TOOLS: Array<{ id: ToolKind; label: string; key: string }> = [
   { id: 'select', label: '选择', key: 'V' },
   { id: 'rect', label: '矩形', key: 'R' },
@@ -420,15 +423,21 @@ function renderLeft(): void {
           ),
         ),
       ),
-      h('h3', { class: 'ed-h3' }, ['武器投放（点击画布放置）']),
+      h('h3', { class: 'ed-h3' }, ['武器掉落点（点击画布放置）']),
       selectInput(
-        listWeaponIds().map((id) => ({ value: id, label: `${getWeapon(id)?.name ?? id} (${id})` })),
+        [
+          { value: RANDOM_WEAPON_SENTINEL, label: '随机武器（从全部武器抽）' },
+          ...listWeaponIds().map((id) => ({ value: id, label: `${getWeapon(id)?.name ?? id} (${id})` })),
+        ],
         store.activeWeaponId ?? '',
         (v) => {
           store.activeWeaponId = v || null;
           if (v) {
             store.tool = 'weapon';
-            store.message = '已选择武器，点击画布投放';
+            store.message =
+              v === RANDOM_WEAPON_SENTINEL
+                ? '随机武器掉落点：点击画布放置'
+                : '已选择武器，点击画布放置掉落点';
           }
           store.touch();
         },
@@ -1083,25 +1092,64 @@ function jointForm(index: number): HTMLElement {
   ]);
 }
 
-/** 武器投放点属性 */
+/** 武器掉落点属性（固定 / 随机 / 刷新配置） */
 function weaponSpawnForm(index: number): HTMLElement {
   const store = editorStore;
   const w = store.weaponSpawns()[index];
   if (!w) return h('div');
+  const mode = w.mode ?? 'fixed';
+  const fixedId = w.weapon ?? w.type ?? '';
+
   return h('div', {}, [
-    h('h3', { class: 'ed-h3' }, [`武器投放点 #${index + 1}`]),
-    h('p', { class: 'ed-help' }, ['开局时该武器直接摆在地上（不走随机空投）。画布上可拖动。']),
-    field('武器', selectInput(
-      listWeaponIds().map((id) => ({ value: id, label: `${getWeapon(id)?.name ?? id} (${id})` })),
-      w.type,
-      (v) => store.updateWeaponSpawn(index, { type: v }),
+    h('h3', { class: 'ed-h3' }, [`武器掉落点 #${index + 1}`]),
+    h('p', { class: 'ed-help' }, [
+      '开局在这里刷一把武器（从空中落下）；可配置被捡走后是否重新刷新。画布上可拖动。',
+    ]),
+    field('模式', selectInput(
+      [
+        { value: 'fixed', label: '固定武器（每次刷同一把）' },
+        { value: 'random', label: '随机武器（从候选池抽）' },
+      ],
+      mode,
+      (v) => store.updateWeaponSpawn(index, { mode: v as 'fixed' | 'random' }),
     )),
+
+    ...(mode === 'fixed'
+      ? [
+          field('武器', selectInput(
+            listWeaponIds().map((id) => ({ value: id, label: `${getWeapon(id)?.name ?? id} (${id})` })),
+            fixedId,
+            (v) => store.updateWeaponSpawn(index, { weapon: v }),
+          )),
+        ]
+      : [
+          field('候选池（逗号分隔，留空 = 全部武器）', textInput((w.pool ?? []).join(', '), (v) => {
+            const pool = v
+              .split(',')
+              .map((x) => x.trim())
+              .filter(Boolean);
+            store.updateWeaponSpawn(index, { pool });
+          })),
+          h('p', { class: 'ed-help' }, [
+            `可用：${listWeaponIds().join(', ')}`,
+          ]),
+        ]),
+
+    h('div', { class: 'ed-grid2' }, [
+      field('刷新间隔（ms，0=不刷新）', numberInput(w.respawnMs ?? 0, (v) => store.updateWeaponSpawn(index, { respawnMs: Math.max(0, Math.round(v)) }))),
+      field('最多刷新次数（空=无限）', numberInput(w.maxRespawns ?? 0, (v) => store.updateWeaponSpawn(index, { maxRespawns: Math.max(0, Math.round(v)) }))),
+    ]),
+    h('p', { class: 'ed-help' }, [
+      '说明：刷新间隔 0 或"最多刷新次数"=0 → 只开局刷一次，捡走就没了；',
+      '间隔 >0 且次数留空（=无限）→ 被捡走后按间隔一直补。',
+    ]),
+
     h('div', { class: 'ed-grid2' }, [
       field('x', numberInput(w.x, (v) => store.updateWeaponSpawn(index, { x: v }))),
       field('y', numberInput(w.y, (v) => store.updateWeaponSpawn(index, { y: v }))),
     ]),
     h('div', { class: 'ed-row' }, [
-      button('删除该投放点', () => store.removeWeaponSpawn(index), 'danger'),
+      button('删除该掉落点', () => store.removeWeaponSpawn(index), 'danger'),
     ]),
   ]);
 }
