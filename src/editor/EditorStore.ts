@@ -1229,16 +1229,49 @@ export class EditorStore {
    */
   materialTestMap(): MapData {
     const mat = this.activeMaterialId;
+    const matFixed = MATERIALS[mat]?.fixed ?? false;
     const clone = JSON.parse(JSON.stringify(this.map)) as MapData;
+
     for (const obj of clone.objects ?? []) {
       const wasStatic = obj.fixed ?? MATERIALS[obj.material]?.fixed ?? false;
       obj.material = mat;
-      obj.fixed = wasStatic;
+      // 目标材质是静态 → 一律静态（勾了"默认固定"就不该再掉落）
+      // 目标材质是动态 → 原来静态的仍保持静态，否则地面变木板、整关会塌
+      obj.fixed = matFixed ? true : wasStatic;
       delete obj.color;
       delete obj.texture;
       delete obj.textureMode;
     }
+
+    // 预制件实例（集合体）同理：静态材质 → 整体固定；动态材质 → 沿用原本的静态性
+    const prefabTable = this.prefabTable();
+    for (const inst of clone.prefabs ?? []) {
+      const prefab = prefabTable[inst.ref];
+      const wasStatic = inst.fixed ?? this.prefabStaticByMaterial(prefab);
+      inst.fixed = matFixed ? true : wasStatic;
+    }
+
     return clone;
+  }
+
+  /** 预制件按其"面积最大部件"的材质推断原本是否静态（与 MapLoader 复合体口径一致） */
+  private prefabStaticByMaterial(prefab: PrefabData | undefined): boolean {
+    if (!prefab || !prefab.parts?.length) return false;
+    let best = prefab.parts[0];
+    let bestArea = -1;
+    for (const part of prefab.parts) {
+      const area =
+        part.type === 'rect'
+          ? part.w * part.h
+          : part.type === 'circle'
+            ? Math.PI * part.radius * part.radius
+            : (part.radius ?? 40) * (part.radius ?? 40) * 2.5;
+      if (area > bestArea) {
+        bestArea = area;
+        best = part;
+      }
+    }
+    return MATERIALS[best.material]?.fixed ?? false;
   }
 
   /** 材质 Tab 测试用的预制件表：所有部件材质一并换成选中材质 */
