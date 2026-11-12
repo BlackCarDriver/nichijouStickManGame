@@ -10,8 +10,6 @@
       "damage": 14,
       "knockback": 4.5,
       "ammo": 12,
-      "durability": 120,
-      "durabilityPerShot": 1,
       "bullet": {
         "kind": "dot",
         "speed": 1600,
@@ -36,8 +34,6 @@
       "damage": 9,
       "knockback": 3,
       "ammo": 30,
-      "durability": 200,
-      "durabilityPerShot": 1,
       "bullet": {
         "kind": "streak",
         "speed": 2000,
@@ -62,8 +58,6 @@
       "damage": 4,
       "knockback": 1.2,
       "ammo": 45,
-      "durability": 150,
-      "durabilityPerShot": 1,
       "beam": {
         "range": 2200,
         "width": 5,
@@ -85,8 +79,6 @@
       "damage": 30,
       "knockback": 9,
       "ammo": 3,
-      "durability": 40,
-      "durabilityPerShot": 5,
       "bullet": {
         "kind": "rocket",
         "speed": 700,
@@ -112,8 +104,6 @@
       "damage": 22,
       "knockback": 4,
       "ammo": -1,
-      "durability": 80,
-      "durabilityPerShot": 2,
       "melee": { "reach": 62, "arc": 40 },
       "throw": { "speed": 900, "range": 3000, "stickMs": 10000, "damage": 18 },
       "recoil": { "push": 0, "climbDeg": 0, "climbMaxDeg": 0, "recoverMs": 0 },
@@ -128,8 +118,6 @@
       "damage": 30,
       "knockback": 6,
       "ammo": -1,
-      "durability": 110,
-      "durabilityPerShot": 2,
       "melee": { "reach": 92, "arc": 30 },
       "throw": { "speed": 820, "range": 3000, "stickMs": 10000, "damage": 26 },
       "recoil": { "push": 0, "climbDeg": 0, "climbMaxDeg": 0, "recoverMs": 0 },
@@ -144,8 +132,6 @@
       "damage": 70,
       "knockback": 8,
       "ammo": 5,
-      "durability": 40,
-      "durabilityPerShot": 4,
       "bullet": {
         "kind": "streak",
         "speed": 4200,
@@ -171,8 +157,6 @@
       "damage": 8,
       "knockback": 3,
       "ammo": 6,
-      "durability": 70,
-      "durabilityPerShot": 2,
       "bullet": {
         "kind": "dot",
         "speed": 1350,
@@ -199,8 +183,6 @@
       "damage": 55,
       "knockback": 9,
       "ammo": -1,
-      "durability": 150,
-      "durabilityPerShot": 1,
       "melee": { "reach": 100, "arc": 62, "anim": "slash" },
       "recoil": { "push": 0, "climbDeg": 0, "climbMaxDeg": 0, "recoverMs": 0 },
       "visual": { "style": "lightsaber", "length": 74, "thickness": 5, "color": "#8ef7ff", "glow": "#3ad2ff" }
@@ -214,8 +196,6 @@
       "damage": 20,
       "knockback": 12,
       "ammo": 2,
-      "durability": 20,
-      "durabilityPerShot": 10,
       "throw": {
         "speed": 640,
         "range": 900,

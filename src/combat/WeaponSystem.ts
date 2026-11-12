@@ -395,18 +395,15 @@ export class WeaponSystem {
     return true;
   }
 
-  /** 消耗弹药/耐久，并在耗尽时处理武器去向 */
+  /** 消耗弹药，并在打空时处理武器去向（武器没有耐久度） */
   private consume(player: Player, weapon: WeaponJson, usesAmmo: boolean): void {
     const held = player.heldWeapon;
     if (!held) return;
     if (usesAmmo && held.ammo > 0) held.ammo -= 1;
-    held.durability -= weapon.durabilityPerShot;
     this.cooldowns.set(player.id, 1 / Math.max(0.01, weapon.fireRate));
 
-    if (held.durability <= 0) {
-      this.releaseWeapon(player, 'broken');
-    } else if (held.ammo === 0) {
-      // 弹匣打空 → 武器脱手（W5：实体化为地上的可拾取物）
+    if (held.ammo === 0) {
+      // 弹匣打空 → 武器作废
       this.releaseWeapon(player, 'empty');
     }
   }
@@ -585,13 +582,9 @@ export class WeaponSystem {
     this.applyBeamDamage(player, weapon, trace, dir, true, player.id);
     this.applyRecoil(player, weapon);
 
-    // 消耗：每 tick 1 发弹药 + 耐久
+    // 消耗：每 tick 1 发弹药（没有耐久度）
     if (held.ammo > 0) held.ammo -= 1;
-    held.durability -= weapon.durabilityPerShot;
-
-    if (held.durability <= 0) {
-      this.releaseWeapon(player, 'broken');
-    } else if (held.ammo === 0) {
+    if (held.ammo === 0) {
       this.releaseWeapon(player, 'empty');
     }
   }
@@ -858,16 +851,12 @@ export class WeaponSystem {
    * - broken：耐久耗尽 → 销毁
    * - thrown：投掷出去 → 不返回
    */
-  private releaseWeapon(player: Player, reason: 'empty' | 'broken' | 'thrown'): void {
+  private releaseWeapon(player: Player, reason: 'empty' | 'thrown'): void {
     const held = player.heldWeapon;
     if (!held) return;
     const id = held.id;
-    const snapshot = { id, ammo: held.ammo, durability: held.durability };
+    const snapshot = { id, ammo: held.ammo };
     player.heldWeapon = null;
-
-    if (reason === 'broken') {
-      this.fx.burst(player.muzzle, 0xffa94d);
-    }
     this.scene.events.emit('weapon-lost', player, id, reason, snapshot);
   }
 }

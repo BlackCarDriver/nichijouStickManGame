@@ -133,8 +133,8 @@ export class Hud {
     }
   }
 
-  /** 武器行：名称 / 弹药 / 耐久条 */
-  private drawWeaponInfo(player: Player, x: number, y: number): void {
+  /** 武器行：名称 / 弹药（武器没有耐久度，不画耐久条） */
+  private drawWeaponInfo(player: Player, _x: number, _y: number): void {
     const held = player.heldWeapon;
     const label = this.weaponLabels[this.players.indexOf(player)];
     if (!held) {
@@ -148,15 +148,6 @@ export class Hud {
     if (label) {
       label.setText(`${weapon.name}  ${ammoText}`);
     }
-
-    // 耐久条（宽度 = 血条宽度的 60%）
-    const durW = Hud.BAR_W * 0.6;
-    const durY = y + 14;
-    const ratio = Phaser.Math.Clamp(held.durability / Math.max(1, weapon.durability), 0, 1);
-    this.g.fillStyle(0x000000, 0.5);
-    this.g.fillRect(x, durY, durW, 4);
-    this.g.fillStyle(ratio > 0.3 ? 0x6fd08c : 0xffa94d, 1);
-    this.g.fillRect(x, durY, durW * ratio, 4);
   }
 
   destroy(): void {

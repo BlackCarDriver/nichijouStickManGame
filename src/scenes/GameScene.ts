@@ -217,13 +217,13 @@ export class GameScene extends Phaser.Scene {
       const pieces = runtime.material === 'cardboard' ? 4 : 6;
       this.fragments.burst(center.x, center.y, colorHex, pieces);
     };
-    // 弹药耗尽 / 耐久耗尽 → 武器直接消失（不掉落在地上）。
+    // 弹药耗尽 / 投掷出去 → 武器直接消失（不掉落在地上）。
     // 武器补给完全交给天降武器（DropSystem）。
     const onWeaponLost = (
       _player: Player,
       _weaponId: string,
-      _reason: 'empty' | 'broken' | 'thrown',
-      _snapshot?: { ammo: number; durability: number },
+      _reason: 'empty' | 'thrown',
+      _snapshot?: { ammo: number },
     ): void => {
       // 目前只做表现层反馈（在 WeaponSystem 里已播放特效）
     };

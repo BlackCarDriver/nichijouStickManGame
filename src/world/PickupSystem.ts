@@ -13,7 +13,6 @@ const GRENADE_MAX = GrenadeSystem.MAX;
 export interface WeaponPickup {
   weaponId: string;
   ammo: number;
-  durability: number;
   x: number;
   y: number;
   vy: number;
@@ -24,7 +23,6 @@ export interface WeaponPickup {
 
 export interface PickupSpawnOptions {
   ammo?: number;
-  durability?: number;
   /** 是否从空中掉落（穿过物体落到地面） */
   falling?: boolean;
 }
@@ -79,7 +77,6 @@ export class PickupSystem {
     const item: WeaponPickup = {
       weaponId,
       ammo: options.ammo ?? weapon.ammo,
-      durability: options.durability ?? weapon.durability,
       x,
       y,
       vy: 0,
@@ -190,7 +187,6 @@ export class PickupSystem {
           this.remove(item);
           this.spawn(old.id, player.container.x, player.container.y, {
             ammo: old.ammo,
-            durability: old.durability,
             falling: false,
           });
           consumed.add(player.id);
@@ -206,7 +202,6 @@ export class PickupSystem {
     player.heldWeapon = createHeldWeapon(item.weaponId) ?? null;
     if (player.heldWeapon) {
       player.heldWeapon.ammo = item.ammo;
-      player.heldWeapon.durability = item.durability;
     }
     this.fx.hitSpark({ x: item.x, y: item.y }, { x: 0, y: -1 }, 0x9ad0ff);
     this.scene.events.emit('weapon-picked', player, item.weaponId);

@@ -167,12 +167,8 @@ export interface WeaponJson {
   damage: number;
   /** 命中玩家的击退强度 */
   knockback: number;
-  /** 弹药数；-1 = 无限（近战武器靠耐久） */
+  /** 弹药数；-1 = 无限（近战武器不消耗弹药） */
   ammo: number;
-  /** 武器耐久上限 */
-  durability: number;
-  /** 每次攻击消耗的耐久 */
-  durabilityPerShot: number;
   bullet?: BulletConfig;
   beam?: BeamConfig;
   melee?: MeleeConfig;
@@ -223,12 +219,10 @@ export interface HeldWeapon {
   id: string;
   /** 剩余弹药（-1 = 无限） */
   ammo: number;
-  /** 剩余耐久 */
-  durability: number;
 }
 
 export function createHeldWeapon(id: string): HeldWeapon | undefined {
   const w = getWeapon(id);
   if (!w) return undefined;
-  return { id, ammo: w.ammo, durability: w.durability };
+  return { id, ammo: w.ammo };
 }
