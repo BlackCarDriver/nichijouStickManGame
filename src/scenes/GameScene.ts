@@ -14,18 +14,16 @@ import { preloadMaterialTextures } from '../map/TextureLoader';
 import { WorldRegistry } from '../world/WorldRegistry';
 import { DestructionSystem } from '../world/DestructionSystem';
 import { DamageSystem } from '../combat/DamageSystem';
-import type { DamageInfo } from '../combat/DamageInfo';
-import { raycast, getWorldBodies } from '../combat/Raycast';
+import { ProjectileSystem } from '../combat/ProjectileSystem';
+import { WeaponSystem } from '../combat/WeaponSystem';
 import { FxSystem } from '../fx/FxSystem';
 import { Hud } from '../ui/Hud';
 
 const PLAYER_COLORS = [0xe74c3c, 0x3498db];
 /** 镜头缩放（固定，聚焦单角色时画面清晰） */
 const CAMERA_ZOOM = 0.9;
-/** W1 调试枪：伤害 / 射速（W2 由 weapons.json 接管） */
-const DEBUG_GUN_DAMAGE = 18;
-const DEBUG_GUN_INTERVAL = 0.12;
-const DEBUG_GUN_RANGE = 2400;
+/** 出生时默认装备的武器 */
+const STARTING_WEAPON = 'pistol';
 
 /** 启动场景时可传入的数据（编辑器 Play test 用） */
 export interface GameSceneData {
@@ -74,8 +72,10 @@ export class GameScene extends Phaser.Scene {
   private readonly bodyToPlayer = new Map<number, Player>();
   /** 谁持有鼠标（瞄准归属）：0=P1 1=P2 */
   private aimOwner: 0 | 1 = 0;
-  /** 调试枪射速冷却（秒） */
-  private readonly gunCooldown = [0, 0];
+  /** 武器系统（装备/开火/弹药耐久） */
+  private weaponSystem!: WeaponSystem;
+  /** 逻辑弹道子弹系统 */
+  private projectileSystem!: ProjectileSystem;
 
   constructor() {
     super('GameScene');
@@ -108,7 +108,6 @@ export class GameScene extends Phaser.Scene {
 
     const spawn = this.mapData.spawnPoints;
     this.players = spawn.map((p, i) => new Player(this, p.x, p.y, PLAYER_COLORS[i]));
-    this.players.forEach((p) => (p.equippedGun = true)); // W1：两人都拿调试枪
     this.cameraTarget = this.players[0];
 
     // ---- 伤害 / 破坏 / 表现 接线 ----
@@ -117,10 +116,26 @@ export class GameScene extends Phaser.Scene {
     this.fx = new FxSystem(this);
     this.destruction = new DestructionSystem(this, this.worldRegistry, this.fx);
     this.damageSystem = new DamageSystem(this.fx, this.destruction);
+    this.projectileSystem = new ProjectileSystem(
+      this,
+      this.damageSystem,
+      this.worldRegistry,
+      this.bodyToPlayer,
+      this.fx,
+    );
+    this.weaponSystem = new WeaponSystem(
+      this,
+      this.projectileSystem,
+      this.damageSystem,
+      this.worldRegistry,
+      this.bodyToPlayer,
+      this.fx,
+    );
     this.hud = new Hud(this);
     this.hud.bind(this.players);
     for (const player of this.players) {
       this.bodyToPlayer.set(player.body.id, player);
+      this.weaponSystem.equip(player, STARTING_WEAPON);
     }
 
     const cam = this.cameras.main;
@@ -137,6 +152,7 @@ export class GameScene extends Phaser.Scene {
     // 场景重启（编辑器 Play test 反复进入）时必须摘掉监听、销毁 HUD，否则会累积泄漏
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.events.off('player-hit', onPlayerHit);
+      this.projectileSystem.destroy();
       this.fx.destroy();
       this.hud.destroy();
     });
@@ -157,7 +173,17 @@ export class GameScene extends Phaser.Scene {
 
     this.players[0]?.update(cmd1, delta);
     this.players[1]?.update(cmd2, delta);
-    this.fireDebugGuns(cmds, delta);
+
+    // 武器切换（数字键 → 当前操作中的玩家）
+    const switchTo = this.inputManager.readWeaponSwitch();
+    if (switchTo !== undefined) {
+      const owner = this.players[this.aimOwner];
+      if (owner) this.weaponSystem.equip(owner, switchTo);
+    }
+
+    this.weaponSystem.update(delta);
+    this.fireWeapons(cmds);
+    this.projectileSystem.update(delta);
     this.updateOneWayCollisions();
     // 焊接体：把一个刚体同步到它的 Container 视觉上
     syncCompoundVisuals(this.mapObjects);
@@ -198,59 +224,12 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  /** W1 调试枪：按攻击键发射射线（W2 由 WeaponSystem 接管） */
-  private fireDebugGuns(cmds: InputCommand[], deltaMs: number): void {
-    const dt = deltaMs / 1000;
-    for (let i = 0; i < this.gunCooldown.length; i++) {
-      this.gunCooldown[i] = Math.max(0, this.gunCooldown[i] - dt);
-    }
-
+  /** 按攻击键开火（走 WeaponSystem：射速/弹药/耐久都在那里管） */
+  private fireWeapons(cmds: InputCommand[]): void {
     this.players.forEach((player, i) => {
       if (!cmds[i].attack) return;
-      if (this.gunCooldown[i] > 0) return;
-      if (player.health.isDead) return;
-      this.gunCooldown[i] = DEBUG_GUN_INTERVAL;
-      this.fireDebugShot(player);
+      this.weaponSystem.tryFire(player);
     });
-  }
-
-  /** 一条射线：命中物体扣耐久（→破坏）、命中玩家扣血 */
-  private fireDebugShot(shooter: Player): void {
-    const from = shooter.muzzle;
-    const angle = shooter.aim;
-    const dir = { x: Math.cos(angle), y: Math.sin(angle) };
-
-    const hits = raycast(getWorldBodies(this), from, dir, DEBUG_GUN_RANGE, {
-      ignore: [shooter.body],
-      maxHits: 1,
-    });
-    const hit = hits[0];
-
-    this.fx.beam(
-      from,
-      hit ? hit.point : { x: from.x + dir.x * DEBUG_GUN_RANGE, y: from.y + dir.y * DEBUG_GUN_RANGE },
-    );
-    if (!hit) return;
-
-    const info: DamageInfo = {
-      amount: DEBUG_GUN_DAMAGE,
-      kind: 'bullet',
-      sourceId: shooter.id,
-      point: hit.point,
-      normal: hit.normal,
-      knockback: { x: dir.x * 5.5, y: -2.5 },
-    };
-
-    const victim = this.bodyToPlayer.get(hit.body.id);
-    if (victim) {
-      this.damageSystem.damagePlayer(victim, info);
-      return;
-    }
-
-    const runtime = this.worldRegistry.resolve(hit.body);
-    if (runtime) {
-      this.damageSystem.damageObject(runtime, info);
-    }
   }
 
   /**

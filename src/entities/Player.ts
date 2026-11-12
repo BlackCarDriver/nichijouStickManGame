@@ -8,6 +8,9 @@ import { COLLISION_CATEGORY, PLAYER_MASK_ALL } from '../core/CollisionCategories
 import { emptyInput } from '../core/InputCommand';
 import { Health } from './Health';
 import type { DamageInfo } from '../combat/DamageInfo';
+import { getWeapon } from '../combat/WeaponFormat';
+import type { HeldWeapon } from '../combat/WeaponFormat';
+import { drawHeldWeapon } from '../render/WeaponRenderer';
 
 export const PLAYER_CONFIG = {
   /** 碰撞体尺寸（火柴人总高约 111px，碰撞体略小于视觉） */
@@ -95,12 +98,15 @@ export class Player extends Entity {
   // ---- 瞄准（武器系统用）----
   /** 瞄准角度（弧度，世界方向）。由场景按"谁持有鼠标"每帧设置 */
   private aimAngle = 0;
-  /** 是否装备调试枪（W1 验证伤害管线用，W2 由 WeaponSystem 接管） */
-  equippedGun = false;
+  /** 手持武器（null = 空手）。由 WeaponSystem 装备 */
+  heldWeapon: HeldWeapon | null = null;
+  /**
+   * 手部位置（visual 局部坐标）：由 StickmanRenderer 在瞄准时输出。
+   * 武器从这里画、子弹从这里出，保证"枪口 = 子弹起点"。
+   */
+  private handLocal = { x: 0, y: StickmanRenderer.SHOULDER_Y };
 
   private static readonly HIT_INVULN_MS = 180;
-  /** 肩部到枪口的距离（手臂 + 枪身） */
-  private static readonly MUZZLE_REACH = 54;
 
   // ---- 着地状态 ----
   /** 脚下射线检测结果 */
@@ -328,13 +334,18 @@ export class Player extends Entity {
     };
   }
 
-  /** 枪口位置（世界坐标）：子弹必须从这里出，否则会从墙里穿出来 */
+  /**
+   * 枪口位置（世界坐标）：手部 + 武器长度。
+   * 子弹必须从这里出，否则会从墙里穿出来。
+   */
   get muzzle(): { x: number; y: number } {
-    const s = this.shoulderWorld;
-    const reach = Player.MUZZLE_REACH;
+    const held = this.heldWeapon;
+    const gunLen = held ? (getWeapon(held.id)?.visual.length ?? 0) : 0;
+    const hx = this.container.x + this.facing * this.handLocal.x;
+    const hy = this.container.y + this.visual.y + this.handLocal.y;
     return {
-      x: s.x + Math.cos(this.aimAngle) * reach,
-      y: s.y + Math.sin(this.aimAngle) * reach,
+      x: hx + Math.cos(this.aimAngle) * gunLen,
+      y: hy + Math.sin(this.aimAngle) * gunLen,
     };
   }
 
@@ -596,40 +607,34 @@ export class Player extends Entity {
       groundYL: this.smSurfLeft - this.smSurfCenter,
       groundYR: this.smSurfRight - this.smSurfCenter,
       crouching: this.crouching,
+      // 持枪时前臂指向瞄准方向（手部位置由渲染器回传）
+      aim: this.heldWeapon && !this.health.isDead ? this.aimAngle : null,
     });
+
+    // 手部位置：渲染器在瞄准时输出；空手时用肩根近似
+    this.handLocal = StickmanRenderer.lastAimHand ?? {
+      x: this.facing * StickmanRenderer.SHOULDER_W,
+      y: StickmanRenderer.SHOULDER_Y + StickmanRenderer.SHOULDER_DY + StickmanRenderer.ARM_REACH,
+    };
+
+    // 手持武器（画在手臂末端 → 枪口与子弹起点一致）
+    if (this.heldWeapon && !this.health.isDead) {
+      const visual = getWeapon(this.heldWeapon.id)?.visual;
+      if (visual) {
+        drawHeldWeapon(this.graphics, {
+          visual,
+          facing: this.facing,
+          aim: this.aimAngle,
+          hand: this.handLocal,
+        });
+      }
+    }
 
     // 斜面时整体下移视觉（平滑值，避免抖动闪烁）
     this.visual.y = this.smSurfCenter;
 
     // 死亡表现：半透明
     this.visual.setAlpha(this.health.isDead ? 0.3 : 1);
-
-    // 播放调试枪（W1 临时装备）
-    if (this.equippedGun && !this.health.isDead) {
-      this.drawGun();
-    }
-  }
-
-  /**
-   * 画手中的枪（调试用）。
-   * 坐标系是 visual 的局部坐标：visual.scaleX = facing，
-   * 因此世界方向 (cos, sin) 要换成局部 (facing*cos, sin)。
-   */
-  private drawGun(): void {
-    const g = this.graphics;
-    const lx = Math.cos(this.aimAngle) * this.facing;
-    const ly = Math.sin(this.aimAngle);
-    const sx = 0;
-    const sy = StickmanRenderer.SHOULDER_Y;
-    const armLen = 32;
-    const gunLen = Player.MUZZLE_REACH - armLen;
-
-    // 手臂
-    g.lineStyle(4, this.color, 1);
-    g.lineBetween(sx, sy, sx + lx * armLen, sy + ly * armLen);
-    // 枪身
-    g.lineStyle(6, 0x2a2a35, 1);
-    g.lineBetween(sx + lx * armLen, sy + ly * armLen, sx + lx * (armLen + gunLen), sy + ly * (armLen + gunLen));
   }
 
   /** 联机预留：状态快照 */

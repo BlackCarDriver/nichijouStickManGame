@@ -1,0 +1,147 @@
+/**
+ * 武器表（数据源：data/weapons.json）。
+ *
+ * JSON 是唯一真源：游戏与（将来的）武器编辑器共用同一份数据。
+ * 与 materials.json 一样，颜色用 hex 字符串（人和 AI 都读得懂）。
+ *
+ * 实现状态（W2）：
+ *   - attackMode 'shoot'  → 逻辑弹道子弹（手枪/AK47/火箭炮）
+ *   - attackMode 'beam'   → 瞬时光束 hitscan（激光枪）
+ *   - attackMode 'melee'  → W3（刺击）
+ *   - attackMode 'throw'  → W3/W4（投掷）
+ */
+import rawWeapons from '../../data/weapons.json';
+
+/** 攻击方式 */
+export type AttackMode = 'shoot' | 'beam' | 'melee' | 'throw';
+
+/** 子弹外观类型（渲染用） */
+export type BulletKind = 'dot' | 'streak' | 'rocket' | 'grenade' | 'thrown';
+
+/** 手持武器的外形风格（渲染用） */
+export type WeaponVisualStyle =
+  | 'pistol'
+  | 'rifle'
+  | 'laser'
+  | 'launcher'
+  | 'dagger'
+  | 'spear'
+  | 'grenade';
+
+export interface BulletConfig {
+  kind: BulletKind;
+  /** 飞行速度（px/秒）—— 不同武器速度不同，直接决定"子弹飞行时间" */
+  speed: number;
+  /** 最大飞行距离（px） */
+  range: number;
+  /** 弹头大小（px） */
+  size: number;
+  /** 颜色（hex） */
+  color: string;
+  /** 拖尾长度（px），0 = 无拖尾 */
+  trail: number;
+  /** 最多反弹次数（材质需 bulletBounce 才会反弹） */
+  maxBounces: number;
+  /** 每次反弹后的伤害倍率 */
+  bounceDamageMul: number;
+  /** 每次穿透后的伤害倍率 */
+  pierceDamageMul: number;
+  /** 是否穿透玩家（激光类）；默认 false = 命中即停 */
+  piercePlayers: boolean;
+}
+
+export interface BeamConfig {
+  range: number;
+  width: number;
+  color: string;
+  /** 光束视觉持续时间（ms） */
+  duration: number;
+}
+
+export interface MeleeConfig {
+  /** 刺击距离（px） */
+  reach: number;
+  /** 判定弧宽（半角，度） */
+  arc: number;
+}
+
+export interface ThrowConfig {
+  speed: number;
+  range: number;
+  /** 重力系数（0 = 不受重力） */
+  gravity?: number;
+  /** 手榴弹引信时间（ms） */
+  fuseMs?: number;
+  /** 投掷物插在目标上的停留时间（ms） */
+  stickMs?: number;
+}
+
+export interface ExplosionConfig {
+  radius: number;
+  selfDamage: boolean;
+}
+
+export interface WeaponVisual {
+  style: WeaponVisualStyle;
+  /** 武器长度（px）：从手部沿瞄准方向延伸，决定枪口位置 */
+  length: number;
+  thickness: number;
+  color: string;
+}
+
+export interface WeaponJson {
+  name: string;
+  attackMode: AttackMode;
+  /** 射速（发/秒） */
+  fireRate: number;
+  /** 单次命中伤害 */
+  damage: number;
+  /** 命中玩家的击退强度 */
+  knockback: number;
+  /** 弹药数；-1 = 无限（近战武器靠耐久） */
+  ammo: number;
+  /** 武器耐久上限 */
+  durability: number;
+  /** 每次攻击消耗的耐久 */
+  durabilityPerShot: number;
+  bullet?: BulletConfig;
+  beam?: BeamConfig;
+  melee?: MeleeConfig;
+  throw?: ThrowConfig;
+  explosion?: ExplosionConfig;
+  visual: WeaponVisual;
+}
+
+interface WeaponsFile {
+  version: number;
+  weapons: Record<string, WeaponJson>;
+}
+
+const file = rawWeapons as WeaponsFile;
+
+/** 武器表（只读） */
+export const WEAPONS: Readonly<Record<string, WeaponJson>> = file.weapons;
+
+export function getWeapon(id: string): WeaponJson | undefined {
+  return WEAPONS[id];
+}
+
+/** 武器 id 列表（按 json 顺序） */
+export function listWeaponIds(): string[] {
+  return Object.keys(WEAPONS);
+}
+
+/** 装备中的武器运行时状态（每名玩家一份） */
+export interface HeldWeapon {
+  id: string;
+  /** 剩余弹药（-1 = 无限） */
+  ammo: number;
+  /** 剩余耐久 */
+  durability: number;
+}
+
+export function createHeldWeapon(id: string): HeldWeapon | undefined {
+  const w = getWeapon(id);
+  if (!w) return undefined;
+  return { id, ammo: w.ammo, durability: w.durability };
+}

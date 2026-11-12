@@ -3,59 +3,43 @@
   "id": "test",
   "name": "测试",
   "anchor": "center",
-  "bodyMode": "loose",
+  "bodyMode": "compound",
   "parts": [
     {
       "type": "rect",
       "x": -140,
-      "y": -50,
+      "y": -30,
       "w": 480,
       "h": 20,
       "material": "wood"
     },
     {
       "type": "rect",
-      "x": -130,
-      "y": -270,
+      "x": -50,
+      "y": -250,
       "w": 60,
       "h": 220,
       "material": "wood"
     },
     {
       "type": "rect",
-      "x": 260,
-      "y": -350,
+      "x": 160,
+      "y": -330,
       "w": 40,
       "h": 300,
       "material": "wood"
     },
     {
       "type": "circle",
-      "x": 240,
-      "y": 40,
+      "x": 80,
+      "y": -140,
       "radius": 80,
       "material": "wood"
     },
     {
       "type": "polygon",
-      "x": 0,
-      "y": 0,
-      "sides": 3,
-      "radius": 40,
-      "material": "wood"
-    },
-    {
-      "type": "polygon",
-      "x": 0,
-      "y": 0,
-      "sides": 3,
-      "radius": 40,
-      "material": "wood"
-    },
-    {
-      "type": "polygon",
-      "x": -200,
-      "y": 20,
+      "x": 60,
+      "y": 40,
       "material": "ice",
       "vertices": [
         {
@@ -83,6 +67,13 @@
           "y": -0.28013373171484823
         }
       ]
+    },
+    {
+      "type": "circle",
+      "x": 180,
+      "y": 0,
+      "radius": 30,
+      "material": "wood"
     }
   ]
 }

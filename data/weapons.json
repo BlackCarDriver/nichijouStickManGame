@@ -1,0 +1,142 @@
+{
+  "version": 1,
+  "weapons": {
+    "pistol": {
+      "name": "手枪",
+      "attackMode": "shoot",
+      "fireRate": 4,
+      "damage": 14,
+      "knockback": 4.5,
+      "ammo": 12,
+      "durability": 120,
+      "durabilityPerShot": 1,
+      "bullet": {
+        "kind": "dot",
+        "speed": 1600,
+        "range": 1500,
+        "size": 3,
+        "color": "#ffe08a",
+        "trail": 16,
+        "maxBounces": 3,
+        "bounceDamageMul": 0.7,
+        "pierceDamageMul": 0.6,
+        "piercePlayers": false
+      },
+      "visual": { "style": "pistol", "length": 22, "thickness": 5, "color": "#2b2b36" }
+    },
+
+    "ak47": {
+      "name": "AK47",
+      "attackMode": "shoot",
+      "fireRate": 10,
+      "damage": 9,
+      "knockback": 3,
+      "ammo": 30,
+      "durability": 200,
+      "durabilityPerShot": 1,
+      "bullet": {
+        "kind": "streak",
+        "speed": 2000,
+        "range": 1800,
+        "size": 2.5,
+        "color": "#ffd166",
+        "trail": 28,
+        "maxBounces": 3,
+        "bounceDamageMul": 0.7,
+        "pierceDamageMul": 0.6,
+        "piercePlayers": false
+      },
+      "visual": { "style": "rifle", "length": 40, "thickness": 6, "color": "#3a3a46" }
+    },
+
+    "laser": {
+      "name": "激光枪",
+      "attackMode": "beam",
+      "fireRate": 1.5,
+      "damage": 30,
+      "knockback": 5,
+      "ammo": 6,
+      "durability": 80,
+      "durabilityPerShot": 2,
+      "beam": {
+        "range": 2200,
+        "width": 4,
+        "color": "#7ef9ff",
+        "duration": 140
+      },
+      "visual": { "style": "laser", "length": 34, "thickness": 5, "color": "#2f4858" }
+    },
+
+    "rocket": {
+      "name": "火箭炮",
+      "attackMode": "shoot",
+      "fireRate": 0.8,
+      "damage": 45,
+      "knockback": 9,
+      "ammo": 3,
+      "durability": 40,
+      "durabilityPerShot": 5,
+      "bullet": {
+        "kind": "rocket",
+        "speed": 700,
+        "range": 2400,
+        "size": 6,
+        "color": "#ff9f43",
+        "trail": 42,
+        "maxBounces": 0,
+        "bounceDamageMul": 1,
+        "pierceDamageMul": 1,
+        "piercePlayers": false
+      },
+      "explosion": { "radius": 150, "selfDamage": true },
+      "visual": { "style": "launcher", "length": 44, "thickness": 9, "color": "#4a4a55" }
+    },
+
+    "dagger": {
+      "name": "匕首",
+      "attackMode": "melee",
+      "fireRate": 2.2,
+      "damage": 22,
+      "knockback": 4,
+      "ammo": -1,
+      "durability": 80,
+      "durabilityPerShot": 2,
+      "melee": { "reach": 62, "arc": 40 },
+      "throw": { "speed": 900, "range": 600, "stickMs": 1500 },
+      "visual": { "style": "dagger", "length": 26, "thickness": 4, "color": "#cfd8e3" }
+    },
+
+    "spear": {
+      "name": "长矛",
+      "attackMode": "melee",
+      "fireRate": 1.6,
+      "damage": 30,
+      "knockback": 6,
+      "ammo": -1,
+      "durability": 110,
+      "durabilityPerShot": 2,
+      "melee": { "reach": 92, "arc": 30 },
+      "throw": { "speed": 800, "range": 700, "stickMs": 2000 },
+      "visual": { "style": "spear", "length": 62, "thickness": 3, "color": "#b98b4e" }
+    },
+
+    "grenade": {
+      "name": "手榴弹",
+      "attackMode": "throw",
+      "fireRate": 1,
+      "damage": 55,
+      "knockback": 12,
+      "ammo": 2,
+      "durability": 20,
+      "durabilityPerShot": 10,
+      "throw": {
+        "speed": 600,
+        "range": 520,
+        "gravity": 0.35,
+        "fuseMs": 1500
+      },
+      "explosion": { "radius": 170, "selfDamage": true },
+      "visual": { "style": "grenade", "length": 12, "thickness": 8, "color": "#4e6b3a" }
+    }
+  }
+}

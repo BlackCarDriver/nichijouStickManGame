@@ -37,6 +37,11 @@ export interface StickmanDrawOptions {
   groundYR?: number;
   /** 是否蹲下 */
   crouching?: boolean;
+  /**
+   * 瞄准角（世界弧度）。非空时"前臂"改为指向瞄准方向（持枪姿势），
+   * 并由 StickmanRenderer.lastAimHand 输出手部位置供武器渲染/枪口计算使用。
+   */
+  aim?: number | null;
 }
 
 /**
@@ -72,15 +77,26 @@ export class StickmanRenderer {
    * 肩宽半宽（px）：手臂根部相对躯干的固定偏移。
    * 所有姿势必须共用同一值——否则换姿势时手臂会从躯干“脱开”。
    */
-  private static readonly SHOULDER_W = 3.5;
+  static readonly SHOULDER_W = 3.5;
   /** 手臂根部相对肩部的垂直偏移（固定，避免脱开） */
-  private static readonly SHOULDER_DY = 1.5;
+  static readonly SHOULDER_DY = 1.5;
+
+  /** 手臂总长（上臂 + 前臂）：持枪时手部到肩根的直线距离 */
+  static readonly ARM_REACH = RIG_BONES.UPPER_ARM + RIG_BONES.FOREARM;
+
+  /**
+   * draw() 的输出：瞄准手臂末端（visual 局部坐标）。
+   * 武器渲染与枪口位置必须与手臂末端一致，否则枪会脱手 / 子弹从错位置出。
+   * 每次 draw() 开头重置，瞄准时写入。
+   */
+  static lastAimHand: Vec2 | null = null;
 
   /** 跟随滞后时长（秒）：末端相对根节点的延迟 */
   private static readonly FOLLOW_LAG = 0.055;
 
   static draw(g: Phaser.GameObjects.Graphics, o: StickmanDrawOptions): void {
     g.clear();
+    this.lastAimHand = null;
     const speedPxPerSec = Math.abs(o.velocityX) * 60;
 
     switch (o.pose) {
@@ -153,8 +169,8 @@ export class StickmanRenderer {
 
     // 手臂：**两只手都朝前**（蹲伏时双手在身前），前后错开形成层次，避免贴住倾斜的躯干
     const armSwing = walking ? s * 11 : 0;
-    this.drawArmFK(g, o.color, shoulder, 1, 52 + armSwing, 34);
-    this.drawArmFK(g, o.color, shoulder, -1, 24 + armSwing, 30);
+    this.drawArmFK(g, o, shoulder, 1, 52 + armSwing, 34);
+    this.drawArmFK(g, o, shoulder, -1, 24 + armSwing, 30);
   }
 
   // ---------------- 站立 ----------------
@@ -185,8 +201,8 @@ export class StickmanRenderer {
 
     // 手臂：滞后于身体（follow-through）
     const lagSway = Math.sin((t - this.FOLLOW_LAG) * 0.9) * 3;
-    this.drawArmFK(g, o.color, shoulder, 1, 10 - sway + lagSway, 0.32);
-    this.drawArmFK(g, o.color, shoulder, -1, -10 - sway + lagSway, 0.32);
+    this.drawArmFK(g, o, shoulder, 1, 10 - sway + lagSway, 0.32);
+    this.drawArmFK(g, o, shoulder, -1, -10 - sway + lagSway, 0.32);
   }
 
   // ---------------- 行走 ----------------
@@ -246,8 +262,8 @@ export class StickmanRenderer {
     const swingR = armAmp * Math.sin(armPhase);
     const swingL = -armAmp * Math.sin(armPhase);
     const elbowBase = 12 + leanT * 6;
-    this.drawArmFK(g, o.color, shoulder, 1, swingR, elbowBase + weightShift * 1.5);
-    this.drawArmFK(g, o.color, shoulder, -1, swingL, elbowBase - weightShift * 1.5);
+    this.drawArmFK(g, o, shoulder, 1, swingR, elbowBase + weightShift * 1.5);
+    this.drawArmFK(g, o, shoulder, -1, swingL, elbowBase - weightShift * 1.5);
   }
 
   // ---------------- 空中 ----------------
@@ -282,8 +298,8 @@ export class StickmanRenderer {
       this.drawHead(g, o.color, shoulder, tuck * 3, -1.5);
       // 手臂上举（发力），速度越快越靠上
       const armUp = 130 + tuck * 30;
-      this.drawArmFK(g, o.color, shoulder, 1, armUp, -24 + tuck * 10);
-      this.drawArmFK(g, o.color, shoulder, -1, -armUp, -24 + tuck * 10);
+      this.drawArmFK(g, o, shoulder, 1, armUp, -24 + tuck * 10);
+      this.drawArmFK(g, o, shoulder, -1, -armUp, -24 + tuck * 10);
     } else {
       // 下落：腿张开准备落地，速度越快张得越开（预示冲击）
       const spread = 10 + speedT * 8;
@@ -293,8 +309,8 @@ export class StickmanRenderer {
       this.drawHead(g, o.color, shoulder, 2 + speedT * 2, 1.5);
       // 手臂张开（平衡/准备触地）
       const armSpread = 100 + speedT * 25;
-      this.drawArmFK(g, o.color, shoulder, 1, armSpread, -14);
-      this.drawArmFK(g, o.color, shoulder, -1, -armSpread, -14);
+      this.drawArmFK(g, o, shoulder, 1, armSpread, -14);
+      this.drawArmFK(g, o, shoulder, -1, -armSpread, -14);
     }
   }
 
@@ -316,8 +332,8 @@ export class StickmanRenderer {
     });
     const shoulder = this.drawTorso(g, o.color, hip, 6 - Math.sin(p) * 6, Math.sin(p * 1.3) * 6);
     this.drawHead(g, o.color, shoulder, 6 - Math.sin(p) * 6, Math.sin(p * 1.8) * 3);
-    this.drawArmFK(g, o.color, shoulder, 1, Math.sin(p * 2.5) * 90, Math.sin(p * 3.1) * 20);
-    this.drawArmFK(g, o.color, shoulder, -1, Math.sin(p * 2.2 + Math.PI) * 90, Math.sin(p * 2.8 + 1) * 20);
+    this.drawArmFK(g, o, shoulder, 1, Math.sin(p * 2.5) * 90, Math.sin(p * 3.1) * 20);
+    this.drawArmFK(g, o, shoulder, -1, Math.sin(p * 2.2 + Math.PI) * 90, Math.sin(p * 2.8 + 1) * 20);
   }
 
   // ---------------- 公共部件 ----------------
@@ -425,12 +441,18 @@ export class StickmanRenderer {
    */
   private static drawArmFK(
     g: Phaser.GameObjects.Graphics,
-    color: number,
+    o: StickmanDrawOptions,
     shoulder: Vec2,
     side: 1 | -1,
     shoulderAngle: number,
     elbowBendDeg: number,
   ): void {
+    // 持枪瞄准：前臂（side=1）指向瞄准方向，肘部伸直
+    if (o.aim != null && side === 1) {
+      // down 参考角：世界瞄准角 φ → 肩角 = 90° - φ
+      shoulderAngle = 90 - (o.aim * 180) / Math.PI;
+      elbowBendDeg = 0;
+    }
     // 根部位置：固定肩宽 + 固定垂直偏移 → 任何姿势下手臂都连在躯干上
     const rootX = shoulder.x + side * this.SHOULDER_W;
     const rootY = shoulder.y + this.SHOULDER_DY;
@@ -444,10 +466,15 @@ export class StickmanRenderer {
       1,
       'down',
     );
-    g.lineStyle(this.W_ARM, color, 1);
+    g.lineStyle(this.W_ARM, o.color, 1);
     g.lineBetween(rootX, rootY, joint.x, joint.y);
     g.lineBetween(joint.x, joint.y, end.x, end.y);
-    g.fillStyle(color, 1);
+    g.fillStyle(o.color, 1);
     g.fillCircle(joint.x, joint.y, 2.1);
+
+    // 瞄准时输出手部位置（供武器渲染与枪口计算）
+    if (o.aim != null && side === 1) {
+      this.lastAimHand = { x: end.x, y: end.y };
+    }
   }
 }

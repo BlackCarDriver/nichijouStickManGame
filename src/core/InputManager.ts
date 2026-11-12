@@ -12,6 +12,8 @@ export class InputManager {
   private readonly scene: Phaser.Scene;
   private readonly p1: Record<string, Phaser.Input.Keyboard.Key>;
   private readonly p2: Record<string, Phaser.Input.Keyboard.Key>;
+  /** 武器切换键（1~5）：作用于"当前操作中的玩家"，5 = 空手 */
+  private readonly weaponKeys: Record<string, Phaser.Input.Keyboard.Key>;
   private prevP1Attack = false;
   private prevP1Kick = false;
 
@@ -20,6 +22,7 @@ export class InputManager {
     const kb = scene.input.keyboard!;
     this.p1 = kb.addKeys('W,A,S,D') as Record<string, Phaser.Input.Keyboard.Key>;
     this.p2 = kb.addKeys('UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,E') as Record<string, Phaser.Input.Keyboard.Key>;
+    this.weaponKeys = kb.addKeys('ONE,TWO,THREE,FOUR,FIVE') as Record<string, Phaser.Input.Keyboard.Key>;
   }
 
   readP1(): InputCommand {
@@ -38,6 +41,19 @@ export class InputManager {
     c.kick = kick && !this.prevP1Kick;
     this.prevP1Kick = kick;
     return c;
+  }
+
+  /**
+   * 武器切换（调试/测试用）：返回武器 id，null = 空手，undefined = 本帧没按。
+   * 数字键作用于"当前操作中的玩家"（与鼠标归属一致）。
+   */
+  readWeaponSwitch(): string | null | undefined {
+    if (Phaser.Input.Keyboard.JustDown(this.weaponKeys.ONE)) return 'pistol';
+    if (Phaser.Input.Keyboard.JustDown(this.weaponKeys.TWO)) return 'ak47';
+    if (Phaser.Input.Keyboard.JustDown(this.weaponKeys.THREE)) return 'laser';
+    if (Phaser.Input.Keyboard.JustDown(this.weaponKeys.FOUR)) return 'rocket';
+    if (Phaser.Input.Keyboard.JustDown(this.weaponKeys.FIVE)) return null;
+    return undefined;
   }
 
   readP2(): InputCommand {

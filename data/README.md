@@ -4,7 +4,8 @@
 
 ```
 data/
-├── materials.json        # 材质表（物理/破坏属性）
+├── materials.json        # 材质表（物理/破坏属性 + 子弹交互）
+├── weapons.json          # 武器表（射速/伤害/弹速/弹药/耐久）
 ├── prefabs/*.json        # 预制件（多个形状+材质组成的可复用物体）
 └── maps/*.json           # 地图
 ```
@@ -192,3 +193,55 @@ npm run validate
   2. 点「下载贴图」把文件保存到 `public/textures/`（游戏里才会显示）
   3. 或者点「内嵌 base64」直接把图写进 materials.json（单文件自包含）
 - **测试**：右下「▶ 用此材质测试」会在材质工作台（矩形/箱子/球/六边形）里试手感
+
+## weapons.json（武器表）
+
+```json
+{
+  "version": 1,
+  "weapons": {
+    "pistol": {
+      "name": "手枪",
+      "attackMode": "shoot",          // shoot=逻辑弹道子弹 | beam=瞬时光束 | melee=刺击 | throw=投掷
+      "fireRate": 4,                   // 发/秒
+      "damage": 14,                    // 单次命中伤害
+      "knockback": 4.5,                // 命中玩家的击退强度
+      "ammo": 12,                      // 弹药数；-1 = 无限（近战靠耐久）
+      "durability": 120,               // 耐久上限
+      "durabilityPerShot": 1,          // 每次攻击消耗耐久
+      "bullet": {
+        "kind": "dot",                 // 外观：dot | streak | rocket | grenade | thrown
+        "speed": 1600,                 // **弹速 px/秒 —— 决定"子弹飞行时间"**
+        "range": 1500,                 // 最大飞行距离
+        "size": 3,
+        "color": "#ffe08a",
+        "trail": 16,                   // 拖尾长度 px
+        "maxBounces": 3,               // 最多反弹次数（材质需 bulletBounce=true 才反弹）
+        "bounceDamageMul": 0.7,        // 每次反弹后伤害倍率
+        "pierceDamageMul": 0.6,        // 每次穿透后伤害倍率
+        "piercePlayers": false         // 是否穿透玩家（激光类）
+      },
+      "visual": { "style": "pistol", "length": 22, "thickness": 5, "color": "#2b2b36" }
+    }
+  }
+}
+```
+
+### 关键约定
+
+- **`bullet.speed` 是"子弹飞行时间"的唯一来源**：子弹不是瞬时的，
+  按 `speed × dt` 每帧步进，所以同一段距离下速度不同 → 到达时间不同。
+  手枪 1600px/s 飞 800px ≈ 0.5s；火箭炮 700px/s ≈ 1.14s。
+- **弹速再快也不会穿墙**：每帧用「上帧位置 → 本帧位置」的射线求交，
+  一帧跨多远都能检测到（不是只查当前点）。
+- **穿透/反弹由"材质 + 武器"两边共同决定**：
+  材质回答"会不会"（`bulletBounce` / `bulletPierce`），武器回答"几次、衰减多少"。
+- `visual.length` 决定枪口位置（子弹起点 = 手部 + 该长度），
+  改长度不用改代码，子弹起点会自动跟着走。
+- `attackMode` 当前实现状态：`shoot` / `beam` 已可用；`melee` / `throw` 待 W3/W4。
+- 火箭炮的 `explosion` 字段已预留，范围伤害在 W4 接入（当前只有直击伤害）。
+
+### 武器外形风格（`visual.style`）
+
+`pistol` / `rifle` / `laser` / `launcher` / `dagger` / `spear` / `grenade`
+—— 每种风格的轮廓画法在 `src/render/WeaponRenderer.ts`。
