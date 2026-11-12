@@ -1241,7 +1241,15 @@ export class EditorStore {
     };
   }
 
-  /** 材质工作台：同一种材质的三种形状 + 地面，用于试手感 */
+  /**
+   * 材质工作台：用同一种材质摆出「固定」与「动态」两组对照。
+   *
+   * 关键：动态物体必须**从空中开始**，否则它们一开始就站在地面上，
+   * 根本看不到"会不会掉落"（踩不到坑的人会以为 fixed 没生效）。
+   *   - 左侧 fixed:true → 悬在空中不动，证明"固定"
+   *   - 右侧不填 fixed → 从空中落下，证明"动态"
+   * 另有斜面对照，用来试摩擦（冰面 vs 木头）。
+   */
   private materialRig(): MapData {
     const W = 1600;
     const H = 900;
@@ -1253,15 +1261,22 @@ export class EditorStore {
       width: W,
       height: H,
       spawnPoints: [
-        { x: 220, y: groundY - 48 },
-        { x: 1380, y: groundY - 48 },
+        { x: 120, y: groundY - 48 },
+        { x: 1480, y: groundY - 48 },
       ],
       objects: [
         { id: 'rig_ground', type: 'rect', x: 0, y: groundY, w: W, h: H - groundY, material: 'ground' },
-        { id: 'rig_plate', type: 'rect', x: 380, y: groundY - 60, w: 260, h: 24, material: mat, fixed: true },
-        { id: 'rig_box', type: 'rect', x: 700, y: groundY - 90, w: 90, h: 90, material: mat },
-        { id: 'rig_ball', type: 'circle', x: 980, y: groundY - 40, radius: 40, material: mat },
-        { id: 'rig_hex', type: 'polygon', x: 1200, y: groundY - 60, sides: 6, radius: 60, material: mat, fixed: true },
+
+        // ===== 固定对照（左）：悬空也不动 =====
+        { id: 'rig_fixed_plate', type: 'rect', x: 260, y: 330, w: 240, h: 24, material: mat, fixed: true },
+        { id: 'rig_fixed_hex', type: 'polygon', x: 300, y: 470, sides: 6, radius: 60, material: mat, fixed: true },
+        // 斜面对照：站上去试摩擦/滑动（冰面会滑，木头不会）
+        { id: 'rig_fixed_ramp', type: 'rect', x: 320, y: 600, w: 260, h: 20, material: mat, fixed: true, angle: -14 },
+
+        // ===== 动态对照（右）：从空中落下，证明"没勾固定就会掉" =====
+        { id: 'rig_dynamic_box', type: 'rect', x: 820, y: 240, w: 90, h: 90, material: mat },
+        { id: 'rig_dynamic_ball', type: 'circle', x: 1080, y: 200, radius: 40, material: mat },
+        { id: 'rig_dynamic_plank', type: 'rect', x: 1140, y: 320, w: 200, h: 16, material: mat },
       ],
     };
   }

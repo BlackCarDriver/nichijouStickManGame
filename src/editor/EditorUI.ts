@@ -631,11 +631,10 @@ const ACTION_POSE_RANGES: Record<keyof ActionPose, { min: number; max: number; s
   footLY: { min: 0, max: 110, step: 1 },
   footRX: { min: -100, max: 100, step: 1 },
   footRY: { min: 0, max: 110, step: 1 },
-  // 膝盖 IK 提示点偏移（px）：默认值约 ±3/±23，给 ±60 的调节范围
-  kneeLHintX: { min: -60, max: 60, step: 1 },
-  kneeLHintY: { min: -60, max: 60, step: 1 },
-  kneeRHintX: { min: -60, max: 60, step: 1 },
-  kneeRHintY: { min: -60, max: 60, step: 1 },
+  kneeLHintX: { min: -80, max: 80, step: 1 },
+  kneeLHintY: { min: 0, max: 90, step: 1 },
+  kneeRHintX: { min: -80, max: 80, step: 1 },
+  kneeRHintY: { min: 0, max: 90, step: 1 },
 };
 
 function actionPoseField(label: string, pose: ActionPose, key: keyof ActionPose): HTMLElement {
@@ -691,6 +690,14 @@ function actionRightPanel(): HTMLElement {
       actionPoseField('右脚 X', pose, 'footRX'),
       actionPoseField('右脚 Y', pose, 'footRY'),
     ]),
+    h('h3', { class: 'ed-h3' }, ['膝盖控制点（相对髋部）']),
+    h('div', { class: 'ed-grid2' }, [
+      actionPoseField('左膝 X', pose, 'kneeLHintX'),
+      actionPoseField('左膝 Y', pose, 'kneeLHintY'),
+      actionPoseField('右膝 X', pose, 'kneeRHintX'),
+      actionPoseField('右膝 Y', pose, 'kneeRHintY'),
+    ]),
+    h('p', { class: 'ed-help' }, ['拖动画布中的黄色膝盖点，或用滑块改变膝盖朝向；脚部位置和骨骼长度保持不变。']),
     h('p', { class: 'ed-help' }, ['数值面板用于微调；骨骼长度固定，腿部会自动通过 IK 求解膝盖位置。']),
   ]);
 }
@@ -1249,6 +1256,12 @@ function materialForm(): HTMLElement {
     // ---- 物理 ----
     h('h3', { class: 'ed-h3' }, ['物理']),
     h('label', { class: 'ed-check' }, [checkbox(mat.fixed, (v) => upd({ fixed: v })), '默认固定（静态，不推不落）']),
+    h('p', { class: 'ed-help' }, [
+      mat.fixed
+        ? '当前：固定 —— 用此材质新建的物体默认钉在原地，不会掉落/被推动（地图物体/预制件部件里仍可单独覆盖）。'
+        : '当前：动态 —— 用此材质新建的物体默认会掉落、可被推动/踢飞。',
+      '测试场景里：左边两个是「固定」对照（悬空也不动），右边三个会从空中落下 —— 能掉下来就说明是动态的。',
+    ]),
     h('div', { class: 'ed-grid2' }, [
       field('密度', numberInput(mat.density, (v) => upd({ density: Math.max(0.0001, v) }), 0.001)),
       field('反弹', numberInput(mat.bounce, (v) => upd({ bounce: clamp01(v) }), 0.01)),

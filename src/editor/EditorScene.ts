@@ -13,7 +13,7 @@ import { ensureMaterialTextures, preloadMaterialTextures } from '../map/TextureL
 import type { MapObject, MapObjectCircle, MapObjectPolygon, MapObjectRect } from '../map/MapFormat';
 import { MATERIALS } from '../config/materials';
 import { PLAYER_CONFIG } from '../entities/Player';
-import { RIG_BONES, chain2, solveLegIK, upVec } from '../render/StickmanRig';
+import { RIG_BONES, chain2, solveLegIKWithHint, upVec } from '../render/StickmanRig';
 import { StickmanRenderer } from '../render/StickmanRenderer';
 import { editorStore, PREFAB_RIG } from './EditorStore';
 import type { EditorTab, ToolKind } from './EditorStore';
@@ -66,7 +66,7 @@ interface DragState {
 const SPAWN_COLORS = [0xe74c3c, 0x3498db, 0x2ecc71, 0xf1c40f];
 
 interface ActionDrag {
-  handle: 'hip' | 'shoulder' | 'frontElbow' | 'frontHand' | 'backElbow' | 'backHand' | 'footL' | 'footR';
+  handle: 'hip' | 'shoulder' | 'frontElbow' | 'frontHand' | 'backElbow' | 'backHand' | 'footL' | 'footR' | 'kneeL' | 'kneeR';
 }
 
 export class EditorScene extends Phaser.Scene {
@@ -329,8 +329,22 @@ export class EditorScene extends Phaser.Scene {
     const footL = { x: hip.x + pose.footLX, y: hip.y + pose.footLY };
     const footR = { x: hip.x + pose.footRX, y: hip.y + pose.footRY };
     const legs = [
-      solveLegIK(hip.x, hip.y, footL.x, footL.y, 1),
-      solveLegIK(hip.x, hip.y, footR.x, footR.y, 1),
+      solveLegIKWithHint(
+        hip.x,
+        hip.y,
+        footL.x,
+        footL.y,
+        hip.x + pose.kneeLHintX,
+        hip.y + pose.kneeLHintY,
+      ),
+      solveLegIKWithHint(
+        hip.x,
+        hip.y,
+        footR.x,
+        footR.y,
+        hip.x + pose.kneeRHintX,
+        hip.y + pose.kneeRHintY,
+      ),
     ];
     const legChains = [
       chain2(hip.x, hip.y, legs[0].thighAngle, RIG_BONES.THIGH, legs[0].kneeBend, RIG_BONES.SHIN, 1, 'down'),
@@ -394,6 +408,22 @@ export class EditorScene extends Phaser.Scene {
     const backRoot = { x: shoulder.x - 3.5, y: shoulder.y + 1.5 };
     const front = this.actionArm(frontRoot, pose.armFrontShoulder, pose.armFrontElbow);
     const back = this.actionArm(backRoot, pose.armBackShoulder, pose.armBackElbow);
+    const leftLeg = solveLegIKWithHint(
+      hip.x,
+      hip.y,
+      hip.x + pose.footLX,
+      hip.y + pose.footLY,
+      hip.x + pose.kneeLHintX,
+      hip.y + pose.kneeLHintY,
+    );
+    const rightLeg = solveLegIKWithHint(
+      hip.x,
+      hip.y,
+      hip.x + pose.footRX,
+      hip.y + pose.footRY,
+      hip.x + pose.kneeRHintX,
+      hip.y + pose.kneeRHintY,
+    );
     return {
       hip,
       shoulder,
@@ -403,6 +433,8 @@ export class EditorScene extends Phaser.Scene {
       backHand: back.end,
       footL: { x: hip.x + pose.footLX, y: hip.y + pose.footLY },
       footR: { x: hip.x + pose.footRX, y: hip.y + pose.footRY },
+      kneeL: leftLeg.knee,
+      kneeR: rightLeg.knee,
     };
   }
 
@@ -433,6 +465,8 @@ export class EditorScene extends Phaser.Scene {
       ['backHand', 0x2ecc71],
       ['footL', 0xff8c42],
       ['footR', 0xff8c42],
+      ['kneeL', 0xffd166],
+      ['kneeR', 0xffd166],
     ];
     for (const [name, color] of entries) {
       const p = points[name];
@@ -452,7 +486,7 @@ export class EditorScene extends Phaser.Scene {
     const origin = this.actionOrigin();
     const local = { x: p.x - origin.x, y: p.y - origin.y };
     const points = this.actionHandlePoints(actionStore.currentPose);
-    const order: ActionDrag['handle'][] = ['frontHand', 'backHand', 'frontElbow', 'backElbow', 'footL', 'footR', 'shoulder', 'hip'];
+    const order: ActionDrag['handle'][] = ['frontHand', 'backHand', 'frontElbow', 'backElbow', 'kneeL', 'kneeR', 'footL', 'footR', 'shoulder', 'hip'];
     const hit = order.find((name) => Math.hypot(local.x - points[name].x, local.y - points[name].y) <= 12 / this.cameras.main.zoom);
     if (!hit) return;
     actionStore.ensureKeyframeAtTime();
@@ -498,6 +532,14 @@ export class EditorScene extends Phaser.Scene {
       case 'backElbow':
         patch.armBackShoulder = (Math.atan2(local.x - backRoot.x, local.y - backRoot.y) * 180) / Math.PI;
         patch.armBackElbow = pose.armBackElbow;
+        break;
+      case 'kneeL':
+        patch.kneeLHintX = local.x - pose.rootX;
+        patch.kneeLHintY = local.y - pose.rootY;
+        break;
+      case 'kneeR':
+        patch.kneeRHintX = local.x - pose.rootX;
+        patch.kneeRHintY = local.y - pose.rootY;
         break;
       case 'footL':
         patch.footLX = local.x - pose.rootX;
