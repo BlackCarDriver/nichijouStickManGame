@@ -136,6 +136,49 @@ export function drawHeldWeapon(g: Phaser.GameObjects.Graphics, o: WeaponDrawOpti
       break;
     }
 
+    case 'sniper': {
+      // 细长枪管
+      g.lineStyle(th * 0.75, color, 1);
+      const b0 = at(-th * 2.2);
+      const b1 = at(len);
+      g.lineBetween(b0.x, b0.y, b1.x, b1.y);
+      // 枪托（后下方）
+      g.lineStyle(th * 1.1, 0x243026, 1);
+      const s0 = at(-th * 2.2);
+      const s1 = at(-th * 4.2, -th * 1.1);
+      g.lineBetween(s0.x, s0.y, s1.x, s1.y);
+      // 瞄准镜（枪身上方）
+      const sc0 = at(len * 0.34, -th * 1.5);
+      const sc1 = at(len * 0.62, -th * 1.5);
+      g.lineStyle(th * 0.9, 0x1c2a20, 1);
+      g.lineBetween(sc0.x, sc0.y, sc1.x, sc1.y);
+      g.lineStyle(1, 0x8fd0e8, 0.9);
+      g.lineBetween(sc0.x, sc0.y - 1, sc1.x, sc1.y - 1);
+      break;
+    }
+
+    case 'shotgun': {
+      // 双管
+      g.lineStyle(th * 0.55, color, 1);
+      const u0 = at(-th * 1.4, -th * 0.42);
+      const u1 = at(len, -th * 0.42);
+      g.lineBetween(u0.x, u0.y, u1.x, u1.y);
+      const l0 = at(-th * 1.4, th * 0.42);
+      const l1 = at(len, th * 0.42);
+      g.lineBetween(l0.x, l0.y, l1.x, l1.y);
+      // 护木
+      g.lineStyle(th * 0.9, 0x6b4a2f, 1);
+      const f0 = at(len * 0.28);
+      const f1 = at(len * 0.6);
+      g.lineBetween(f0.x, f0.y, f1.x, f1.y);
+      // 枪托
+      g.lineStyle(th * 1.2, 0x4a3324, 1);
+      const t0 = at(-th * 1.4);
+      const t1 = at(-th * 3.6, -th * 1.2);
+      g.lineBetween(t0.x, t0.y, t1.x, t1.y);
+      break;
+    }
+
     case 'lightsaber': {
       // 刀柄
       const hilt0 = at(-8);

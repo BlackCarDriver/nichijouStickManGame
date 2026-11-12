@@ -20,6 +20,7 @@ import { DamageSystem } from '../combat/DamageSystem';
 import { ProjectileSystem } from '../combat/ProjectileSystem';
 import { WeaponSystem } from '../combat/WeaponSystem';
 import { ExplosionSystem } from '../combat/ExplosionSystem';
+import { AimSightSystem } from '../combat/AimSightSystem';
 import { FxSystem } from '../fx/FxSystem';
 import { Hud } from '../ui/Hud';
 
@@ -71,6 +72,7 @@ export class GameScene extends Phaser.Scene {
   // ---- 武器 / 掉落 / 碎片 ----
   private weaponSystem!: WeaponSystem;
   private projectileSystem!: ProjectileSystem;
+  private sights!: AimSightSystem;
   private pickups!: PickupSystem;
   private drops!: DropSystem;
   private fragments!: FragmentSystem;
@@ -142,6 +144,9 @@ export class GameScene extends Phaser.Scene {
       this.fx,
     );
 
+    // ---- 瞄准辅助线（狙击枪红外线）----
+    this.sights = new AimSightSystem(this);
+
     // ---- 掉落 / 碎片 ----
     this.pickups = new PickupSystem(this, this.bodyToPlayer, this.fx);
     this.drops = new DropSystem(this, this.pickups, this.mapData);
@@ -194,6 +199,7 @@ export class GameScene extends Phaser.Scene {
       this.events.off('object-destroyed', onObjectDestroyed);
       this.events.off('weapon-lost', onWeaponLost);
       this.projectileSystem.destroy();
+      this.sights.destroy();
       this.pickups.destroy();
       this.fragments.destroy();
       this.fx.destroy();
@@ -223,6 +229,7 @@ export class GameScene extends Phaser.Scene {
     });
     this.handleAttacks(cmds);
     this.handleSecondary(cmds);
+    this.sights.update(this.players);
     this.projectileSystem.update(delta);
     this.pickups.update(delta);
     this.drops.update(delta);

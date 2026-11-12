@@ -32,6 +32,8 @@ export class DropSystem {
     'rocket',
     'laser',
     'lightsaber',
+    'sniper',
+    'shotgun',
   ];
 
   constructor(scene: Phaser.Scene, pickups: PickupSystem, map: MapData) {

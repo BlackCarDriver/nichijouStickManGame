@@ -65,6 +65,8 @@ export class WeaponSystem {
   private readonly kickCooldowns = new Map<number, number>();
   /** playerId → 连续光束的 tick 计时（存在即表示正在输出） */
   private readonly beams = new Map<number, { timer: number }>();
+  /** 攻击批次自增 id（一次扣扳机 = 一个批次，霰弹的多弹丸共用） */
+  private attackSeq = 0;
 
   constructor(
     scene: Phaser.Scene,
@@ -308,25 +310,40 @@ export class WeaponSystem {
     }
   }
 
-  /** 发射逻辑弹道子弹 */
+  /**
+   * 发射逻辑弹道子弹。
+   * 支持多弹丸（霰弹枪）：在 ±spreadDeg 内均匀分布 + 少量随机抖动。
+   * 同一次开火的所有弹丸共用 attackId，因此都能命中同一目标。
+   */
   private fireProjectile(player: Player, weapon: WeaponJson): boolean {
     const bullet = weapon.bullet;
     if (!bullet) return false;
     const from = player.muzzle;
     const angle = player.aim;
+    const pellets = Math.max(1, bullet.pellets ?? 1);
+    const spread = ((bullet.spreadDeg ?? 0) * Math.PI) / 180;
+    const attackId = ++this.attackSeq;
 
-    this.projectiles.spawn({
-      weaponId: player.heldWeapon?.id ?? '',
-      x: from.x,
-      y: from.y,
-      angle,
-      damage: weapon.damage,
-      knockback: weapon.knockback,
-      ownerId: player.id,
-      ownerBody: player.body,
-      bullet,
-      explosion: weapon.explosion,
-    });
+    for (let i = 0; i < pellets; i++) {
+      // 均匀分布（多弹丸时避免全打同一个点），再加一点随机抖动
+      const t = pellets === 1 ? 0 : i / (pellets - 1) - 0.5;
+      const jitter = pellets === 1 ? 0 : (Math.random() - 0.5) * (spread / pellets);
+      // t ∈ [-0.5, 0.5] → 角度偏移 ∈ [-spread, +spread]
+      const pelletAngle = angle + t * spread * 2 + jitter;
+      this.projectiles.spawn({
+        weaponId: player.heldWeapon?.id ?? '',
+        x: from.x,
+        y: from.y,
+        angle: pelletAngle,
+        damage: weapon.damage,
+        knockback: weapon.knockback,
+        ownerId: player.id,
+        ownerBody: player.body,
+        bullet,
+        explosion: weapon.explosion,
+        attackId,
+      });
+    }
 
     this.fx.hitSpark(from, { x: Math.cos(angle), y: Math.sin(angle) }, parseColor(bullet.color));
     player.setAttack('stab', 90); // 轻微后坐
@@ -360,8 +377,12 @@ export class WeaponSystem {
 
       const target = this.bodyToPlayer.get(hit.body.id);
       if (target) {
-        // 光束贯穿玩家
         targets.push({ player: target, point: hit.point, normal: hit.normal });
+        // 默认不可穿透：命中第一个玩家就终止
+        if (!beam.pierce) {
+          endPoint = hit.point;
+          break;
+        }
         continue;
       }
 
@@ -371,8 +392,8 @@ export class WeaponSystem {
         break;
       }
       targets.push({ runtime, point: hit.point, normal: hit.normal });
-      // 不可穿透材质（墙/地面/金属）挡住光束
-      if (!MATERIALS[runtime.material]?.bulletPierce) {
+      // 默认不可穿透：首个目标即终止；pierce=true 时才看材质是否可穿透
+      if (!beam.pierce || !MATERIALS[runtime.material]?.bulletPierce) {
         endPoint = hit.point;
         break;
       }
@@ -388,6 +409,7 @@ export class WeaponSystem {
     trace: { targets: BeamTarget[] },
     dir: { x: number; y: number },
     ignoreInvuln: boolean,
+    attackId: number,
   ): void {
     for (const t of trace.targets) {
       if (t.player) {
@@ -402,6 +424,7 @@ export class WeaponSystem {
             y: dir.y * weapon.knockback * 0.5 - 0.8,
           },
           ignoreInvuln,
+          attackId,
         });
       } else if (t.runtime) {
         this.damageSystem.damageObject(t.runtime, {
@@ -458,7 +481,7 @@ export class WeaponSystem {
     if (state.timer > 0) return;
     state.timer = tickMs;
 
-    this.applyBeamDamage(player, weapon, trace, dir, true);
+    this.applyBeamDamage(player, weapon, trace, dir, true, player.id);
 
     // 消耗：每 tick 1 发弹药 + 耐久
     if (held.ammo > 0) held.ammo -= 1;
@@ -480,7 +503,7 @@ export class WeaponSystem {
     const dir = { x: Math.cos(player.aim), y: Math.sin(player.aim) };
     const trace = this.traceBeam(player, beam, from, dir);
 
-    this.applyBeamDamage(player, weapon, trace, dir, false);
+    this.applyBeamDamage(player, weapon, trace, dir, false, ++this.attackSeq);
     this.drawBeam(from, trace.endPoint, beam, beam.duration);
     player.setAttack('stab', 90);
     return true;

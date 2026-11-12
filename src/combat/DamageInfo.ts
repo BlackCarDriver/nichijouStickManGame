@@ -32,6 +32,12 @@ export interface DamageInfo {
    * 否则 180ms 的受击无敌会把绝大多数 tick 全部挡掉。
    */
   ignoreInvuln?: boolean;
+  /**
+   * 攻击批次 id：**同一次扣扳机**产生的所有伤害共用一个 id。
+   * 霰弹枪的 7 颗弹丸属于同一次攻击，因此它们都能命中同一个目标，
+   * 不会被第一颗弹丸造成的受击无敌帧挡掉。
+   */
+  attackId?: number;
 }
 
 /** 伤害结算结果 */

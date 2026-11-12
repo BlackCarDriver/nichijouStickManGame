@@ -68,7 +68,8 @@
         "color": "#7ef9ff",
         "duration": 90,
         "continuous": true,
-        "tickMs": 55
+        "tickMs": 55,
+        "pierce": false
       },
       "visual": { "style": "laser", "length": 34, "thickness": 5, "color": "#2f4858" }
     },
@@ -127,6 +128,59 @@
       "melee": { "reach": 92, "arc": 30 },
       "throw": { "speed": 820, "range": 700, "stickMs": 2000, "damage": 26 },
       "visual": { "style": "spear", "length": 62, "thickness": 3, "color": "#b98b4e" }
+    },
+
+    "sniper": {
+      "name": "狙击枪",
+      "attackMode": "shoot",
+      "automatic": false,
+      "fireRate": 0.75,
+      "damage": 70,
+      "knockback": 8,
+      "ammo": 5,
+      "durability": 40,
+      "durabilityPerShot": 4,
+      "bullet": {
+        "kind": "streak",
+        "speed": 4200,
+        "range": 3000,
+        "size": 2.2,
+        "color": "#ffe9b0",
+        "trail": 90,
+        "maxBounces": 1,
+        "bounceDamageMul": 0.5,
+        "pierceDamageMul": 1,
+        "piercePlayers": false
+      },
+      "sight": { "color": "#ff9b9b", "width": 1.6, "alpha": 0.45, "range": 3000 },
+      "visual": { "style": "sniper", "length": 58, "thickness": 5, "color": "#2f3a2f" }
+    },
+
+    "shotgun": {
+      "name": "霰弹枪",
+      "attackMode": "shoot",
+      "automatic": false,
+      "fireRate": 1.1,
+      "damage": 8,
+      "knockback": 3,
+      "ammo": 6,
+      "durability": 70,
+      "durabilityPerShot": 2,
+      "bullet": {
+        "kind": "dot",
+        "speed": 1350,
+        "range": 420,
+        "size": 2.4,
+        "color": "#ffd8a8",
+        "trail": 10,
+        "maxBounces": 0,
+        "bounceDamageMul": 1,
+        "pierceDamageMul": 1,
+        "piercePlayers": false,
+        "pellets": 7,
+        "spreadDeg": 16
+      },
+      "visual": { "style": "shotgun", "length": 46, "thickness": 7, "color": "#5a3d2b" }
     },
 
     "lightsaber": {

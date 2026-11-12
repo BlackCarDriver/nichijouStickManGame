@@ -115,6 +115,9 @@ export class Player extends Entity {
   private attackTimer = 0;
   private attackDuration = 1;
 
+  /** 最近一次命中自己的攻击批次 id（同批次可重复命中，如霰弹枪多弹丸） */
+  private lastHitAttackId: number | undefined;
+
   private static readonly HIT_INVULN_MS = 180;
 
   // ---- 着地状态 ----
@@ -288,13 +291,20 @@ export class Player extends Entity {
    */
   applyDamage(info: DamageInfo): number {
     if (this.health.isDead) return 0;
-    const applied = this.health.applyDamage(info.amount, info.ignoreInvuln === true);
+
+    // 同一攻击批次（霰弹的多颗弹丸 / 激光的连续 tick）允许穿透无敌帧
+    const sameAttack = info.attackId !== undefined && info.attackId === this.lastHitAttackId;
+    const bypass = info.ignoreInvuln === true || sameAttack;
+
+    const applied = this.health.applyDamage(info.amount, bypass);
     if (applied <= 0) return 0;
+
+    if (info.attackId !== undefined) this.lastHitAttackId = info.attackId;
 
     // 击退 + 受击姿态（hit() 内部会广播 player-hit → 屏幕震动）
     // 高频低伤（激光 tick）用短后仰，否则会被持续锁在受击姿势里
     const kb = info.knockback ?? { x: 0, y: 0 };
-    const light = info.ignoreInvuln === true;
+    const light = info.ignoreInvuln === true || sameAttack;
     this.hit(kb.x, kb.y, light ? 130 : 380);
     // 短无敌：避免连发武器在同一瞬间把玩家打穿（AK 高频子弹）
     if (!light) this.health.setInvulnerable(Player.HIT_INVULN_MS);

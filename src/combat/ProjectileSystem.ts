@@ -39,6 +39,8 @@ export interface ProjectileSpawnOptions {
   fuseMs?: number;
   /** 投掷物插入目标停留（ms）：匕首/长矛 */
   stickMs?: number;
+  /** 攻击批次 id（霰弹多弹丸共用，用于绕过同批次的无敌帧） */
+  attackId?: number;
 }
 
 interface Projectile {
@@ -60,6 +62,7 @@ interface Projectile {
   explosion?: ExplosionConfig;
   fuseMs?: number;
   stickMs?: number;
+  attackId?: number;
   elapsed: number;
   bounceLeft: number;
   alive: boolean;
@@ -145,6 +148,7 @@ export class ProjectileSystem {
       explosion: options.explosion,
       fuseMs: options.fuseMs,
       stickMs: options.stickMs,
+      attackId: options.attackId,
       elapsed: 0,
       bounceLeft: Math.max(bullet.maxBounces, bullet.bounceAny ? 6 : 0),
       alive: true,
@@ -279,6 +283,7 @@ export class ProjectileSystem {
         point: hit.point,
         normal: hit.normal,
         knockback,
+        attackId: p.attackId,
       });
       if (p.bullet.piercePlayers) {
         p.ignore.push(hit.body);

@@ -27,7 +27,9 @@ export type WeaponVisualStyle =
   | 'dagger'
   | 'spear'
   | 'grenade'
-  | 'lightsaber';
+  | 'lightsaber'
+  | 'sniper'
+  | 'shotgun';
 
 export interface BulletConfig {
   kind: BulletKind;
@@ -57,6 +59,10 @@ export interface BulletConfig {
   piercePlayers: boolean;
   /** 是否对任意材质反弹（手榴弹落地会弹跳） */
   bounceAny?: boolean;
+  /** 弹丸数量（霰弹枪 = 7）；>1 时一次开火发射多颗，扇形散布 */
+  pellets?: number;
+  /** 散布半角（度）：弹丸在 ±spreadDeg 内均匀分布（加少量随机抖动） */
+  spreadDeg?: number;
   /** 反弹速度保留系数（0.45 = 弹跳衰减，1 = 完全弹性） */
   bounceRestitution?: number;
 }
@@ -74,6 +80,8 @@ export interface BeamConfig {
   continuous?: boolean;
   /** 连续模式的伤害间隔（ms）：越小越"高频"。每 tick 扣 1 点弹药 */
   tickMs?: number;
+  /** 是否贯穿目标（默认 false = 命中第一个目标就停） */
+  pierce?: boolean;
 }
 
 export interface MeleeConfig {
@@ -100,6 +108,17 @@ export interface ThrowConfig {
   bounceAny?: boolean;
   /** 反弹速度保留系数 */
   bounceRestitution?: number;
+}
+
+/** 瞄准辅助线（狙击枪红外线）：只画不伤害 */
+export interface SightConfig {
+  color: string;
+  /** 线宽（px） */
+  width: number;
+  /** 不透明度 0~1 */
+  alpha: number;
+  /** 长度（px）；中途遇到障碍会终止 */
+  range: number;
 }
 
 export interface ExplosionConfig {
@@ -145,6 +164,8 @@ export interface WeaponJson {
   melee?: MeleeConfig;
   throw?: ThrowConfig;
   explosion?: ExplosionConfig;
+  /** 持有时常驻显示的瞄准辅助线（狙击枪红外线） */
+  sight?: SightConfig;
   visual: WeaponVisual;
 }
 
