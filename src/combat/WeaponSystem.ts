@@ -778,9 +778,10 @@ export class WeaponSystem {
       kind: weapon.attackMode === 'melee' ? 'thrown' : 'grenade',
       speed: cfg.speed,
       range: cfg.range,
-      size: weapon.visual.thickness * 0.6,
+      // 投掷物按武器本体渲染：trail = 武器长度，size = 粗细
+      size: Math.max(2, weapon.visual.thickness * 0.85),
       color: weapon.visual.color,
-      trail: 0,
+      trail: weapon.attackMode === 'melee' ? weapon.visual.length : 0,
       maxBounces: 0,
       bounceDamageMul: 1,
       pierceDamageMul: 1,

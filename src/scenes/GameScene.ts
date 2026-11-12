@@ -29,6 +29,8 @@ import { FxSystem } from '../fx/FxSystem';
 import { Hud } from '../ui/Hud';
 
 const PLAYER_COLORS = [0xe74c3c, 0x3498db];
+/** 空的"按下集合"（自动拾取不需要按键） */
+const EMPTY_PRESSED: ReadonlySet<number> = new Set<number>();
 /** 镜头缩放（固定，聚焦单角色时画面清晰） */
 const CAMERA_ZOOM = 0.9;
 
@@ -116,6 +118,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   create(): void {
+    // 屏蔽浏览器右键菜单（否则右键踢/投掷会弹出系统菜单）
+    this.input.mouse?.disableContextMenu();
+
     this.inputManager = new InputManager(this);
     this.mapObjects = buildMap(this, this.mapData, this.prefabTable);
     this.oneWayBodies = this.mapObjects.filter((o) => o.oneWay && o.body).map((o) => o.body!);
@@ -198,7 +203,8 @@ export class GameScene extends Phaser.Scene {
 
   /** 事件接线（场景重启时必须解除，避免重复触发/泄漏） */
   private bindEvents(): void {
-    const onPlayerHit = (): void => this.gameFeel.addTrauma(0.35);
+    // 受击镜头晃动（原来 0.35 太晃，降到 1/3）
+    const onPlayerHit = (): void => this.gameFeel.addTrauma(0.12);
     const onExplosion = (_x: number, _y: number, radius: number): void => {
       this.gameFeel.addTrauma(Math.min(0.85, 0.35 + radius / 400));
     };
@@ -337,6 +343,8 @@ export class GameScene extends Phaser.Scene {
     this.sights.update(this.players);
     this.grenades.update(delta, this.players);
     this.projectileSystem.update(delta);
+    // 每帧检测自动拾取（空手路过武器 / 手榴弹进背包）
+    this.pickups.tryPickup(EMPTY_PRESSED);
     this.pickups.update(delta);
     this.drops.update(delta);
     this.fragments.update(delta);

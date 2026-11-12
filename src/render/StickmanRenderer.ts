@@ -37,6 +37,8 @@ export interface StickmanDrawOptions {
   groundYR?: number;
   /** 是否蹲下 */
   crouching?: boolean;
+  /** 面向（1=右 -1=左）。瞄准手臂的角度换算需要它 */
+  facing?: 1 | -1;
   /** 是否倒着走（面向与移动方向相反 → 步态反向 + 身体后仰） */
   backward?: boolean;
   /** 当前攻击动作类型 */
@@ -365,24 +367,26 @@ export class StickmanRenderer {
 
   // ---------------- 受击 ----------------
 
+  /**
+   * 受击：一个**简单的后仰护身**姿势（原实现是四肢按相位乱舞，帧数太多显得杂乱）。
+   * 打击感交给顿帧 + 闪白 + 击退位移，姿势本身只需要读得出"被打到了"。
+   */
   private static drawHit(g: Phaser.GameObjects.Graphics, o: StickmanDrawOptions): void {
     const squat = this.landImpactSquat(o);
-    const hip: Vec2 = { x: 0, y: this.HIP_Y + squat };
+    const hip: Vec2 = { x: -2, y: this.HIP_Y + squat + 2 };
     const groundY = GROUND_OFFSET + squat;
-    const p = o.hitPhase;
 
-    this.drawLegIK(g, o.color, hip, {
-      x: Math.sin(p * 1.7) * 22,
-      y: groundY + Math.sin(p * 2.3) * 14,
-    });
-    this.drawLegIK(g, o.color, hip, {
-      x: Math.sin(p * 2.1 + Math.PI) * 22,
-      y: groundY + Math.sin(p * 1.9 + Math.PI) * 14,
-    });
-    const shoulder = this.drawTorso(g, o.color, hip, 6 - Math.sin(p) * 6, Math.sin(p * 1.3) * 6);
-    this.drawHead(g, o.color, shoulder, 6 - Math.sin(p) * 6, Math.sin(p * 1.8) * 3);
-    this.drawArmFK(g, o, shoulder, 1, Math.sin(p * 2.5) * 90, Math.sin(p * 3.1) * 20);
-    this.drawArmFK(g, o, shoulder, -1, Math.sin(p * 2.2 + Math.PI) * 90, Math.sin(p * 2.8 + 1) * 20);
+    // 双腿微屈站稳
+    this.drawLegIK(g, o.color, hip, { x: -9, y: groundY });
+    this.drawLegIK(g, o.color, hip, { x: 6, y: groundY });
+
+    // 躯干后仰 + 头跟着仰
+    const shoulder = this.drawTorso(g, o.color, hip, -8, -4);
+    this.drawHead(g, o.color, shoulder, -8, 0);
+
+    // 手臂抬起护住正面（瞄准时前臂仍指向准星）
+    this.drawArmFK(g, o, shoulder, 1, 32, 28);
+    this.drawArmFK(g, o, shoulder, -1, 16, 32);
   }
 
   // ---------------- 公共部件 ----------------
@@ -498,8 +502,15 @@ export class StickmanRenderer {
   ): void {
     // 持枪瞄准：前臂（side=1）指向瞄准方向，肘部伸直
     if (o.aim != null && side === 1) {
-      // down 参考角：世界瞄准角 φ → 肩角 = 90° - φ
-      shoulderAngle = 90 - (o.aim * 180) / Math.PI;
+      /**
+       * 这里的角度必须换算掉 facing：
+       * 下面 chain2 固定传 facing=1（局部坐标），而外层 visual 又按 facing 翻转，
+       * 所以世界方向 = (facing * sinθ, cosθ)。要让世界方向 = (cosφ, sinφ)：
+       *   sinθ = facing·cosφ ，cosθ = sinφ  →  θ = atan2(facing·cosφ, sinφ)
+       * （facing=1 时化简为 90°−φ，与原实现一致；facing=-1 时才是正确的镜像）
+       */
+      const facing = o.facing ?? 1;
+      shoulderAngle = (Math.atan2(facing * Math.cos(o.aim), Math.sin(o.aim)) * 180) / Math.PI;
       elbowBendDeg = 0;
     }
     // 根部位置：固定肩宽 + 固定垂直偏移 → 任何姿势下手臂都连在躯干上

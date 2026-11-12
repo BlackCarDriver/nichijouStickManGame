@@ -187,7 +187,8 @@ export class Player extends Entity {
   private hitTimer = 0;
   private hitPhase = 0;
   private hitTilt = 0;
-  private static readonly HIT_DURATION = 600;
+  /** 受击姿态时长（原来 600ms 太长，动辄整屏乱舞） */
+  private static readonly HIT_DURATION = 190;
   private static readonly HIT_TILT_MAX = 0.5;
 
   // ---- 动作细节（spine-animation 技能：冲击吸收/预备/跟随）----
@@ -348,7 +349,7 @@ export class Player extends Entity {
     // 高频低伤（激光 tick）用短后仰，否则会被持续锁在受击姿势里
     const kb = info.knockback ?? { x: 0, y: 0 };
     const light = info.ignoreInvuln === true || sameAttack;
-    this.hit(kb.x, kb.y, light ? 130 : 380);
+    this.hit(kb.x, kb.y, light ? 80 : 190);
     // 短无敌：避免连发武器在同一瞬间把玩家打穿（AK 高频子弹）
     if (!light) this.health.setInvulnerable(Player.HIT_INVULN_MS);
 
@@ -827,6 +828,7 @@ export class Player extends Entity {
           ? this.renderAim + this.slashOffset
           : null,
       backward: this.backward,
+      facing: this.facing,
       attackKind: this.attack,
       attackProgress: this.attackProgress,
     });

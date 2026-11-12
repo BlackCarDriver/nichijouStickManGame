@@ -458,6 +458,26 @@ export class ProjectileSystem {
     this.g.clear();
     for (const p of this.projectiles) {
       const { bullet } = p;
+
+      // 投掷武器（匕首/长矛）：画出整把武器，而不是一个点
+      if (bullet.kind === 'thrown') {
+        const len = Math.max(12, bullet.trail);
+        const dirX = p.dirX;
+        const dirY = p.dirY;
+        // 尾 → 头
+        this.g.lineStyle(Math.max(2, bullet.size), p.color, 1);
+        this.g.lineBetween(p.x - dirX * len, p.y - dirY * len, p.x, p.y);
+        // 高光刃口
+        this.g.lineStyle(Math.max(1, bullet.size * 0.35), 0xffffff, 0.55);
+        this.g.lineBetween(
+          p.x - dirX * len * 0.55,
+          p.y - dirY * len * 0.55,
+          p.x,
+          p.y,
+        );
+        continue;
+      }
+
       if (bullet.trail > 0) {
         this.g.lineStyle(Math.max(1, bullet.size * 0.7), p.color, 0.4);
         this.g.lineBetween(

@@ -50,6 +50,10 @@ export class PickupSystem {
   private static readonly SWAP_RADIUS = 62;
   /** 掉落物下落重力（px/秒²） */
   private static readonly FALL_GRAVITY = 900;
+  /** 落地后浮在地面上方的高度（视觉不贴地） */
+  private static readonly REST_OFFSET = 18;
+  /** 支撑检测距离：脚下没有东西就继续下落 */
+  private static readonly SUPPORT_PROBE = 22;
 
   constructor(scene: Phaser.Scene, bodyToPlayer: Map<number, Player>, fx: FxSystem) {
     this.scene = scene;
@@ -92,22 +96,31 @@ export class PickupSystem {
     const dt = deltaMs / 1000;
     for (const item of this.items) {
       if (item.falling) {
+        const prevY = item.y;
         item.vy += PickupSystem.FALL_GRAVITY * dt;
         item.y += item.vy * dt;
-        // 落到地面/物体上
-        const hits = raycast(
-          getWorldBodies(this.scene),
-          { x: item.x, y: item.y },
-          { x: 0, y: 1 },
-          14,
-          { maxHits: 1 },
-        );
-        if (hits[0]) {
-          item.y = hits[0].point.y - 18;
-          item.falling = false;
-          item.vy = 0;
-          this.fx.burst({ x: item.x, y: item.y }, 0xb9c4d0);
+
+        // 用「上一帧位置 → 本帧位置」的线段检测（避免高速下落漏检）。
+        // 关键：掉落物是**浮在表面上方 REST_OFFSET 处**的，
+        // 所以必须提前 REST_OFFSET 就判定落地，否则会先陷进地面里一帧再弹回来。
+        const dy = item.y - prevY;
+        if (dy > 0) {
+          const hits = raycast(
+            getWorldBodies(this.scene),
+            { x: item.x, y: prevY },
+            { x: 0, y: 1 },
+            dy + PickupSystem.REST_OFFSET,
+            { maxHits: 1 },
+          );
+          const restY = hits[0] ? hits[0].point.y - PickupSystem.REST_OFFSET : Number.POSITIVE_INFINITY;
+          if (hits[0] && restY <= item.y + 0.5) {
+            item.y = restY;
+            item.falling = false;
+            item.vy = 0;
+            this.fx.burst({ x: item.x, y: item.y }, 0xb9c4d0);
+          }
         }
+
         // 掉出地图底部 → 移除
         if (item.y > 4000) {
           item.gfx.destroy();
@@ -116,6 +129,19 @@ export class PickupSystem {
         }
       } else {
         item.bob += dt * 2.2;
+
+        // 支撑检测：脚下的平台被破坏后，掉落物应该继续往下掉
+        const support = raycast(
+          getWorldBodies(this.scene),
+          { x: item.x, y: item.y },
+          { x: 0, y: 1 },
+          PickupSystem.SUPPORT_PROBE,
+          { maxHits: 1 },
+        );
+        if (!support[0]) {
+          item.falling = true;
+          item.vy = 0;
+        }
       }
       this.redraw(item);
     }
@@ -126,7 +152,7 @@ export class PickupSystem {
    * @param swapRequested 这些玩家本帧按了"替换"键（P1 右键 / P2 E）
    * @returns 本帧真正完成了拾取/替换的玩家 id 集合（未完成的才去做踢/投掷）
    */
-  tryPickup(swapRequested: Set<number>): Set<number> {
+  tryPickup(swapRequested: ReadonlySet<number>): Set<number> {
     const consumed = new Set<number>();
     for (const player of this.bodyToPlayer.values()) {
       if (player.health.isDead) continue;
