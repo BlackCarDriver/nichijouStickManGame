@@ -65,8 +65,15 @@ export interface BeamConfig {
   range: number;
   width: number;
   color: string;
-  /** 光束视觉持续时间（ms） */
+  /** 单次瞬发光束的视觉持续时间（ms）；连续模式下每帧重画，此值无意义 */
   duration: number;
+  /**
+   * 连续光束：按住攻击键持续输出、持续造成伤害（激光枪）。
+   * false / 不填 = 点一次打一发瞬时光束。
+   */
+  continuous?: boolean;
+  /** 连续模式的伤害间隔（ms）：越小越"高频"。每 tick 扣 1 点弹药 */
+  tickMs?: number;
 }
 
 export interface MeleeConfig {

@@ -26,6 +26,12 @@ export interface DamageInfo {
   normal?: Vec2;
   /** 击退冲量（px/step，仅对玩家生效） */
   knockback?: Vec2;
+  /**
+   * 无视玩家的受击无敌帧。
+   * 用于高频低伤的持续伤害（激光光束每 55ms 一跳），
+   * 否则 180ms 的受击无敌会把绝大多数 tick 全部挡掉。
+   */
+  ignoreInvuln?: boolean;
 }
 
 /** 伤害结算结果 */

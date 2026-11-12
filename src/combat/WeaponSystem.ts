@@ -6,7 +6,8 @@ import type { FxSystem } from '../fx/FxSystem';
 import type { DamageSystem } from './DamageSystem';
 import type { ProjectileSystem } from './ProjectileSystem';
 import { getWeapon, createHeldWeapon } from './WeaponFormat';
-import type { WeaponJson, BulletConfig } from './WeaponFormat';
+import type { WeaponJson, BulletConfig, BeamConfig } from './WeaponFormat';
+import type { MapObjectRuntime } from '../map/MapLoader';
 import { raycast, getWorldBodies } from './Raycast';
 
 /** 玩家这一帧的攻击意图 */
@@ -15,6 +16,14 @@ export interface AttackInput {
   attack: boolean;
   /** 持续按住（全自动武器用） */
   attackHeld: boolean;
+}
+
+/** 光束沿途的可伤害目标 */
+interface BeamTarget {
+  player?: Player;
+  runtime?: MapObjectRuntime;
+  point: { x: number; y: number };
+  normal: { x: number; y: number };
 }
 
 /** 空手出拳（无武器时的基础攻击） */
@@ -54,6 +63,8 @@ export class WeaponSystem {
   private readonly cooldowns = new Map<number, number>();
   /** playerId → 剩余踢冷却（秒） */
   private readonly kickCooldowns = new Map<number, number>();
+  /** playerId → 连续光束的 tick 计时（存在即表示正在输出） */
+  private readonly beams = new Map<number, { timer: number }>();
 
   constructor(
     scene: Phaser.Scene,
@@ -129,6 +140,8 @@ export class WeaponSystem {
         fired = this.fireProjectile(player, weapon);
         break;
       case 'beam':
+        // 连续光束（激光）由 updateContinuous 每帧驱动，这里不处理
+        if (weapon.beam?.continuous) return false;
         fired = this.fireBeam(player, weapon);
         break;
       case 'melee':
@@ -320,24 +333,26 @@ export class WeaponSystem {
     return true;
   }
 
-  /** 瞬时光束（hitscan）：贯穿玩家与可穿透材质，遇阻终止 */
-  private fireBeam(player: Player, weapon: WeaponJson): boolean {
-    const beam = weapon.beam;
-    if (!beam) return false;
+  // ==========================================================
+  //  光束（单发 / 连续）
+  // ==========================================================
 
-    const from = player.muzzle;
-    const angle = player.aim;
-    const dir = { x: Math.cos(angle), y: Math.sin(angle) };
+  /** 光束沿途的一个可伤害目标 */
+  private traceBeam(
+    player: Player,
+    beam: BeamConfig,
+    from: { x: number; y: number },
+    dir: { x: number; y: number },
+  ): { endPoint: { x: number; y: number }; targets: BeamTarget[] } {
     const bodies = getWorldBodies(this.scene);
-
     const hits = raycast(bodies, from, dir, beam.range, {
       ignore: [player.body],
       maxHits: 48,
     });
 
-    const color = parseColor(beam.color, 0x7ef9ff);
-    let endPoint = { x: from.x + dir.x * beam.range, y: from.y + dir.y * beam.range };
+    const targets: BeamTarget[] = [];
     const damaged = new Set<number>();
+    let endPoint = { x: from.x + dir.x * beam.range, y: from.y + dir.y * beam.range };
 
     for (const hit of hits) {
       if (damaged.has(hit.body.id)) continue;
@@ -345,15 +360,9 @@ export class WeaponSystem {
 
       const target = this.bodyToPlayer.get(hit.body.id);
       if (target) {
-        this.damageSystem.damagePlayer(target, {
-          amount: weapon.damage,
-          kind: 'bullet',
-          sourceId: player.id,
-          point: hit.point,
-          normal: hit.normal,
-          knockback: { x: dir.x * weapon.knockback, y: dir.y * weapon.knockback * 0.5 - 1.5 },
-        });
-        continue; // 贯穿玩家
+        // 光束贯穿玩家
+        targets.push({ player: target, point: hit.point, normal: hit.normal });
+        continue;
       }
 
       const runtime = this.registry.resolve(hit.body);
@@ -361,20 +370,118 @@ export class WeaponSystem {
         endPoint = hit.point;
         break;
       }
-      this.damageSystem.damageObject(runtime, {
-        amount: weapon.damage,
-        kind: 'bullet',
-        sourceId: player.id,
-        point: hit.point,
-        normal: hit.normal,
-      });
+      targets.push({ runtime, point: hit.point, normal: hit.normal });
+      // 不可穿透材质（墙/地面/金属）挡住光束
       if (!MATERIALS[runtime.material]?.bulletPierce) {
         endPoint = hit.point;
         break;
       }
     }
 
-    this.fx.beam(from, endPoint, color, beam.duration, beam.width);
+    return { endPoint, targets };
+  }
+
+  /** 对光束沿途目标结算一次伤害 */
+  private applyBeamDamage(
+    player: Player,
+    weapon: WeaponJson,
+    trace: { targets: BeamTarget[] },
+    dir: { x: number; y: number },
+    ignoreInvuln: boolean,
+  ): void {
+    for (const t of trace.targets) {
+      if (t.player) {
+        this.damageSystem.damagePlayer(t.player, {
+          amount: weapon.damage,
+          kind: 'bullet',
+          sourceId: player.id,
+          point: t.point,
+          normal: t.normal,
+          knockback: {
+            x: dir.x * weapon.knockback,
+            y: dir.y * weapon.knockback * 0.5 - 0.8,
+          },
+          ignoreInvuln,
+        });
+      } else if (t.runtime) {
+        this.damageSystem.damageObject(t.runtime, {
+          amount: weapon.damage,
+          kind: 'bullet',
+          sourceId: player.id,
+          point: t.point,
+          normal: t.normal,
+        });
+      }
+    }
+  }
+
+  /** 画光束（连续模式里外层加一圈更宽的辉光，看起来像粒子束） */
+  private drawBeam(
+    from: { x: number; y: number },
+    endPoint: { x: number; y: number },
+    beam: BeamConfig,
+    lifeMs: number,
+  ): void {
+    const color = parseColor(beam.color, 0x7ef9ff);
+    this.fx.beam(from, endPoint, color, lifeMs, beam.width + 4);
+    this.fx.beam(from, endPoint, 0xffffff, lifeMs * 0.8, Math.max(1.5, beam.width * 0.45));
+  }
+
+  /**
+   * 连续光束（激光枪）：每帧由场景调用。
+   *
+   * 按住攻击键 → 持续输出光束 + 按 tickMs 间隔持续造成伤害（低伤高频，像机枪）；
+   * 松开 / 换武器 / 死亡 → 立即停止。每 tick 扣 1 点弹药与耐久。
+   */
+  updateContinuous(player: Player, wantFire: boolean, deltaMs: number): void {
+    const held = player.heldWeapon;
+    const weapon = held ? getWeapon(held.id) : undefined;
+    const beam = weapon?.beam;
+
+    if (!beam?.continuous || !wantFire || player.health.isDead || !held || !weapon) {
+      this.beams.delete(player.id);
+      return;
+    }
+
+    const from = player.muzzle;
+    const dir = { x: Math.cos(player.aim), y: Math.sin(player.aim) };
+    const trace = this.traceBeam(player, beam, from, dir);
+
+    // 视觉每帧重画（寿命略大于一帧，避免闪烁断裂）
+    this.drawBeam(from, trace.endPoint, beam, 70);
+
+    // tick 计时：到点才结算伤害
+    const tickMs = beam.tickMs ?? 60;
+    const state = this.beams.get(player.id) ?? { timer: 0 };
+    this.beams.set(player.id, state);
+    state.timer -= deltaMs;
+    if (state.timer > 0) return;
+    state.timer = tickMs;
+
+    this.applyBeamDamage(player, weapon, trace, dir, true);
+
+    // 消耗：每 tick 1 发弹药 + 耐久
+    if (held.ammo > 0) held.ammo -= 1;
+    held.durability -= weapon.durabilityPerShot;
+
+    if (held.durability <= 0) {
+      this.releaseWeapon(player, 'broken');
+    } else if (held.ammo === 0) {
+      this.releaseWeapon(player, 'empty');
+    }
+  }
+
+  /** 瞬时光束（非连续模式：点一次打一发，贯穿玩家与可穿透材质，遇阻终止） */
+  private fireBeam(player: Player, weapon: WeaponJson): boolean {
+    const beam = weapon.beam;
+    if (!beam) return false;
+
+    const from = player.muzzle;
+    const dir = { x: Math.cos(player.aim), y: Math.sin(player.aim) };
+    const trace = this.traceBeam(player, beam, from, dir);
+
+    this.applyBeamDamage(player, weapon, trace, dir, false);
+    this.drawBeam(from, trace.endPoint, beam, beam.duration);
     player.setAttack('stab', 90);
     return true;
   }

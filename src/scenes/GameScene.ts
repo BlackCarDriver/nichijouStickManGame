@@ -217,6 +217,10 @@ export class GameScene extends Phaser.Scene {
     this.players[1]?.update(cmd2, delta);
 
     this.weaponSystem.update(delta);
+    // 连续光束（激光）：按住持续输出、持续伤害
+    this.players.forEach((player, i) => {
+      this.weaponSystem.updateContinuous(player, cmds[i].attackHeld, delta);
+    });
     this.handleAttacks(cmds);
     this.handleSecondary(cmds);
     this.projectileSystem.update(delta);

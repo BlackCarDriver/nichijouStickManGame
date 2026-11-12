@@ -291,6 +291,26 @@ npm run validate
 —— 每种风格的轮廓画法在 `src/render/WeaponRenderer.ts`。
 `lightsaber`（光刀）额外支持 `visual.glow`（辉光色），用多层"宽而淡 → 窄而亮"叠加出发光刀身。
 
+### 光束（`beam`）
+
+```json
+"beam": { "range": 2200, "width": 5, "color": "#7ef9ff", "duration": 90,
+          "continuous": true, "tickMs": 55 }
+```
+
+| 字段 | 说明 |
+|------|------|
+| `continuous: true` | **连续光束**：按住攻击键持续输出，像机枪一样持续掉血（激光枪） |
+| `tickMs` | 伤害间隔（毫秒）。当前 55ms ≈ 18 跳/秒，每跳 `damage`（4），DPS ≈ 67 |
+| 不填 `continuous` | 点一次打一发瞬时光束（一次结算全部沿途目标） |
+
+连续模式的行为：
+
+- **每 tick 扣 1 点弹药 + 1 点耐久**（激光 45 发 ≈ 2.5 秒连续输出）
+- 伤害**无视受击无敌帧**（否则 180ms 无敌会把绝大多数 tick 挡掉）
+- 松开鼠标 / 换武器 / 死亡 → 立即停止输出
+- 贯穿玩家；遇到不可穿透材质（墙/地面/金属）光束终止
+
 ### 近战动作（`melee.anim`）
 
 | anim | 适用 | 判定方式 |

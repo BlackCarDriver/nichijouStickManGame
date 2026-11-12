@@ -55,18 +55,20 @@
     "laser": {
       "name": "激光枪",
       "attackMode": "beam",
-      "automatic": false,
-      "fireRate": 1.5,
-      "damage": 30,
-      "knockback": 5,
-      "ammo": 6,
-      "durability": 80,
-      "durabilityPerShot": 2,
+      "automatic": true,
+      "fireRate": 10,
+      "damage": 4,
+      "knockback": 1.2,
+      "ammo": 45,
+      "durability": 150,
+      "durabilityPerShot": 1,
       "beam": {
         "range": 2200,
-        "width": 4,
+        "width": 5,
         "color": "#7ef9ff",
-        "duration": 140
+        "duration": 90,
+        "continuous": true,
+        "tickMs": 55
       },
       "visual": { "style": "laser", "length": 34, "thickness": 5, "color": "#2f4858" }
     },

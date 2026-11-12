@@ -288,14 +288,16 @@ export class Player extends Entity {
    */
   applyDamage(info: DamageInfo): number {
     if (this.health.isDead) return 0;
-    const applied = this.health.applyDamage(info.amount);
+    const applied = this.health.applyDamage(info.amount, info.ignoreInvuln === true);
     if (applied <= 0) return 0;
 
     // 击退 + 受击姿态（hit() 内部会广播 player-hit → 屏幕震动）
+    // 高频低伤（激光 tick）用短后仰，否则会被持续锁在受击姿势里
     const kb = info.knockback ?? { x: 0, y: 0 };
-    this.hit(kb.x, kb.y, 380);
+    const light = info.ignoreInvuln === true;
+    this.hit(kb.x, kb.y, light ? 130 : 380);
     // 短无敌：避免连发武器在同一瞬间把玩家打穿（AK 高频子弹）
-    this.health.setInvulnerable(Player.HIT_INVULN_MS);
+    if (!light) this.health.setInvulnerable(Player.HIT_INVULN_MS);
 
     if (this.health.isDead) this.die();
     return applied;
