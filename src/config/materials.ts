@@ -222,5 +222,23 @@ function rawMaterialsJson(): MaterialsFile {
   return rawMaterials as MaterialsFile;
 }
 
+/**
+ * `data/materials.json` 本次构建的指纹（内容哈希）。
+ *
+ * 用途：编辑器会把材质草稿存进 localStorage（崩溃不丢稿），但恢复时必须先确认
+ * "文件从那时到现在没被改过"——否则外部（人/AI/git pull）新增或修改的材质会被
+ * 旧快照静默抹掉（曾经的真实 bug：新加的 plank 在编辑器里报"未知材质"）。
+ */
+export const MATERIALS_FILE_HASH: string = hashString(JSON.stringify(rawMaterialsJson().materials ?? {}));
+
+/** 简单 djb2 字符串哈希（只用于变更检测，不用于安全场景） */
+function hashString(input: string): string {
+  let h = 5381;
+  for (let i = 0; i < input.length; i++) {
+    h = ((h << 5) + h + input.charCodeAt(i)) | 0;
+  }
+  return (h >>> 0).toString(36);
+}
+
 // 初始化（模块加载即生效）
 replaceMaterials(rawMaterialsJson());

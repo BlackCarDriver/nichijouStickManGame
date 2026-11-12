@@ -39,29 +39,24 @@ export function drawWeaponGlow(g: Phaser.GameObjects.Graphics, o: WeaponDrawOpti
   const dx = facing * Math.cos(aim);
   const dy = Math.sin(aim);
   const color = o.colorOverride ?? parseColor(visual.color, 0x8ef7ff);
-  const glow = o.glowOverride ?? lightenColor(color, 0.45);
+  // 光刀的辉光与刀身保持同色；持有者传入颜色时，绝不使用配置里的蓝色 glow。
+  const glow = o.glowOverride ?? color;
 
   const b0 = { x: hand.x + dx * 6, y: hand.y + dy * 6 };
   const b1 = { x: hand.x + dx * visual.length, y: hand.y + dy * visual.length };
 
-  // ADD 混合是"颜色相加"，所以每层要够亮才会真的发光
-  // （之前按普通 alpha 叠加的思路把数值调低了，实测反而比原来更淡）
-  g.lineStyle(40, glow, 0.16);
+  // 外晕只负责柔化边缘，主体交给 drawHeldWeapon 绘制。逐层收窄后，
+  // 光刀会有清楚的轮廓和亮度中心，不再像一根粗糊的荧光棒。
+  g.lineStyle(30, glow, 0.055);
   g.lineBetween(b0.x, b0.y, b1.x, b1.y);
-  g.lineStyle(26, glow, 0.24);
+  g.lineStyle(20, glow, 0.09);
   g.lineBetween(b0.x, b0.y, b1.x, b1.y);
-  g.lineStyle(15, glow, 0.42);
+  g.lineStyle(12, glow, 0.16);
   g.lineBetween(b0.x, b0.y, b1.x, b1.y);
-  g.lineStyle(8, glow, 0.62);
+  g.lineStyle(7, glow, 0.24);
   g.lineBetween(b0.x, b0.y, b1.x, b1.y);
 
-  // 刀尖光团（ADD 下形成明显亮斑）
-  g.fillStyle(glow, 0.3);
-  g.fillCircle(b1.x, b1.y, 20);
-  g.fillStyle(glow, 0.5);
-  g.fillCircle(b1.x, b1.y, 10);
-  g.fillStyle(0xffffff, 0.65);
-  g.fillCircle(b1.x, b1.y, 4.2);
+  // 不绘制独立刀尖亮点，让刀身从根部到尖端保持均匀颜色。
 }
 
 /** 提亮颜色（与白色混合），用于从本体色推导辉光色 */
@@ -233,20 +228,25 @@ export function drawHeldWeapon(g: Phaser.GameObjects.Graphics, o: WeaponDrawOpti
     }
 
     case 'lightsaber': {
-      // 刀柄（金属灰，与光刃形成对比）
+      // 单一深色握把，去掉重复绘制造成的两根灰色柱子。
       const hilt0 = at(-9);
       const hilt1 = at(6);
-      g.lineStyle(th + 3, 0x8c97a6, 1);
+      g.lineStyle(th + 2, 0x30333b, 1);
       g.lineBetween(hilt0.x, hilt0.y, hilt1.x, hilt1.y);
-      g.lineStyle(2, 0x2f3540, 1);
-      g.lineBetween(hilt0.x, hilt0.y, hilt1.x, hilt1.y);
+      const ring0 = at(2.5, -1.8);
+      const ring1 = at(2.5, 1.8);
+      g.lineStyle(2.2, 0xaab4c0, 0.9);
+      g.lineBetween(ring0.x, ring0.y, ring1.x, ring1.y);
 
-      // 刃体 + 白热核心（宽光晕由 drawWeaponGlow 用 ADD 混合另画，效果才真的像发光）
+      // 刃体分为窄色芯 + 白热核心；外晕在独立 ADD 层绘制，边缘更干净。
       const b0 = at(6);
       const b1 = at(len);
-      g.lineStyle(6, color, 1);
+      // 三层只改变透明度和宽度，不改变颜色，保证整把光刀颜色统一。
+      g.lineStyle(7, color, 0.95);
       g.lineBetween(b0.x, b0.y, b1.x, b1.y);
-      g.lineStyle(2.6, 0xffffff, 1);
+      g.lineStyle(3.8, color, 1);
+      g.lineBetween(b0.x, b0.y, b1.x, b1.y);
+      g.lineStyle(1.7, color, 1);
       g.lineBetween(b0.x, b0.y, b1.x, b1.y);
       break;
     }

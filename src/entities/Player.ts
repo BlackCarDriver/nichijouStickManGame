@@ -1073,6 +1073,7 @@ export class Player extends Entity {
           aim: this.renderAim + this.slashOffset,
           hand: this.handLocal,
           colorOverride: this.color,
+          glowOverride: this.color,
         });
       }
     }
@@ -1170,16 +1171,27 @@ export class Player extends Entity {
     g.clear();
     if (!this.superMode || this.health.isDead) return;
 
-    // 呼吸脉动（1.4s 一轮）
-    const t = (this.scene.time.now % 1400) / 1400;
-    const pulse = 0.6 + 0.4 * Math.sin(t * Math.PI * 2);
-    const color = this.superGlowColor;
+    // 身体光晕（超级战士）：低透明度的边缘光 + 呼吸，不用几块实心圆盖住角色。
+    const t = (this.scene.time.now % 1600) / 1600;
+    const pulse = 0.72 + 0.28 * Math.sin(t * Math.PI * 2);
+    // 身体光跟随火柴人颜色，保持与光刀的颜色统一。
+    const color = this.color;
 
-    g.fillStyle(color, 0.06 * pulse);
-    g.fillCircle(0, -18, 66);
-    g.fillStyle(color, 0.09 * pulse);
-    g.fillCircle(0, -18, 46);
-    g.fillStyle(color, 0.13 * pulse);
-    g.fillCircle(0, -18, 28);
+    // 大范围只保留极淡的底光，靠轮廓线建立“被光包住”的感觉。
+    g.fillStyle(color, 0.018 * pulse);
+    g.fillCircle(0, -20, 58);
+    g.lineStyle(8, color, 0.045 * pulse);
+    g.strokeEllipse(0, -21, 76, 108);
+
+    // 头部与躯干的局部光环，让发光状态在小尺寸下仍然可读。
+    g.lineStyle(3, color, 0.12 * pulse);
+    g.strokeCircle(0, -60, 15);
+    g.lineStyle(4, color, 0.075 * pulse);
+    g.strokeEllipse(0, -17, 42, 64);
+
+    // 两条很短的侧向光痕，打破“套了圆形光晕”的廉价感。
+    g.lineStyle(2, color, 0.16 * pulse);
+    g.lineBetween(-31, -45, -22, -48);
+    g.lineBetween(22, -48, 31, -45);
   }
 }

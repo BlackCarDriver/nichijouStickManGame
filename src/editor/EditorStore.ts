@@ -19,6 +19,7 @@ import { getDefaultMap, getPrefabTable, listPrefabs } from '../map/MapRegistry';
 import { expandPrefab } from '../map/PrefabExpand';
 import {
   MATERIALS,
+  MATERIALS_FILE_HASH,
   addMaterial as addMaterialToTable,
   defaultMaterialJson,
   materialIds,
@@ -30,6 +31,7 @@ import {
 } from '../config/materials';
 import type { MaterialConfig, MaterialJson, MaterialsFile } from '../config/materials';
 import { forgetTextureFailures } from '../map/TextureLoader';
+import { listItemIds } from '../world/ItemFormat';
 import {
   makeContext,
   validateMap,
@@ -68,6 +70,8 @@ interface SavedState {
   map: MapData;
   prefabDraft: PrefabData;
   materials: MaterialsFile;
+  /** 保存时 data/materials.json 的指纹：文件被外部修改过则丢弃旧材质快照 */
+  materialsHash?: string;
 }
 
 /** 预制件工作台布局（场景与 store 共用，保证坐标一致） */
@@ -114,6 +118,8 @@ export class EditorStore {
   ruler: { from: Vec; to: Vec } | null = null;
   /** 状态栏消息 */
   message = '';
+  /** 材质文件被外部修改时的提示（只提示一次，不写入 message 以免被后续操作覆盖太快） */
+  materialNotice = '';
   /**
    * 编辑器内的贴图预览覆盖（贴图引用 → data URL）。
    * 用于：选了本地图片但还没落到 public/textures 时，编辑器里也能立即看到效果。
@@ -138,6 +144,8 @@ export class EditorStore {
     this.restore();
     this.ensureIds();
     this.resetHistory();
+    // 材质文件被外部改过：把提示作为初始状态消息显示出来
+    if (this.materialNotice) this.message = this.materialNotice;
   }
 
   // ---------------- 订阅 / 通知 ----------------
@@ -237,6 +245,7 @@ export class EditorStore {
         map: this.map,
         prefabDraft: this.prefabDraft,
         materials: serializeMaterials(),
+        materialsHash: MATERIALS_FILE_HASH,
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     } catch {
@@ -251,7 +260,17 @@ export class EditorStore {
       const saved = JSON.parse(raw) as SavedState;
       if (saved?.map) this.map = saved.map;
       if (saved?.prefabDraft) this.prefabDraft = saved.prefabDraft;
-      if (saved?.materials) replaceMaterials(saved.materials);
+      if (saved?.materials) {
+        // 只有"文件没被外部改过"时才恢复材质草稿。
+        // 否则直接用文件版本（否则 AI/手改/ git pull 新增的材质会被旧快照抹掉，
+        // 表现为地图报"未知材质"）
+        if (saved.materialsHash && saved.materialsHash === MATERIALS_FILE_HASH) {
+          replaceMaterials(saved.materials);
+        } else {
+          this.materialNotice =
+            'data/materials.json 已被外部修改：已重新载入文件版本（未保存的材质草稿已丢弃）';
+        }
+      }
       if (saved?.tab) this.tab = saved.tab;
     } catch {
       /* 损坏的存档：用默认地图 */
@@ -942,7 +961,7 @@ export class EditorStore {
     if (this.issuesCache && this.issuesCacheRev === this.rev && this.issuesCacheTab === this.tab) {
       return this.issuesCache;
     }
-    const ctx = makeContext(materialIds(), Object.values(this.prefabTable()));
+    const ctx = makeContext(materialIds(), Object.values(this.prefabTable()), listItemIds());
     const issues =
       this.tab === 'prefab'
         ? validatePrefab(this.prefabDraft, ctx)
@@ -975,7 +994,7 @@ export class EditorStore {
     } catch (e) {
       return { ok: false, issues: [{ level: 'error', path: 'json', message: `JSON 解析失败：${(e as Error).message}` }] };
     }
-    const ctx = makeContext(materialIds(), Object.values(this.prefabTable()));
+    const ctx = makeContext(materialIds(), Object.values(this.prefabTable()), listItemIds());
     const issues = validateMap(parsed, ctx);
     const fatal = issues.filter((i) => i.level === 'error');
     if (fatal.length > 0) return { ok: false, issues };
@@ -995,7 +1014,7 @@ export class EditorStore {
     } catch (e) {
       return { ok: false, issues: [{ level: 'error', path: 'json', message: `JSON 解析失败：${(e as Error).message}` }] };
     }
-    const ctx = makeContext(materialIds(), Object.values(this.prefabTable()));
+    const ctx = makeContext(materialIds(), Object.values(this.prefabTable()), listItemIds());
     const issues = validatePrefab(parsed, ctx);
     if (issues.some((i) => i.level === 'error')) return { ok: false, issues };
     this.prefabDraft = parsed as PrefabData;

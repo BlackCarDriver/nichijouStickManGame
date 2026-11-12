@@ -74,7 +74,10 @@ interface Projectile {
   /** 当前单位飞行方向（渲染拖尾用） */
   dirX: number;
   dirY: number;
-  /** 投掷物的独立视觉（用真实武器模型绘制，跟随飞行方向旋转） */
+  /** 匕首飞行时的自旋角度（弧度）；只影响视觉，不改变命中方向 */
+  spinAngle: number;
+  /** 匕首自旋速度（弧度/秒） */
+  spinSpeed: number;
   gfx?: Phaser.GameObjects.Graphics;
   /**
    * 最近若干帧的位置（旧→新）。拖尾按**真实轨迹**画，而不是"当前方向反推一条直线"：
@@ -182,6 +185,9 @@ export class ProjectileSystem {
       smokeTimer: 0,
       dirX: Math.cos(options.angle),
       dirY: Math.sin(options.angle),
+      spinAngle: 0,
+      // 匕首快速但不刺眼地连续翻转；长矛保持沿飞行方向，便于辨识其长度。
+      spinSpeed: options.weaponId === 'dagger' ? 24 : 0,
       history: [{ x: options.x, y: options.y }],
     });
 
@@ -225,6 +231,7 @@ export class ProjectileSystem {
   private step(p: Projectile, deltaMs: number): void {
     const dt = deltaMs / 1000;
     p.elapsed += deltaMs;
+    p.spinAngle += p.spinSpeed * dt;
 
     // 重力 → 抛物线
     p.vy += p.gravity * dt;
@@ -470,7 +477,7 @@ export class ProjectileSystem {
       oldest?.gfx?.destroy();
     }
     const body = hit.body;
-    const angle = Math.atan2(p.dirY, p.dirX);
+    const angle = Math.atan2(p.dirY, p.dirX) + p.spinAngle;
     const item: StuckItem = {
       x: hit.point.x,
       y: hit.point.y,
@@ -625,7 +632,7 @@ export class ProjectileSystem {
       if (bullet.kind === 'thrown') {
         if (p.gfx) {
           p.gfx.setPosition(p.x, p.y);
-          p.gfx.setRotation(Math.atan2(p.dirY, p.dirX));
+          p.gfx.setRotation(Math.atan2(p.dirY, p.dirX) + p.spinAngle);
         }
         continue;
       }
