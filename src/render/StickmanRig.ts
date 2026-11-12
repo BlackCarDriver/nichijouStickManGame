@@ -26,7 +26,7 @@ export const RIG_BONES = {
   NECK: 12 * 0.35,
   TORSO: 12 * 3.1,
   UPPER_ARM: 12 * 1.55,
-  FOREARM: 12 * 1.4,
+  FOREARM: 12 * 1.55, // 前臂：与上臂等长（原来 1.4，显得偏短）
   THIGH: 12 * 1.9,
   SHIN: 12 * 1.85,
   FOOT: 12 * 0.85,

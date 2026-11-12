@@ -199,6 +199,9 @@ export class Player extends Entity {
    * 武器从这里画、子弹从这里出，保证"枪口 = 子弹起点"。
    */
   private handLocal = { x: 0, y: StickmanRenderer.SHOULDER_Y };
+  /** 双手武器的握杆中心（长矛使用），普通武器仍使用前手 */
+  private weaponHandLocal = { x: 0, y: StickmanRenderer.SHOULDER_Y };
+  private weaponAimOverride: number | null = null;
 
   // ---- 攻击动作（刺击/踢）----
   private attackKind: 'stab' | 'thrust' | 'kick' | 'slash' | 'punch' | null = null;
@@ -1086,6 +1089,8 @@ export class Player extends Entity {
       x: this.facing * StickmanRenderer.SHOULDER_W,
       y: StickmanRenderer.SHOULDER_Y + StickmanRenderer.SHOULDER_DY + StickmanRenderer.ARM_REACH,
     };
+    this.weaponHandLocal = StickmanRenderer.lastWeaponHand ?? this.handLocal;
+    this.weaponAimOverride = StickmanRenderer.lastWeaponAim;
 
     // 超级战士身体光晕（每帧重画，非超级状态时清空）
     this.drawBodyGlow();
@@ -1129,15 +1134,21 @@ export class Player extends Entity {
         const held = this.heldWeapon;
         const isMelee = held ? getWeapon(held.id)?.attackMode === 'melee' : false;
         const thrust = Math.sin(this.attackProgress * Math.PI) * (isMelee ? 16 : 4);
+        const weaponHand = visual.style === 'spear' ? this.weaponHandLocal : this.handLocal;
+        const weaponAim =
+          visual.style === 'spear' && this.weaponAimOverride !== null
+            ? this.weaponAimOverride
+            : this.renderAim + this.slashOffset;
+        const weaponThrust = visual.style === 'spear' ? 0 : thrust;
         drawHeldWeapon(this.graphics, {
           visual,
           facing: this.facing,
-          aim: this.renderAim + this.slashOffset,
+          aim: weaponAim,
           // 光刀的颜色跟随持有者（红火柴人 → 红光刃）
           colorOverride: visual.style === 'lightsaber' ? this.color : undefined,
           hand: {
-            x: this.handLocal.x + this.facing * Math.cos(this.aimAngle) * thrust,
-            y: this.handLocal.y + Math.sin(this.aimAngle) * thrust,
+            x: weaponHand.x + this.facing * Math.cos(this.aimAngle) * weaponThrust,
+            y: weaponHand.y + Math.sin(this.aimAngle) * weaponThrust,
           },
         });
       }

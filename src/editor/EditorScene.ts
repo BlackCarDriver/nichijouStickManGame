@@ -371,8 +371,16 @@ export class EditorScene extends Phaser.Scene {
     if (weapon === 'spear') {
       const visual = getWeapon('spear')?.visual;
       if (visual) {
-        const aim = Math.atan2(front.end.y - frontRoot.y, front.end.x - frontRoot.x);
-        drawHeldWeapon(g, { visual, facing: 1, aim, hand: front.end });
+        const aim = Math.atan2(front.end.y - back.end.y, front.end.x - back.end.x);
+        drawHeldWeapon(g, {
+          visual,
+          facing: 1,
+          aim,
+          hand: {
+            x: (front.end.x + back.end.x) * 0.5,
+            y: (front.end.y + back.end.y) * 0.5,
+          },
+        });
       }
     }
   }

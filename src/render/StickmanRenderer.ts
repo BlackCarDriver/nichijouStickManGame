@@ -101,6 +101,10 @@ export class StickmanRenderer {
    * 每次 draw() 开头重置，瞄准时写入。
    */
   static lastAimHand: Vec2 | null = null;
+  /** 动作姿态下的双手握杆中心，供长矛等双手武器使用 */
+  static lastWeaponHand: Vec2 | null = null;
+  /** 双手动作下的长矛世界方向 */
+  static lastWeaponAim: number | null = null;
 
   /** 跟随滞后时长（秒）：末端相对根节点的延迟 */
   private static readonly FOLLOW_LAG = 0.055;
@@ -108,6 +112,8 @@ export class StickmanRenderer {
   static draw(g: Phaser.GameObjects.Graphics, o: StickmanDrawOptions): void {
     g.clear();
     this.lastAimHand = null;
+    this.lastWeaponHand = null;
+    this.lastWeaponAim = null;
     const speedPxPerSec = Math.abs(o.velocityX) * 60;
 
     if (o.actionPose) {
@@ -281,8 +287,15 @@ export class StickmanRenderer {
     const frontRoot = { x: shoulder.x + this.SHOULDER_W, y: shoulder.y + this.SHOULDER_DY };
     const backRoot = { x: shoulder.x - this.SHOULDER_W, y: shoulder.y + this.SHOULDER_DY };
     const front = this.drawArmPose(g, o, frontRoot, pose.armFrontShoulder, pose.armFrontElbow);
-    this.drawArmPose(g, o, backRoot, pose.armBackShoulder, pose.armBackElbow);
+    const back = this.drawArmPose(g, o, backRoot, pose.armBackShoulder, pose.armBackElbow);
     this.lastAimHand = { x: front.end.x, y: front.end.y };
+    this.lastWeaponHand = {
+      x: (front.end.x + back.end.x) * 0.5,
+      y: (front.end.y + back.end.y) * 0.5,
+    };
+    const localAim = Math.atan2(front.end.y - back.end.y, front.end.x - back.end.x);
+    const facing = o.facing ?? 1;
+    this.lastWeaponAim = Math.atan2(Math.sin(localAim), facing * Math.cos(localAim));
   }
 
   private static drawArmPose(
