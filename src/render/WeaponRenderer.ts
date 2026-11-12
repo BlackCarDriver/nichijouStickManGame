@@ -27,6 +27,43 @@ export interface WeaponDrawOptions {
   glowOverride?: number;
 }
 
+/**
+ * 光刀的**发光层**：只画光晕，不画刀柄/刃芯。
+ *
+ * 这一层要画到一个 **ADD 混合模式**的独立 Graphics 上：
+ * 普通 alpha 叠加只是"半透明盖一层"，越叠越灰；ADD 是颜色相加，
+ * 多层叠加会真的变亮 → 这才是"发光"的观感。
+ */
+export function drawWeaponGlow(g: Phaser.GameObjects.Graphics, o: WeaponDrawOptions): void {
+  const { visual, facing, aim, hand } = o;
+  const dx = facing * Math.cos(aim);
+  const dy = Math.sin(aim);
+  const color = o.colorOverride ?? parseColor(visual.color, 0x8ef7ff);
+  const glow = o.glowOverride ?? lightenColor(color, 0.45);
+
+  const b0 = { x: hand.x + dx * 6, y: hand.y + dy * 6 };
+  const b1 = { x: hand.x + dx * visual.length, y: hand.y + dy * visual.length };
+
+  // ADD 混合是"颜色相加"，所以每层要够亮才会真的发光
+  // （之前按普通 alpha 叠加的思路把数值调低了，实测反而比原来更淡）
+  g.lineStyle(40, glow, 0.16);
+  g.lineBetween(b0.x, b0.y, b1.x, b1.y);
+  g.lineStyle(26, glow, 0.24);
+  g.lineBetween(b0.x, b0.y, b1.x, b1.y);
+  g.lineStyle(15, glow, 0.42);
+  g.lineBetween(b0.x, b0.y, b1.x, b1.y);
+  g.lineStyle(8, glow, 0.62);
+  g.lineBetween(b0.x, b0.y, b1.x, b1.y);
+
+  // 刀尖光团（ADD 下形成明显亮斑）
+  g.fillStyle(glow, 0.3);
+  g.fillCircle(b1.x, b1.y, 20);
+  g.fillStyle(glow, 0.5);
+  g.fillCircle(b1.x, b1.y, 10);
+  g.fillStyle(0xffffff, 0.65);
+  g.fillCircle(b1.x, b1.y, 4.2);
+}
+
 /** 提亮颜色（与白色混合），用于从本体色推导辉光色 */
 export function lightenColor(color: number, amount: number): number {
   const r = (color >> 16) & 0xff;
@@ -196,7 +233,7 @@ export function drawHeldWeapon(g: Phaser.GameObjects.Graphics, o: WeaponDrawOpti
     }
 
     case 'lightsaber': {
-      // 刀柄（保持金属灰，跟光刃形成对比）
+      // 刀柄（金属灰，与光刃形成对比）
       const hilt0 = at(-9);
       const hilt1 = at(6);
       g.lineStyle(th + 3, 0x8c97a6, 1);
@@ -204,38 +241,13 @@ export function drawHeldWeapon(g: Phaser.GameObjects.Graphics, o: WeaponDrawOpti
       g.lineStyle(2, 0x2f3540, 1);
       g.lineBetween(hilt0.x, hilt0.y, hilt1.x, hilt1.y);
 
-      /**
-       * 刀身：五层"宽而淡 → 窄而亮"叠加。
-       * 颜色跟随持有者（红/蓝火柴人 → 红/蓝光刃），
-       * 辉光用比本体更亮的同色系，所以外层看起来像在发光。
-       */
-      const glow = o.glowOverride ?? lightenColor(color, 0.45);
+      // 刃体 + 白热核心（宽光晕由 drawWeaponGlow 用 ADD 混合另画，效果才真的像发光）
       const b0 = at(6);
       const b1 = at(len);
-
-      // ① 最外层大范围光晕（很淡但很宽，负责"照亮周围"）
-      g.lineStyle(34, glow, 0.1);
+      g.lineStyle(6, color, 1);
       g.lineBetween(b0.x, b0.y, b1.x, b1.y);
-      // ② 中层光晕
-      g.lineStyle(22, glow, 0.2);
+      g.lineStyle(2.6, 0xffffff, 1);
       g.lineBetween(b0.x, b0.y, b1.x, b1.y);
-      // ③ 内层辉光
-      g.lineStyle(13, glow, 0.45);
-      g.lineBetween(b0.x, b0.y, b1.x, b1.y);
-      // ④ 刃体本身
-      g.lineStyle(7, color, 0.95);
-      g.lineBetween(b0.x, b0.y, b1.x, b1.y);
-      // ⑤ 白热核心
-      g.lineStyle(3.2, 0xffffff, 1);
-      g.lineBetween(b0.x, b0.y, b1.x, b1.y);
-
-      // 端点柔化（刀尖的光团）
-      g.fillStyle(glow, 0.18);
-      g.fillCircle(b1.x, b1.y, 15);
-      g.fillStyle(glow, 0.35);
-      g.fillCircle(b1.x, b1.y, 8);
-      g.fillStyle(0xffffff, 0.95);
-      g.fillCircle(b1.x, b1.y, 3.2);
       break;
     }
 

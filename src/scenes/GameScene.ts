@@ -28,6 +28,7 @@ import { GrenadeSystem } from '../combat/GrenadeSystem';
 import { FxSystem } from '../fx/FxSystem';
 import { Hud } from '../ui/Hud';
 import { DamageNumbers } from '../ui/DamageNumbers';
+import { SlashTrail } from '../fx/SlashTrail';
 
 const PLAYER_COLORS = [0xe74c3c, 0x3498db];
 /** 空的"按下集合"（自动拾取不需要按键） */
@@ -80,6 +81,7 @@ export class GameScene extends Phaser.Scene {
   private fx!: FxSystem;
   private hud!: Hud;
   private damageNumbers!: DamageNumbers;
+  private slashTrail!: SlashTrail;
   private readonly bodyToPlayer = new Map<number, Player>();
   private aimOwner: 0 | 1 = 0;
 
@@ -180,6 +182,7 @@ export class GameScene extends Phaser.Scene {
     this.impactDamage = new ImpactDamageSystem(this, this.damageSystem, this.worldRegistry);
 
     this.damageNumbers = new DamageNumbers(this);
+    this.slashTrail = new SlashTrail(this);
     this.hud = new Hud(this);
     this.hud.bind(this.players);
     this.hud.bindKills(this.kills);
@@ -302,6 +305,7 @@ export class GameScene extends Phaser.Scene {
       this.weaponSystem.destroy();
       this.fx.destroy();
       this.damageNumbers.destroy();
+      this.slashTrail.destroy();
       this.hud.destroy();
     });
 
@@ -364,6 +368,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.gameFeel.update(this.cameras.main, this.cameraRig.shakeOffset, delta);
     this.fx.update(delta);
+    this.slashTrail.update(delta, this.players);
     this.damageNumbers.update(delta);
     this.hud.update();
   }

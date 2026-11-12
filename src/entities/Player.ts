@@ -10,7 +10,7 @@ import { Health } from './Health';
 import type { DamageInfo } from '../combat/DamageInfo';
 import { getWeapon } from '../combat/WeaponFormat';
 import type { HeldWeapon } from '../combat/WeaponFormat';
-import { drawHeldWeapon } from '../render/WeaponRenderer';
+import { drawHeldWeapon, drawWeaponGlow } from '../render/WeaponRenderer';
 import { raycast, getWorldBodies } from '../combat/Raycast';
 
 export const PLAYER_CONFIG = {
@@ -127,6 +127,8 @@ export class Player extends Entity {
   /** 内层视觉容器：面向翻转（与物理/挤压分离） */
   private readonly visual: Phaser.GameObjects.Container;
   private readonly graphics: Phaser.GameObjects.Graphics;
+  /** 光刀的发光层（ADD 混合，叠在角色之上） */
+  private readonly glowGraphics: Phaser.GameObjects.Graphics;
   readonly body: MatterJS.BodyType;
   readonly color: number;
 
@@ -254,6 +256,10 @@ export class Player extends Entity {
     this.visual = scene.add.container(0, 0);
     this.graphics = scene.add.graphics();
     this.visual.add(this.graphics);
+    // 发光层用 ADD 混合：多层叠加会"真的变亮"，而不是越叠越灰
+    this.glowGraphics = scene.add.graphics();
+    this.glowGraphics.setBlendMode(Phaser.BlendModes.ADD);
+    this.visual.add(this.glowGraphics);
     this.container.add(this.visual);
 
     // 主碰撞体
@@ -964,6 +970,26 @@ export class Player extends Entity {
       y: StickmanRenderer.SHOULDER_Y + StickmanRenderer.SHOULDER_DY + StickmanRenderer.ARM_REACH,
     };
 
+    // 光刀发光层（每帧重画；非光刀时清空）
+    this.glowGraphics.clear();
+    if (
+      !this.grenadeMode &&
+      this.heldWeapon &&
+      !this.health.isDead &&
+      getWeapon(this.heldWeapon.id)?.visual.style === 'lightsaber'
+    ) {
+      const visual = getWeapon(this.heldWeapon.id)?.visual;
+      if (visual) {
+        drawWeaponGlow(this.glowGraphics, {
+          visual,
+          facing: this.facing,
+          aim: this.renderAim + this.slashOffset,
+          hand: this.handLocal,
+          colorOverride: this.color,
+        });
+      }
+    }
+
     // 握着的手榴弹（优先于武器）
     if (this.grenadeMode && !this.health.isDead) {
       const grenadeVisual = getWeapon('grenade')?.visual;
@@ -1021,6 +1047,7 @@ export class Player extends Entity {
     super.destroy();
     this.scene.matter.world.off('collisionactive', this.handleCollisionActive, this);
     this.scene.matter.world.remove(this.body);
+    this.glowGraphics.destroy();
     this.visual.destroy();
     this.container.destroy();
   }

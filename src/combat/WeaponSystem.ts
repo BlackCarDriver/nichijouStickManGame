@@ -735,20 +735,7 @@ export class WeaponSystem {
       });
     }
 
-    // 刀光：沿弧线画一段亮线
-    this.fx.beam(
-      {
-        x: from.x + Math.cos(aim - halfArc) * reach,
-        y: from.y + Math.sin(aim - halfArc) * reach,
-      },
-      {
-        x: from.x + Math.cos(aim + halfArc) * reach,
-        y: from.y + Math.sin(aim + halfArc) * reach,
-      },
-      player.color,
-      150,
-      3,
-    );
+    // 刀光扇形残影由 SlashTrail 逐帧采样绘制（这里不再画直线"弦"）
     return true;
   }
 
