@@ -1154,8 +1154,9 @@ export class Player extends Entity {
 
   override destroy(): void {
     super.destroy();
-    this.scene.matter.world.off('collisionactive', this.handleCollisionActive, this);
-    this.scene.matter.world.remove(this.body);
+    // world 可能已在场景关闭时被置空（见 ImpactDamageSystem.destroy 的注释）
+    this.scene.matter?.world?.off('collisionactive', this.handleCollisionActive, this);
+    this.scene.matter?.world?.remove(this.body);
     this.bodyGlowGraphics.destroy();
     this.glowGraphics.destroy();
     this.visual.destroy();

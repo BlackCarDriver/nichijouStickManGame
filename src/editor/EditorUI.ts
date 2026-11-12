@@ -122,8 +122,13 @@ export function createShell(): void {
   statusTextEl = h('span', { class: 'ed-status-text' });
   fpsEl = h('span', { class: 'ed-status-fps' }, ['— fps']);
   toastEl = h('div', { class: 'ed-toast' });
+  const testingExitBtn = h('button', { class: 'ed-testing-exit' }, ['返回编辑器']);
+  testingExitBtn.addEventListener('click', () => stopPlayTest());
   canvasHostEl = h('div', { class: 'ed-canvas', id: 'canvas-host' }, [
-    h('div', { class: 'ed-testing-hint' }, ['测试运行中 — 按 Esc 返回编辑器']),
+    h('div', { class: 'ed-testing-hint' }, [
+      h('span', {}, ['测试运行中 — 按 Esc 返回']),
+      testingExitBtn,
+    ]),
     toastEl,
   ]);
 
@@ -1138,23 +1143,47 @@ function startPlayTest(): void {
   }
   testing = true;
   document.body.classList.add('testing');
-  const map = JSON.parse(JSON.stringify(store.renderMap()));
-  game.scene.stop('EditorScene');
-  game.scene.start('GameScene', {
-    map,
-    // 用编辑器内的预制件表（含未保存的焊接开关等改动）
-    prefabs: JSON.parse(JSON.stringify(store.prefabTable())),
-    onExit: () => stopPlayTest(),
-  });
-  setStatus('测试中：WASD/方向键 移动，W/↑ 跳跃，Esc 返回编辑器');
+  try {
+    const map = JSON.parse(JSON.stringify(store.renderMap()));
+    game.scene.stop('EditorScene');
+    game.scene.start('GameScene', {
+      map,
+      // 用编辑器内的预制件表（含未保存的焊接开关等改动）
+      prefabs: JSON.parse(JSON.stringify(store.prefabTable())),
+      onExit: () => stopPlayTest(),
+    });
+    setStatus('测试中：WASD/方向键 移动，W/↑ 跳跃，Esc 返回编辑器');
+  } catch (err) {
+    // 启动失败（数据异常等）不能把编辑器留在"测试中"状态，否则用户会卡在灰屏
+    console.error('[编辑器] 测试启动失败:', err);
+    testing = false;
+    document.body.classList.remove('testing');
+    try {
+      game.scene.start('EditorScene');
+    } catch (e2) {
+      console.error('[编辑器] 恢复编辑器也失败了:', e2);
+    }
+    store.message = `测试启动失败：${(err as Error).message}`;
+    store.touch();
+  }
 }
 
 function stopPlayTest(): void {
   if (!game || !testing) return;
   testing = false;
   document.body.classList.remove('testing');
-  game.scene.stop('GameScene');
-  game.scene.start('EditorScene');
+  // 两个操作分别容错：GameScene 收尾出错也必须把编辑器恢复回来，
+  // 否则画面会停在测试的最后一帧（真实踩过的坑：ImpactDamageSystem.destroy 抛异常把收尾打断）
+  try {
+    game.scene.stop('GameScene');
+  } catch (err) {
+    console.error('[编辑器] 关闭测试场景失败:', err);
+  }
+  try {
+    game.scene.start('EditorScene');
+  } catch (err) {
+    console.error('[编辑器] 返回编辑器失败:', err);
+  }
   editorStore.message = '已返回编辑器';
   editorStore.touch();
 }

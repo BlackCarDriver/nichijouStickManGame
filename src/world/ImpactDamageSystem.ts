@@ -60,6 +60,7 @@ export class ImpactDamageSystem {
   }
 
   destroy(): void {
-    this.scene.matter.world.off('collisionstart', this.handleCollisionStart, this);
+    // 场景关闭时物理插件已被禁用，world 可能为 null（必须判空，否则会中断 SHUTDOWN 收尾）
+    this.scene.matter?.world?.off('collisionstart', this.handleCollisionStart, this);
   }
 }

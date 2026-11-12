@@ -393,7 +393,7 @@ export class GameScene extends Phaser.Scene {
       this.input.off('pointerdown', this.unlockAudio);
       this.input.keyboard?.off('keydown', this.unlockAudio);
       if (this.physicsFrozen) {
-        this.matter.world.resume();
+        this.matter.world?.resume();
         this.physicsFrozen = false;
       }
       this.events.off('explosion', onExplosion);
@@ -405,21 +405,43 @@ export class GameScene extends Phaser.Scene {
       this.events.off('player-shielded', onPlayerShielded);
       this.events.off('super-mode', onSuperMode);
       this.events.off('carried-grenade-hit', onCarriedGrenadeHit);
-      this.projectileSystem.destroy();
-      this.sights.destroy();
-      this.grenades.destroy();
-      this.pickups.destroy();
-      this.fragments.destroy();
-      this.impactDamage.destroy();
-      this.weaponSystem.destroy();
-      this.fx.destroy();
-      this.damageNumbers.destroy();
-      this.slashTrail.destroy();
-      this.hud.destroy();
+      this.teardownSystems();
     });
 
     if (this.onExit) {
       this.input.keyboard?.once('keydown-ESC', () => this.onExit?.());
+    }
+  }
+
+  /**
+   * 逐个子系统清理。
+   *
+   * 为什么每个都包 try/catch：这段代码跑在 Phaser 的 SHUTDOWN 事件里，
+   * 而物理插件此时**已经被关闭**（`this.matter.world` 变成 null）。
+   * 只要有一个 destroy() 抛异常，后面的 destroy() 与「返回编辑器」就全都不执行，
+   * 表现为编辑器点测试后返回不了、画面冻结（真实踩过的坑）。
+   * 宁可某个系统清理失败并打日志，也不能让整个场景收尾中断。
+   */
+  private teardownSystems(): void {
+    const systems: Array<[string, () => void]> = [
+      ['projectile', () => this.projectileSystem.destroy()],
+      ['sights', () => this.sights.destroy()],
+      ['grenades', () => this.grenades.destroy()],
+      ['pickups', () => this.pickups.destroy()],
+      ['fragments', () => this.fragments.destroy()],
+      ['impactDamage', () => this.impactDamage.destroy()],
+      ['weapon', () => this.weaponSystem.destroy()],
+      ['fx', () => this.fx.destroy()],
+      ['damageNumbers', () => this.damageNumbers.destroy()],
+      ['slashTrail', () => this.slashTrail.destroy()],
+      ['hud', () => this.hud.destroy()],
+    ];
+    for (const [name, destroy] of systems) {
+      try {
+        destroy();
+      } catch (err) {
+        console.error(`[GameScene] ${name} 清理失败（已跳过，不影响场景退出）:`, err);
+      }
     }
   }
 
