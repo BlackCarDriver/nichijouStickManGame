@@ -132,10 +132,15 @@ function createRectVisual(
   mat: MaterialConfig,
   color: number,
   strokeAlpha: number,
+  /** 对象级覆盖（优先于材质） */
+  textureRef?: string,
+  textureModeOverride?: 'tile' | 'stretch',
 ): Phaser.GameObjects.GameObject {
-  if (mat.texture && hasMaterialTexture(scene, mat.texture)) {
-    const key = matTextureKey(mat.texture);
-    if (mat.textureMode === 'stretch') {
+  const tex = textureRef ?? mat.texture;
+  const mode = textureModeOverride ?? mat.textureMode;
+  if (tex && hasMaterialTexture(scene, tex)) {
+    const key = matTextureKey(tex);
+    if (mode === 'stretch') {
       return scene.add.image(cx, cy, key).setDisplaySize(w, h);
     }
     return scene.add.tileSprite(cx, cy, w, h, key);
@@ -163,7 +168,7 @@ function createObject(
   if (layer === 'decor') {
     let visual: Phaser.GameObjects.GameObject;
     if (obj.type === 'rect') {
-      visual = createRectVisual(scene, obj.x + obj.w / 2, obj.y + obj.h / 2, obj.w, obj.h, mat, color, 0.4);
+      visual = createRectVisual(scene, obj.x + obj.w / 2, obj.y + obj.h / 2, obj.w, obj.h, mat, color, 0.4, obj.type === 'rect' ? obj.texture : undefined, obj.type === 'rect' ? obj.textureMode : undefined);
       // decor 没有物理体，旋转需手动应用
       if (angleRad !== 0) (visual as unknown as Phaser.GameObjects.Components.Transform).setRotation(angleRad);
       applyAlpha(visual, alpha);
@@ -277,7 +282,7 @@ function createObject(
       const rect = obj as Extract<MapObject, { type: 'rect' }>;
       const cx = rect.x + rect.w / 2;
       const cy = rect.y + rect.h / 2;
-      const go = createRectVisual(scene, cx, cy, rect.w, rect.h, mat, color, 0.5);
+      const go = createRectVisual(scene, cx, cy, rect.w, rect.h, mat, color, 0.5, rect.texture, rect.textureMode);
       applyAlpha(go, alpha);
       body = (
         scene.matter.add.gameObject(go, {
@@ -344,7 +349,7 @@ function createShapeVisual(
   const angleRad = Phaser.Math.DegToRad(obj.angle ?? 0);
 
   if (obj.type === 'rect') {
-    const go = createRectVisual(scene, obj.x + obj.w / 2, obj.y + obj.h / 2, obj.w, obj.h, mat, color, 0.5);
+    const go = createRectVisual(scene, obj.x + obj.w / 2, obj.y + obj.h / 2, obj.w, obj.h, mat, color, 0.5, obj.type === 'rect' ? obj.texture : undefined, obj.type === 'rect' ? obj.textureMode : undefined);
     (go as unknown as Phaser.GameObjects.Components.Transform).setRotation(angleRad);
     applyAlpha(go, alpha);
     return go;

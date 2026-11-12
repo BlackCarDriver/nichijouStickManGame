@@ -1,9 +1,8 @@
 import {
   clonePose,
   defaultActions,
-  defaultPose,
-  interpolatePose,
   makeAction,
+  sampleAction,
   type ActionClip,
   type ActionKeyframe,
   type ActionPose,
@@ -25,6 +24,7 @@ export class ActionStore {
   selectedKeyframe = 0;
   revision = 0;
   private listeners = new Set<() => void>();
+  private timeListeners = new Set<(timeMs: number, durationMs: number, playing: boolean) => void>();
 
   constructor() {
     this.restore();
@@ -36,9 +36,18 @@ export class ActionStore {
     return () => this.listeners.delete(fn);
   }
 
+  subscribeTime(fn: (timeMs: number, durationMs: number, playing: boolean) => void): () => void {
+    this.timeListeners.add(fn);
+    return () => this.timeListeners.delete(fn);
+  }
+
   private notify(): void {
     this.revision++;
     for (const fn of this.listeners) fn();
+  }
+
+  private notifyTime(): void {
+    for (const fn of this.timeListeners) fn(this.timeMs, this.current.durationMs, this.playing);
   }
 
   private save(): void {
@@ -77,23 +86,7 @@ export class ActionStore {
   }
 
   poseAt(timeMs: number): ActionPose {
-    const action = this.current;
-    const frames = action.keyframes;
-    if (frames.length === 0) return defaultPose(action.weapon);
-    let t = Math.max(0, Math.min(action.durationMs, timeMs));
-    if (action.loop && action.durationMs > 0) t = t % action.durationMs;
-    if (t <= frames[0].timeMs) return clonePose(frames[0].pose);
-    const last = frames[frames.length - 1];
-    if (t >= last.timeMs) return clonePose(last.pose);
-    for (let i = 1; i < frames.length; i++) {
-      const next = frames[i];
-      if (t <= next.timeMs) {
-        const prev = frames[i - 1];
-        const span = Math.max(1, next.timeMs - prev.timeMs);
-        return interpolatePose(prev.pose, next.pose, (t - prev.timeMs) / span);
-      }
-    }
-    return clonePose(last.pose);
+    return sampleAction(this.current, timeMs);
   }
 
   select(id: string): void {
@@ -108,6 +101,7 @@ export class ActionStore {
   setTime(timeMs: number): void {
     this.timeMs = Math.max(0, Math.min(this.current.durationMs, Math.round(timeMs)));
     this.syncSelectedKeyframe();
+    this.notifyTime();
     this.notify();
   }
 
@@ -118,15 +112,18 @@ export class ActionStore {
     if (this.current.loop) {
       this.timeMs %= duration;
     } else if (this.timeMs >= duration) {
-      this.timeMs = duration;
+      // 非循环动作播放完自动回到首帧，保证角色不会停在攻击结束姿态。
+      this.timeMs = 0;
       this.playing = false;
     }
     this.syncSelectedKeyframe();
-    this.notify();
+    this.notifyTime();
+    if (!this.playing) this.notify();
   }
 
   togglePlaying(): void {
     this.playing = !this.playing;
+    this.notifyTime();
     this.notify();
   }
 
@@ -194,6 +191,7 @@ export class ActionStore {
     if (!frame) return;
     this.selectedKeyframe = index;
     this.timeMs = frame.timeMs;
+    this.notifyTime();
     this.notify();
   }
 
@@ -221,9 +219,15 @@ export class ActionStore {
     this.selectedKeyframe = action.keyframes.indexOf(frame);
   }
 
+  updateCurrentPoseLive(patch: Partial<ActionPose>): void {
+    this.ensureKeyframeAtTime();
+    Object.assign(this.current.keyframes[this.selectedKeyframe].pose, patch);
+  }
+
   updateCurrentPose(patch: Partial<ActionPose>): void {
     this.ensureKeyframeAtTime();
     Object.assign(this.current.keyframes[this.selectedKeyframe].pose, patch);
+    this.save();
     this.notify();
   }
 

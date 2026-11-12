@@ -91,6 +91,25 @@ export function interpolatePose(a: ActionPose, b: ActionPose, t: number): Action
   return out;
 }
 
+export function sampleAction(action: ActionClip, timeMs: number): ActionPose {
+  const frames = action.keyframes;
+  if (frames.length === 0) return defaultPose(action.weapon);
+  let t = Math.max(0, Math.min(action.durationMs, timeMs));
+  if (action.loop && action.durationMs > 0) t %= action.durationMs;
+  if (t <= frames[0].timeMs) return clonePose(frames[0].pose);
+  const last = frames[frames.length - 1];
+  if (t >= last.timeMs) return clonePose(last.pose);
+  for (let i = 1; i < frames.length; i++) {
+    const next = frames[i];
+    if (t <= next.timeMs) {
+      const prev = frames[i - 1];
+      const span = Math.max(1, next.timeMs - prev.timeMs);
+      return interpolatePose(prev.pose, next.pose, (t - prev.timeMs) / span);
+    }
+  }
+  return clonePose(last.pose);
+}
+
 export function makeAction(
   id: string,
   name: string,

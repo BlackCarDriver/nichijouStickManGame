@@ -151,6 +151,11 @@ export class EditorScene extends Phaser.Scene {
     this.rebuildQueued = true;
   }
 
+  /** 外部切换地图后立即请求一次画布重建。 */
+  refreshEditor(): void {
+    this.rebuildQueued = true;
+  }
+
   /** 每帧最多重建一次（在 update 早期处理） */
   update(_time?: number, delta = 0): void {
     actionStore.tick(delta);
@@ -205,12 +210,19 @@ export class EditorScene extends Phaser.Scene {
       this.fitToMap();
     }
     // 贴图按需加载：新增/替换贴图后加载完再重建一次
+    // 材质贴图 + 地图物体自带的对象级贴图（后者可能是编辑器里刚填的路径）
+    const objectTextureRefs = (store.renderMap().objects ?? [])
+      .map((o) => (o.type === 'rect' ? o.texture : undefined))
+      .filter((t): t is string => !!t);
     ensureMaterialTextures(
       this,
-      Object.values(MATERIALS).map((m) => ({
-        ref: m.texture,
-        override: m.texture ? store.textureOverrides.get(m.texture) : undefined,
-      })),
+      [
+        ...Object.values(MATERIALS).map((m) => ({
+          ref: m.texture,
+          override: m.texture ? store.textureOverrides.get(m.texture) : undefined,
+        })),
+        ...objectTextureRefs.map((ref) => ({ ref, override: store.textureOverrides.get(ref) })),
+      ],
       () => this.queueRebuild(),
     );
     try {
@@ -488,7 +500,7 @@ export class EditorScene extends Phaser.Scene {
         patch.footRY = local.y - pose.rootY;
         break;
     }
-    actionStore.updateCurrentPose(patch);
+    actionStore.updateCurrentPoseLive(patch);
   }
 
   private actionPointerUp(): boolean {

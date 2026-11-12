@@ -424,11 +424,12 @@ export class WeaponSystem {
     const attackId = ++this.attackSeq;
 
     for (let i = 0; i < pellets; i++) {
-      // 均匀分布（多弹丸时避免全打同一个点），再加一点随机抖动
-      const t = pellets === 1 ? 0 : i / (pellets - 1) - 0.5;
-      const jitter = pellets === 1 ? 0 : (Math.random() - 0.5) * (spread / pellets);
-      // t ∈ [-0.5, 0.5] → 角度偏移 ∈ [-spread, +spread]
-      const pelletAngle = angle + t * spread * 2 + jitter;
+      // 多弹丸（霰弹）：在 ±spread 内均匀分布，避免全打同一点
+      // 单弹丸（连射武器）：每次开火在 ±spread 内随机 → 长按连射时弹道会散开，不是一条直线
+      const pelletAngle =
+        pellets === 1
+          ? angle + (Math.random() - 0.5) * 2 * spread
+          : angle + (i / (pellets - 1) - 0.5) * 2 * spread + (Math.random() - 0.5) * (spread / pellets);
       this.projectiles.spawn({
         weaponId: player.heldWeapon?.id ?? '',
         x: from.x,
@@ -748,7 +749,7 @@ export class WeaponSystem {
     const angle = player.aim;
     const dir = { x: Math.cos(angle), y: Math.sin(angle) };
     // 近战刺击用专门的弓步突刺动作（枪械的后坐仍用 stab）
-    player.setAttack('thrust', 220);
+    player.setAttack('thrust', 220, weapon.visual.style === 'spear' ? 'spear_thrust' : undefined);
 
     const hits = raycast(getWorldBodies(this.scene), from, dir, melee.reach, {
       ignore: [player.body],
@@ -790,7 +791,7 @@ export class WeaponSystem {
 
     const from = player.muzzle;
     const angle = player.aim;
-    player.setAttack('stab', 160);
+    player.setAttack('stab', 160, weapon.visual.style === 'spear' ? 'spear_throw' : undefined);
 
     const bullet: BulletConfig = {
       kind: weapon.attackMode === 'melee' ? 'thrown' : 'grenade',

@@ -12,6 +12,8 @@ import { getWeapon } from '../combat/WeaponFormat';
 import { parseColor } from '../config/materials';
 import type { HeldWeapon } from '../combat/WeaponFormat';
 import type { SuperModeConfig } from '../combat/WeaponFormat';
+import type { ActionClip, ActionPose } from '../editor/ActionFormat';
+import { sampleAction } from '../editor/ActionFormat';
 import { drawHeldWeapon, drawWeaponGlow } from '../render/WeaponRenderer';
 import { raycast, getWorldBodies } from '../combat/Raycast';
 
@@ -200,6 +202,9 @@ export class Player extends Entity {
 
   // ---- 攻击动作（刺击/踢）----
   private attackKind: 'stab' | 'thrust' | 'kick' | 'slash' | 'punch' | null = null;
+  private actionId: string | null = null;
+  private actionStartMs = 0;
+  private readonly actionClips: Map<string, ActionClip>;
   private attackTimer = 0;
   private attackDuration = 1;
 
@@ -269,9 +274,10 @@ export class Player extends Entity {
   private static readonly LAND_IMPACT_DURATION = 220;
   private static readonly JUMP_ANTICIPATION_DURATION = 100;
 
-  constructor(scene: Phaser.Scene, x: number, y: number, color: number) {
+  constructor(scene: Phaser.Scene, x: number, y: number, color: number, actionClips: ActionClip[] = []) {
     super();
     this.scene = scene;
+    this.actionClips = new Map(actionClips.map((clip) => [clip.id, clip]));
     this.color = color;
     this.spawnX = x;
     this.spawnY = y;
@@ -610,8 +616,14 @@ export class Player extends Entity {
   }
 
   /** 触发一次攻击动作（刺击/踢），供武器系统调用 */
-  setAttack(kind: 'stab' | 'thrust' | 'kick' | 'slash' | 'punch', durationMs: number): void {
+  setAttack(
+    kind: 'stab' | 'thrust' | 'kick' | 'slash' | 'punch',
+    durationMs: number,
+    actionId?: string,
+  ): void {
     this.attackKind = kind;
+    this.actionId = actionId ?? (this.heldWeapon?.id === 'spear' && kind === 'thrust' ? 'spear_thrust' : null);
+    this.actionStartMs = this.scene.time.now;
     this.attackTimer = durationMs;
     this.attackDuration = Math.max(1, durationMs);
   }
@@ -958,7 +970,10 @@ export class Player extends Entity {
     // 攻击动作计时器（没有这一行 → attackProgress 恒为 0，姿势永远不显示）
     if (this.attackTimer > 0) {
       this.attackTimer = Math.max(0, this.attackTimer - deltaMs);
-      if (this.attackTimer === 0) this.attackKind = null;
+      if (this.attackTimer === 0) {
+        this.attackKind = null;
+        this.actionId = null;
+      }
     }
 
     if (this.hitTimer > 0) {
@@ -1010,6 +1025,23 @@ export class Player extends Entity {
     }
   }
 
+  private actionPoseForRender(): ActionPose | undefined {
+    let id = this.actionId;
+    if (!id && this.attack === null && this.pose === 'idle') {
+      if (!this.heldWeapon) id = 'unarmed_idle';
+      else if (getWeapon(this.heldWeapon.id)?.visual.style === 'spear') id = 'spear_idle';
+    }
+    if (!id) return undefined;
+    const clip = this.actionClips.get(id);
+    if (!clip) return undefined;
+    const elapsed = id.endsWith('_idle')
+      ? clip.loop
+        ? this.scene.time.now
+        : 0
+      : this.scene.time.now - this.actionStartMs;
+    return sampleAction(clip, Math.max(0, elapsed));
+  }
+
   private draw(): void {
     // 平滑逼近目标：斜坡上 grounded 可能抖动（目标在 0↔24px 间跳），
     // 直接赋值会导致视觉剧烈跳动（屏闪），所以做指数平滑。
@@ -1046,6 +1078,7 @@ export class Player extends Entity {
       facing: this.facing,
       attackKind: this.attack,
       attackProgress: this.attackProgress,
+      actionPose: this.actionPoseForRender(),
     });
 
     // 手部位置：渲染器在瞄准时输出；空手时用肩根近似

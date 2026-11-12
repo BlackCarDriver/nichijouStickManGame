@@ -292,6 +292,98 @@ export class EditorStore {
     }
   }
 
+  /** 新建空白地图（一键新增），返回是否成功 */
+  newMap(name: string): { ok: boolean; reason?: string } {
+    const clean = name.trim();
+    if (!clean) return { ok: false, reason: '地图名不能为空' };
+    const map: MapData = {
+      version: MAP_FORMAT_VERSION,
+      name: clean,
+      width: 2400,
+      height: 1200,
+      spawnPoints: [
+        { x: 150, y: 1072 },
+        { x: 2250, y: 1072 },
+      ],
+      weaponDropZones: [{ x: 200, y: 80, w: 2000, h: 100 }],
+      objects: [
+        { id: 'ground', type: 'rect', x: 0, y: 1120, w: 2400, h: 80, material: 'ground' },
+        { id: 'wall_left', type: 'rect', x: 0, y: 0, w: 40, h: 1200, material: 'wall' },
+        { id: 'wall_right', type: 'rect', x: 2360, y: 0, w: 40, h: 1200, material: 'wall' },
+      ],
+      prefabs: [],
+      joints: [],
+    };
+    this.map = map;
+    this.selection = [];
+    this.tool = 'select';
+    this.ruler = null;
+    this.ensureIds();
+    // 立刻存为新草稿（含新地图数据）
+    this.message = `已新建地图 ${clean}（记得导出到 data/maps/${clean}.json）`;
+    this.commit();
+    return { ok: true };
+  }
+
+  /**
+   * 调整对象在数组中的位置 = 调整绘制层级（数组越靠后越在上层）。
+   * @param id        被移动的对象/预制件实例 id
+   * @param toIndex   目标下标（在目标数组中的位置）
+   */
+  moveObjectToIndex(id: string, toIndex: number): void {
+    const isPrefab = !!this.getInstance(id);
+    const list: Array<MapObject | PrefabInstance> = isPrefab
+      ? (this.map.prefabs ?? [])
+      : (this.map.objects ?? []);
+    const from = list.findIndex((o) => o.id === id);
+    if (from < 0) return;
+    const [item] = list.splice(from, 1);
+    const clamped = Math.max(0, Math.min(list.length, toIndex));
+    list.splice(clamped, 0, item);
+    this.commit();
+  }
+
+  /**
+   * 把对象放到另一个对象的上面/下面（层级 = 数组顺序，越后越上层）。
+   * 与对象列表的拖拽排序对应（列表是"上层在前"的倒序展示）。
+   */
+  moveObjectRelative(id: string, targetId: string, placeAbove: boolean): boolean {
+    if (id === targetId) return false;
+    const isPrefab = !!this.getInstance(id);
+    const list: Array<MapObject | PrefabInstance> = isPrefab
+      ? (this.map.prefabs ?? [])
+      : (this.map.objects ?? []);
+    const from = list.findIndex((o) => o.id === id);
+    if (from < 0) return false;
+    const [item] = list.splice(from, 1);
+    const tIdx = list.findIndex((o) => o.id === targetId);
+    if (tIdx < 0) {
+      list.splice(from, 0, item); // 还原
+      return false;
+    }
+    list.splice(placeAbove ? tIdx + 1 : tIdx, 0, item);
+    this.commit();
+    return true;
+  }
+
+  /** 把选中对象上移一层 / 下移一层（层级 = 绘制顺序） */
+  raiseSelected(layer: 'up' | 'down'): boolean {
+    if (this.selection.length !== 1) return false;
+    const id = this.selection[0];
+    const isPrefab = !!this.getInstance(id);
+    const list: Array<MapObject | PrefabInstance> = isPrefab
+      ? (this.map.prefabs ?? [])
+      : (this.map.objects ?? []);
+    const from = list.findIndex((o) => o.id === id);
+    if (from < 0) return false;
+    const to = layer === 'up' ? Math.min(list.length - 1, from + 1) : Math.max(0, from - 1);
+    if (to === from) return false;
+    const [item] = list.splice(from, 1);
+    list.splice(to, 0, item);
+    this.commit();
+    return true;
+  }
+
   resetToDefault(): void {
     this.map = clone(getDefaultMap());
     this.selection = [];

@@ -107,6 +107,8 @@ let statusTextEl!: HTMLElement;
 let fpsEl!: HTMLElement;
 let canvasHostEl!: HTMLElement;
 let toastEl!: HTMLElement;
+let actionTimelineRange: HTMLInputElement | null = null;
+let actionTimelineLabel: HTMLElement | null = null;
 
 const TOOLS: Array<{ id: ToolKind; label: string; key: string }> = [
   { id: 'select', label: '选择', key: 'V' },
@@ -165,6 +167,13 @@ export function bindUI(phaserGame: Phaser.Game): void {
   });
   editorStore.subscribe(render);
   actionStore.subscribe(render);
+  actionStore.subscribeTime((timeMs, durationMs) => {
+    if (actionTimelineRange) {
+      actionTimelineRange.max = String(durationMs);
+      actionTimelineRange.value = String(Math.round(timeMs));
+    }
+    if (actionTimelineLabel) actionTimelineLabel.textContent = `${Math.round(timeMs)} / ${durationMs} ms`;
+  });
   window.addEventListener('keydown', onKeyDown);
   // FPS 指示（每 500ms 刷新一次，不参与面板重建）
   window.setInterval(() => {
@@ -228,6 +237,28 @@ function renderHeader(): void {
   const errors = issues.filter((i) => i.level === 'error').length;
   const warns = issues.length - errors;
 
+  const openMapSelect = h('select', {
+    class: 'ed-input ed-openmap',
+    onchange: (e: Event) => {
+      const name = (e.target as HTMLSelectElement).value;
+      const map = listMaps().find((item) => item.name === name);
+      if (!map) return;
+      store.map = JSON.parse(JSON.stringify(map));
+      store.tab = 'map';
+      store.selection = [];
+      store.tool = 'select';
+      store.ruler = null;
+      store.ensureIds();
+      store.message = `已打开地图 ${name}`;
+      store.commit();
+      scene()?.refreshEditor();
+    },
+  }, [
+    h('option', { value: '' }, ['打开已有地图…']),
+    ...listMaps().map((m) => h('option', { value: m.name }, [m.name])),
+  ]) as HTMLSelectElement;
+  openMapSelect.value = store.map.name;
+
   headerEl.replaceChildren(
     h('div', { class: 'ed-brand' }, ['火柴人 · 地图编辑器']),
     h(
@@ -251,22 +282,18 @@ function renderHeader(): void {
       ),
     ),
     h('div', { class: 'ed-actions' }, [
-      h('select', {
-        class: 'ed-input ed-openmap',
-        onchange: (e: Event) => {
-          const name = (e.target as HTMLSelectElement).value;
-          const map = listMaps().find((m) => m.name === name);
-          if (!map) return;
-          store.map = JSON.parse(JSON.stringify(map));
-          store.selection = [];
-          store.ensureIds();
-          store.message = `已打开地图 ${name}`;
-          store.commit();
-        },
-      }, [
-        h('option', { value: '' }, ['打开已有地图…']),
-        ...listMaps().map((m) => h('option', { value: m.name }, [m.name])),
-      ]),
+      openMapSelect,
+      button('＋ 新建地图', () => {
+        const name = window.prompt('新地图名称（建议英文，导出为 data/maps/<name>.json）', 'map_new');
+        if (name === null) return;
+        const res = store.newMap(name);
+        if (!res.ok) {
+          store.message = `新建失败：${res.reason ?? '未知原因'}`;
+          store.touch();
+          return;
+        }
+        scene()?.refreshEditor();
+      }),
       button('导入', () => {
         if (store.tab === 'action') {
           store.message = '动作第一版采用导出工作流，暂不支持导入';
@@ -532,7 +559,11 @@ function actionLeftPanel(): HTMLElement {
     step: '1',
     value: String(actionStore.timeMs),
   }) as HTMLInputElement;
+  actionTimelineRange = range;
   range.addEventListener('input', () => actionStore.setTime(Number(range.value)));
+
+  const timeLabel = h('span', { class: 'ed-help', style: 'margin:0' }, [`${actionStore.timeMs} / ${action.durationMs} ms`]);
+  actionTimelineLabel = timeLabel;
 
   return h('div', {}, [
     h('h3', { class: 'ed-h3' }, ['动作库']),
@@ -561,7 +592,7 @@ function actionLeftPanel(): HTMLElement {
     h('label', { class: 'ed-check' }, [checkbox(action.loop, (v) => actionStore.updateMeta({ loop: v })), '循环播放']),
     h('h3', { class: 'ed-h3' }, ['时间轴']),
     h('div', { class: 'ed-row ed-row-between' }, [
-      h('span', { class: 'ed-help', style: 'margin:0' }, [`${actionStore.timeMs} / ${action.durationMs} ms`]),
+      timeLabel,
       button(actionStore.playing ? '暂停' : '播放', () => actionStore.togglePlaying(), 'primary'),
     ]),
     range,
@@ -585,14 +616,48 @@ function actionLeftPanel(): HTMLElement {
   ]);
 }
 
-function actionPoseField(label: string, pose: ActionPose, key: keyof ActionPose, step = 1): HTMLElement {
-  return field(label, numberInput(pose[key], (value) => actionStore.updateCurrentPose({ [key]: value }), step));
+const ACTION_POSE_RANGES: Record<keyof ActionPose, { min: number; max: number; step: number }> = {
+  rootX: { min: -100, max: 100, step: 1 },
+  rootY: { min: -80, max: 80, step: 1 },
+  torsoTilt: { min: -60, max: 60, step: 1 },
+  torsoTwist: { min: -60, max: 60, step: 1 },
+  headTilt: { min: -60, max: 60, step: 1 },
+  headOffsetY: { min: -30, max: 30, step: 1 },
+  armFrontShoulder: { min: -180, max: 180, step: 1 },
+  armFrontElbow: { min: -120, max: 120, step: 1 },
+  armBackShoulder: { min: -180, max: 180, step: 1 },
+  armBackElbow: { min: -120, max: 120, step: 1 },
+  footLX: { min: -100, max: 100, step: 1 },
+  footLY: { min: 0, max: 110, step: 1 },
+  footRX: { min: -100, max: 100, step: 1 },
+  footRY: { min: 0, max: 110, step: 1 },
+};
+
+function actionPoseField(label: string, pose: ActionPose, key: keyof ActionPose): HTMLElement {
+  const config = ACTION_POSE_RANGES[key];
+  const value = pose[key];
+  const slider = h('input', {
+    class: 'ed-slider',
+    type: 'range',
+    min: String(Math.min(config.min, value)),
+    max: String(Math.max(config.max, value)),
+    step: String(config.step),
+    value: String(value),
+  }) as HTMLInputElement;
+  const valueLabel = h('span', { class: 'ed-slider-val' }, [String(Math.round(value))]);
+  slider.addEventListener('input', () => {
+    const next = Number(slider.value);
+    valueLabel.textContent = String(Math.round(next));
+    actionStore.updateCurrentPoseLive({ [key]: next });
+  });
+  slider.addEventListener('change', () => actionStore.commit());
+  return field(label, h('div', { class: 'ed-pose-slider' }, [slider, valueLabel]));
 }
 
 function actionRightPanel(): HTMLElement {
   const action = actionStore.current;
   const pose = actionStore.currentPose;
-  return h('div', {}, [
+  return h('div', { class: 'ed-action-panel' }, [
     h('h3', { class: 'ed-h3' }, ['当前姿态']),
     h('p', { class: 'ed-help' }, [`${action.name} · ${actionStore.timeMs} ms · 拖动控制点可直接编辑`]),
     h('h3', { class: 'ed-h3' }, ['身体']),
@@ -627,32 +692,113 @@ function actionRightPanel(): HTMLElement {
 
 // ---------------- 右侧面板 ----------------
 /**
- * 对象列表。
- * - 重建时会保留滚动位置（否则拖动对象时列表会不停跳回顶部）
- * - 选择变化时把选中项滚进可视区（需求：选中对象后列表要能定位到它）
+ * 对象列表（层级 = 数组顺序，越靠后越在上层；列表里**上层显示在前面**）。
+ *
+ * - 重建时保留滚动位置（拖动对象时列表不会跳回顶部）
+ * - 选择变化时把选中项滚进可视区
+ * - 支持**拖动排序**调整遮挡关系，另有 ↑↓ 按钮做精确微调
  */
 let objectListScrollTop = 0;
 let lastListSelectionKey = '';
+/** 拖拽中的对象 id */
+let draggingObjectId: string | null = null;
 
 function buildObjectList(): HTMLElement {
   const store = editorStore;
-  const objects = [...(store.map.objects ?? [])].reverse();
+  // 展示顺序：数组末尾（最上层）显示在最前
+  const displayOrder = [...(store.map.objects ?? [])].reverse();
   const list = h('div', { class: 'ed-list ed-list-scroll' });
 
-  for (const o of objects) {
+  const clearDropMarks = (): void => {
+    for (const row of Array.from(list.children)) row.classList.remove('drop-above', 'drop-below');
+  };
+
+  for (const o of displayOrder) {
     const selected = !!o.id && store.selection.includes(o.id);
+    const indexInArray = (store.map.objects ?? []).indexOf(o);
+    const isTop = indexInArray === (store.map.objects ?? []).length - 1;
+    const isBottom = indexInArray === 0;
+
     const row = h(
       'button',
       {
         class: `ed-list-row ${selected ? 'active' : ''}`,
+        draggable: 'true',
         onclick: () => store.select(o.id ? [o.id] : []),
       },
       [
-        h('span', { class: 'ed-list-main' }, [`${o.type} · ${o.material}`]),
+        h('span', { class: 'ed-list-order' }, [String(indexInArray + 1)]),
+        h('span', { class: 'ed-list-main' }, [`${o.type} · ${o.material}${o.texture ? ' · 贴图' : ''}`]),
         h('span', { class: 'ed-list-sub' }, [o.id ?? '(无 id)']),
       ],
     );
     if (selected) row.dataset.selected = '1';
+
+    // ---- 拖动排序（调整遮挡层级）----
+    row.addEventListener('dragstart', (e) => {
+      if (!o.id) return;
+      draggingObjectId = o.id;
+      row.classList.add('dragging');
+      (e as DragEvent).dataTransfer?.setData('text/plain', o.id);
+      const dt = (e as DragEvent).dataTransfer;
+      if (dt) dt.effectAllowed = 'move';
+    });
+    row.addEventListener('dragend', () => {
+      draggingObjectId = null;
+      row.classList.remove('dragging');
+      clearDropMarks();
+    });
+    row.addEventListener('dragover', (e) => {
+      if (!draggingObjectId || draggingObjectId === o.id) return;
+      e.preventDefault(); // 允许放置
+      const rect = row.getBoundingClientRect();
+      const above = (e as DragEvent).clientY < rect.top + rect.height / 2;
+      clearDropMarks();
+      row.classList.add(above ? 'drop-above' : 'drop-below');
+    });
+    row.addEventListener('dragleave', () => row.classList.remove('drop-above', 'drop-below'));
+    row.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const dragged = draggingObjectId;
+      clearDropMarks();
+      if (!dragged || !o.id || dragged === o.id) return;
+      const rect = row.getBoundingClientRect();
+      const above = (e as DragEvent).clientY < rect.top + rect.height / 2;
+      // 列表是倒序展示：视觉上"放在上面"= 数组里更靠后 = 层级更高
+      const moved = store.moveObjectRelative(dragged, o.id, above);
+      if (moved) {
+        store.select([dragged]);
+        store.message = `已调整层级（${above ? '上移' : '下移'}）`;
+        store.touch();
+      }
+    });
+
+    // ---- ↑↓ 按钮：精确微调 ----
+    row.append(
+      h('span', { class: 'ed-list-move' }, [
+        h('button', {
+          class: 'ed-mini',
+          title: '上移一层（更靠前）',
+          onclick: (e: Event) => {
+            e.stopPropagation();
+            store.select(o.id ? [o.id] : []);
+            store.raiseSelected('up');
+          },
+          disabled: isTop,
+        }, ['↑']),
+        h('button', {
+          class: 'ed-mini',
+          title: '下移一层（更靠后）',
+          onclick: (e: Event) => {
+            e.stopPropagation();
+            store.select(o.id ? [o.id] : []);
+            store.raiseSelected('down');
+          },
+          disabled: isBottom,
+        }, ['↓']),
+      ]),
+    );
+
     list.append(row);
   }
 
@@ -665,10 +811,7 @@ function buildObjectList(): HTMLElement {
   if (selectionKey !== lastListSelectionKey) {
     lastListSelectionKey = selectionKey;
     const activeRow = list.querySelector('[data-selected="1"]');
-    if (activeRow) {
-      // 在下一帧滚（此时列表已插入 DOM，才有正确的布局尺寸）
-      requestAnimationFrame(() => activeRow.scrollIntoView({ block: 'nearest' }));
-    }
+    if (activeRow) requestAnimationFrame(() => activeRow.scrollIntoView({ block: 'nearest' }));
   }
 
   return list;
@@ -817,6 +960,24 @@ function objectForm(obj: MapObject): HTMLElement {
         ? colorInput(obj.color, (v) => patch({ color: v }))
         : h('span', { class: 'ed-help' }, [MATERIALS[obj.material].colorHex]),
     ]),
+    ...(obj.type === 'rect'
+      ? [
+          h('h3', { class: 'ed-h3' }, ['贴图（仅矩形）']),
+          field('贴图路径', textInput(obj.texture ?? '', (v) => patch({ texture: v.trim() || undefined }))),
+          h('p', { class: 'ed-help' }, [
+            `留空 = 跟随材质贴图（当前材质：${MATERIALS[obj.material].texture ?? '无'}）。`,
+            '填 public 下相对路径，如 textures/metal.png，也可用 data:image/... 内联。',
+          ]),
+          field('铺法', selectInput(
+            [
+              { value: 'tile', label: 'tile（平铺）' },
+              { value: 'stretch', label: 'stretch（拉伸铺满）' },
+            ],
+            obj.textureMode ?? MATERIALS[obj.material].textureMode ?? 'tile',
+            (v) => patch({ textureMode: v }),
+          )),
+        ]
+      : []),
     h('div', { class: 'ed-row' }, [
       button('复制', () => store.duplicateSelected()),
       button('删除', () => store.deleteSelected(), 'danger'),
@@ -1405,12 +1566,15 @@ function startPlayTest(): void {
   testing = true;
   document.body.classList.add('testing');
   try {
-    const map = JSON.parse(JSON.stringify(store.renderMap()));
+    // Play Test 始终运行当前地图草稿；renderMap() 在预制件/材质 Tab 会返回工作台演示场景。
+    const map = JSON.parse(JSON.stringify(store.map));
+    game.scene.stop('GameScene');
     game.scene.stop('EditorScene');
     game.scene.start('GameScene', {
       map,
       // 用编辑器内的预制件表（含未保存的焊接开关等改动）
       prefabs: JSON.parse(JSON.stringify(store.prefabTable())),
+      actions: JSON.parse(JSON.stringify(actionStore.actions)),
       onExit: () => stopPlayTest(),
     });
     setStatus('测试中：WASD/方向键 移动，W/↑ 跳跃，Esc 返回编辑器');

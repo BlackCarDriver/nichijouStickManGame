@@ -3,6 +3,7 @@ import type { Player } from '../entities/Player';
 import type { WorldRegistry } from '../world/WorldRegistry';
 import type { FxSystem } from '../fx/FxSystem';
 import type { DamageSystem } from './DamageSystem';
+import type { ShrapnelConfig } from './WeaponFormat';
 
 /** 一次爆炸请求 */
 export interface ExplosionRequest {
@@ -25,6 +26,8 @@ export interface ExplosionRequest {
    * 否则子弹给的 180ms 无敌会把紧接着的爆炸伤害全部吃掉。
    */
   ignoreInvuln?: boolean;
+  /** 破片配置（不填 = 不弹破片） */
+  shrapnel?: ShrapnelConfig;
 }
 
 /**
@@ -37,6 +40,8 @@ export interface ExplosionRequest {
  */
 export class ExplosionSystem {
   private readonly scene: Phaser.Scene;
+  /** 破片系统（可选注入，避免构造函数参数过长） */
+  private shrapnelSystem: { burst: (x: number, y: number, count: number, damage: number, speed: number, range: number, ownerId: number) => void } | null = null;
   private readonly damageSystem: DamageSystem;
   private readonly registry: WorldRegistry;
   private readonly bodyToPlayer: Map<number, Player>;
@@ -61,6 +66,13 @@ export class ExplosionSystem {
     this.fx = fx;
   }
 
+  /** 注入破片系统（GameScene 构造完两个系统后调用） */
+  attachShrapnel(system: {
+    burst: (x: number, y: number, count: number, damage: number, speed: number, range: number, ownerId: number) => void;
+  }): void {
+    this.shrapnelSystem = system;
+  }
+
   explode(req: ExplosionRequest): void {
     const { x, y, radius, damage, knockback } = req;
 
@@ -68,6 +80,12 @@ export class ExplosionSystem {
     this.fx.burst({ x, y }, 0xffb347);
     this.fx.ring(x, y, radius, 0xffa94d);
     this.scene.events.emit('explosion', x, y, radius);
+
+    // ---- 破片：向四周弹射（需求 4）----
+    if (req.shrapnel && this.shrapnelSystem) {
+      const sh = req.shrapnel;
+      this.shrapnelSystem.burst(x, y, sh.count, sh.damage, sh.speed, sh.range, req.sourceId);
+    }
 
     // ---- 玩家 ----
     for (const player of this.bodyToPlayer.values()) {

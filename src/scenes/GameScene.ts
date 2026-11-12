@@ -9,6 +9,7 @@ import { AudioSystem } from '../audio/AudioSystem';
 import { getDefaultMap, getPrefabTable, getMapByName } from '../map/MapRegistry';
 import type { PrefabData } from '../map/PrefabFormat';
 import type { MapData } from '../map/MapFormat';
+import type { ActionClip } from '../editor/ActionFormat';
 import { buildMap, syncCompoundVisuals } from '../map/MapLoader';
 import type { MapObjectRuntime } from '../map/MapLoader';
 import { MATERIALS } from '../config/materials';
@@ -20,6 +21,7 @@ import { DropSystem } from '../world/DropSystem';
 import { ItemDropSystem } from '../world/ItemDropSystem';
 import { getWeapon } from '../combat/WeaponFormat';
 import { FragmentSystem } from '../world/FragmentSystem';
+import { ShrapnelSystem } from '../world/ShrapnelSystem';
 import { ImpactDamageSystem } from '../world/ImpactDamageSystem';
 import { DamageSystem } from '../combat/DamageSystem';
 import { ProjectileSystem } from '../combat/ProjectileSystem';
@@ -64,6 +66,8 @@ export interface GameSceneData {
   map?: MapData;
   /** 预制件表；编辑器测试时传入"含未保存草稿"的表，不传则读 data/prefabs */
   prefabs?: Record<string, PrefabData>;
+  /** 编辑器 Play Test 传入的动作资源 */
+  actions?: ActionClip[];
   /** 返回编辑器等外部回调（Esc 键触发） */
   onExit?: () => void;
 }
@@ -93,6 +97,7 @@ export class GameScene extends Phaser.Scene {
   private oneWayBodies: MatterJS.BodyType[] = [];
   private mapData!: MapData;
   private prefabTable!: Record<string, PrefabData>;
+  private actionClips: ActionClip[] = [];
   private onExit?: () => void;
 
   // ---- 伤害 / 破坏 / 表现 ----
@@ -116,6 +121,7 @@ export class GameScene extends Phaser.Scene {
   private drops!: DropSystem;
   private itemDrops!: ItemDropSystem;
   private fragments!: FragmentSystem;
+  private shrapnel!: ShrapnelSystem;
   private impactDamage!: ImpactDamageSystem;
 
   /** 首次用户手势时启动 AudioContext（浏览器自动播放策略） */
@@ -145,6 +151,7 @@ export class GameScene extends Phaser.Scene {
   init(data: GameSceneData = {}): void {
     this.mapData = data.map ?? GameScene.mapFromUrl() ?? getDefaultMap();
     this.prefabTable = data.prefabs ?? getPrefabTable();
+    this.actionClips = data.actions ?? [];
     this.onExit = data.onExit;
     this.players = [];
     this.mapObjects = [];
@@ -153,10 +160,14 @@ export class GameScene extends Phaser.Scene {
   }
 
   preload(): void {
-    preloadMaterialTextures(
-      this,
-      Object.values(MATERIALS).map((m) => m.texture),
-    );
+    // 材质贴图 + 地图物体自带的对象级贴图
+    const objectTextures = (this.mapData.objects ?? [])
+      .map((o) => (o.type === 'rect' ? o.texture : undefined))
+      .filter((t): t is string => !!t);
+    preloadMaterialTextures(this, [
+      ...Object.values(MATERIALS).map((m) => m.texture),
+      ...objectTextures,
+    ]);
   }
 
   create(): void {
@@ -168,7 +179,7 @@ export class GameScene extends Phaser.Scene {
     this.oneWayBodies = this.mapObjects.filter((o) => o.oneWay && o.body).map((o) => o.body!);
 
     const spawn = this.mapData.spawnPoints;
-    this.players = spawn.map((p, i) => new Player(this, p.x, p.y, playerColor(i)));
+    this.players = spawn.map((p, i) => new Player(this, p.x, p.y, playerColor(i), this.actionClips));
     this.cameraTarget = this.players[0];
     for (const player of this.players) {
       this.bodyToPlayer.set(player.body.id, player);
@@ -225,6 +236,15 @@ export class GameScene extends Phaser.Scene {
       }
     }
     this.fragments = new FragmentSystem(this);
+    // 爆炸破片（手榴弹/火箭炮）：真刚体 + 命中伤害
+    this.shrapnel = new ShrapnelSystem(
+      this,
+      this.damageSystem,
+      this.worldRegistry,
+      this.bodyToPlayer,
+      this.fx,
+    );
+    this.explosion.attachShrapnel(this.shrapnel);
     this.impactDamage = new ImpactDamageSystem(this, this.damageSystem, this.worldRegistry);
 
     this.damageNumbers = new DamageNumbers(this);
@@ -435,6 +455,7 @@ export class GameScene extends Phaser.Scene {
       ['grenades', () => this.grenades.destroy()],
       ['pickups', () => this.pickups.destroy()],
       ['fragments', () => this.fragments.destroy()],
+      ['shrapnel', () => this.shrapnel.destroy()],
       ['impactDamage', () => this.impactDamage.destroy()],
       ['weapon', () => this.weaponSystem.destroy()],
       ['fx', () => this.fx.destroy()],
@@ -498,6 +519,7 @@ export class GameScene extends Phaser.Scene {
     this.drops.update(delta);
     this.itemDrops.update(delta);
     this.fragments.update(delta);
+    this.shrapnel.update(delta);
     this.updateOneWayCollisions();
     syncCompoundVisuals(this.mapObjects);
     this.updateCameraTarget(cmd1, cmd2);

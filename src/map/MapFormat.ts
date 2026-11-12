@@ -33,6 +33,13 @@ export interface MapObjectBase {
   layer?: ObjectLayer;
   /** 视觉颜色覆盖（hex 字符串，如 "#8b5a2b"）。不填则用材质颜色 */
   color?: string;
+  /**
+   * 视觉贴图覆盖（public 下相对路径，如 "textures/wood.png"；也可 data: 内联）。
+   * 不填则用材质的贴图。仅对 rect 生效（圆/多边形仍用颜色）。
+   */
+  texture?: string;
+  /** 贴图铺法：tile 平铺 / stretch 拉伸（不填 = 跟材质一致，默认 tile） */
+  textureMode?: 'tile' | 'stretch';
 }
 
 /** 矩形：x,y = 左上角 */

@@ -187,7 +187,7 @@ export class ProjectileSystem {
       dirY: Math.sin(options.angle),
       spinAngle: 0,
       // 匕首快速但不刺眼地连续翻转；长矛保持沿飞行方向，便于辨识其长度。
-      spinSpeed: options.weaponId === 'dagger' ? 24 : 0,
+      spinSpeed: options.weaponId === 'dagger' ? 48 : 0, // 匕首飞行时翻滚（速度已加倍）
       history: [{ x: options.x, y: options.y }],
     });
 
@@ -468,6 +468,7 @@ export class ProjectileSystem {
       knockback: p.explosion.knockback,
       ownerId: p.ownerId,
       sourceId: p.ownerId,
+      shrapnel: p.explosion.shrapnel,
     });
   }
 

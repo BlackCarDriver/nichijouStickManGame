@@ -18,8 +18,8 @@ export class DropSystem {
 
   /** 地图上维持的武器数量 */
   private static readonly TARGET_COUNT = 4;
-  /** 补给检查间隔（ms） */
-  private static readonly CHECK_INTERVAL = 1400;
+  /** 补给检查间隔（ms）。调慢一倍：原来 1400ms 一次，掉落太密集 */
+  private static readonly CHECK_INTERVAL = 2800;
   /** 开场立刻投放的数量（避免玩家开局没枪） */
   private static readonly INITIAL_COUNT = 3;
 

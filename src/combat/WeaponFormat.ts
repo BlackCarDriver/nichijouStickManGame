@@ -135,6 +135,18 @@ export interface SightConfig {
   range: number;
 }
 
+/** 爆炸破片（向四周弹射的碎片，命中造成伤害） */
+export interface ShrapnelConfig {
+  /** 破片数量 */
+  count: number;
+  /** 单块命中伤害 */
+  damage: number;
+  /** 初速（px/秒） */
+  speed: number;
+  /** 最大飞行距离（px），超过即消失 */
+  range: number;
+}
+
 export interface ExplosionConfig {
   /** 爆炸半径（px） */
   radius: number;
@@ -144,6 +156,8 @@ export interface ExplosionConfig {
   selfDamage: boolean;
   /** 击退强度 */
   knockback: number;
+  /** 破片（不填 = 不弹破片） */
+  shrapnel?: ShrapnelConfig;
 }
 
 export interface WeaponVisual {
