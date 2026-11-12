@@ -231,7 +231,17 @@ export class WeaponSystem {
     if (!fired) return false;
 
     this.consume(player, weapon, held.ammo > 0);
+    this.applyRecoil(player, weapon);
     return true;
+  }
+
+  /** 应用武器后坐力：枪口上抬 + 自身后推 + 广播事件（重武器触发镜头震动） */
+  private applyRecoil(player: Player, weapon: WeaponJson): void {
+    const recoil = weapon.recoil;
+    if (!recoil) return;
+    if (recoil.push <= 0 && recoil.climbDeg <= 0) return;
+    player.applyRecoil(recoil.push, recoil.climbDeg, recoil.climbMaxDeg, recoil.recoverMs);
+    this.scene.events.emit('weapon-recoil', player, recoil.push);
   }
 
   /**
@@ -555,6 +565,7 @@ export class WeaponSystem {
     state.timer = tickMs;
 
     this.applyBeamDamage(player, weapon, trace, dir, true, player.id);
+    this.applyRecoil(player, weapon);
 
     // 消耗：每 tick 1 发弹药 + 耐久
     if (held.ammo > 0) held.ammo -= 1;

@@ -24,6 +24,7 @@
         "pierceDamageMul": 0.6,
         "piercePlayers": false
       },
+      "recoil": { "push": 1.2, "climbDeg": 0.9, "climbMaxDeg": 4.5, "recoverMs": 1400 },
       "visual": { "style": "pistol", "length": 22, "thickness": 5, "color": "#2b2b36" }
     },
 
@@ -49,6 +50,7 @@
         "pierceDamageMul": 0.6,
         "piercePlayers": false
       },
+      "recoil": { "push": 0.9, "climbDeg": 0.75, "climbMaxDeg": 7.0, "recoverMs": 3000 },
       "visual": { "style": "rifle", "length": 40, "thickness": 6, "color": "#3a3a46" }
     },
 
@@ -71,6 +73,7 @@
         "tickMs": 55,
         "pierce": false
       },
+      "recoil": { "push": 0.15, "climbDeg": 0.1, "climbMaxDeg": 4.0, "recoverMs": 4000 },
       "visual": { "style": "laser", "length": 34, "thickness": 5, "color": "#2f4858" }
     },
 
@@ -97,6 +100,7 @@
         "piercePlayers": false
       },
       "explosion": { "radius": 150, "damage": 60, "selfDamage": true, "knockback": 14 },
+      "recoil": { "push": 9.0, "climbDeg": 2.2, "climbMaxDeg": 6.0, "recoverMs": 2600 },
       "visual": { "style": "launcher", "length": 44, "thickness": 9, "color": "#4a4a55" }
     },
 
@@ -112,6 +116,7 @@
       "durabilityPerShot": 2,
       "melee": { "reach": 62, "arc": 40 },
       "throw": { "speed": 900, "range": 600, "stickMs": 1500, "damage": 18 },
+      "recoil": { "push": 0, "climbDeg": 0, "climbMaxDeg": 0, "recoverMs": 0 },
       "visual": { "style": "dagger", "length": 26, "thickness": 4, "color": "#cfd8e3" }
     },
 
@@ -127,6 +132,7 @@
       "durabilityPerShot": 2,
       "melee": { "reach": 92, "arc": 30 },
       "throw": { "speed": 820, "range": 700, "stickMs": 2000, "damage": 26 },
+      "recoil": { "push": 0, "climbDeg": 0, "climbMaxDeg": 0, "recoverMs": 0 },
       "visual": { "style": "spear", "length": 62, "thickness": 3, "color": "#b98b4e" }
     },
 
@@ -153,6 +159,7 @@
         "piercePlayers": false
       },
       "sight": { "color": "#ff9b9b", "width": 1.6, "alpha": 0.45, "range": 3000 },
+      "recoil": { "push": 6.0, "climbDeg": 2.6, "climbMaxDeg": 6.0, "recoverMs": 2800 },
       "visual": { "style": "sniper", "length": 58, "thickness": 5, "color": "#2f3a2f" }
     },
 
@@ -180,6 +187,7 @@
         "pellets": 7,
         "spreadDeg": 16
       },
+      "recoil": { "push": 7.0, "climbDeg": 2.0, "climbMaxDeg": 8.0, "recoverMs": 2600 },
       "visual": { "style": "shotgun", "length": 46, "thickness": 7, "color": "#5a3d2b" }
     },
 
@@ -194,6 +202,7 @@
       "durability": 150,
       "durabilityPerShot": 1,
       "melee": { "reach": 100, "arc": 62, "anim": "slash" },
+      "recoil": { "push": 0, "climbDeg": 0, "climbMaxDeg": 0, "recoverMs": 0 },
       "visual": { "style": "lightsaber", "length": 74, "thickness": 5, "color": "#8ef7ff", "glow": "#3ad2ff" }
     },
 
@@ -215,6 +224,7 @@
         "bounceRestitution": 0.45
       },
       "explosion": { "radius": 170, "damage": 55, "selfDamage": true, "knockback": 16 },
+      "recoil": { "push": 0, "climbDeg": 0, "climbMaxDeg": 0, "recoverMs": 0 },
       "visual": { "style": "grenade", "length": 12, "thickness": 8, "color": "#4e6b3a" }
     }
   }

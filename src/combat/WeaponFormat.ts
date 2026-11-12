@@ -110,6 +110,20 @@ export interface ThrowConfig {
   bounceRestitution?: number;
 }
 
+/**
+ * 后坐力。
+ * - push：开枪时把**自己**沿瞄准反方向推开的冲量（火箭/霰弹/狙击很明显）
+ * - climbDeg：每发让枪口/弹道上抬的角度，需要玩家自己往下压（压枪）
+ * - climbMaxDeg：上抬累计上限
+ * - recoverMs：从上限回落到 0 所需时间
+ */
+export interface RecoilConfig {
+  push: number;
+  climbDeg: number;
+  climbMaxDeg: number;
+  recoverMs: number;
+}
+
 /** 瞄准辅助线（狙击枪红外线）：只画不伤害 */
 export interface SightConfig {
   color: string;
@@ -166,6 +180,8 @@ export interface WeaponJson {
   explosion?: ExplosionConfig;
   /** 持有时常驻显示的瞄准辅助线（狙击枪红外线） */
   sight?: SightConfig;
+  /** 后坐力（不填 = 无后坐力，如近战武器） */
+  recoil?: RecoilConfig;
   visual: WeaponVisual;
 }
 

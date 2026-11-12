@@ -112,6 +112,20 @@ export class Player extends Entity {
   private aimAngle = 0;
   /** 手持武器（null = 空手）。由 WeaponSystem 装备 */
   heldWeapon: HeldWeapon | null = null;
+
+  // ---- 后坐力 ----
+  /** 枪口/弹道当前的上抬角度（度）。开枪累加，随时间回落 → 需要玩家压枪 */
+  private recoilClimbDeg = 0;
+  /** 上抬累计上限（度），由当前武器的 recoil 配置决定 */
+  private recoilClimbMaxDeg = 0;
+  /** 上抬从上限回落到 0 所需时间（ms） */
+  private recoilRecoverMs = 320;
+  /**
+   * 后坐力推力生效窗口（ms）。
+   * 站在地面时移动控制每帧会把"无输入"的水平速度归零，
+   * 后坐力推力会被立刻抹掉 → 这个窗口内不做刹车，让击退滑出去。
+   */
+  private pushTimer = 0;
   /** 手榴弹背包数量（上限见 GRENADE_MAX） */
   grenadeCount = 0;
   /** 是否正握着手榴弹（此时左键=投掷，武器暂存在 heldWeapon 里不渲染） */
@@ -390,6 +404,7 @@ export class Player extends Entity {
     this.container.setRotation(0);
     this.hitTimer = 0;
     this.hitTilt = 0;
+    this.recoilClimbDeg = 0;
     this.visual.setAlpha(1);
     this.scene.events.emit('player-respawn', this);
   }
@@ -398,9 +413,48 @@ export class Player extends Entity {
   //  瞄准 / 枪口
   // ==========================================================
 
-  /** 当前瞄准角度（弧度） */
+  /**
+   * 当前**实际**瞄准角度（弧度）= 鼠标方向 + 后坐力上抬。
+   * 枪口绘制、子弹方向、近战判定都用它，所以"看到枪口抬到哪，子弹就往哪飞"。
+   */
   get aim(): number {
-    return this.aimAngle;
+    if (this.recoilClimbDeg <= 0) return this.aimAngle;
+    // 面向右时上抬=减小角度；面向左时上抬=增大角度（屏幕 y 向下）
+    const upSign = Math.cos(this.aimAngle) >= 0 ? -1 : 1;
+    return this.aimAngle + upSign * ((this.recoilClimbDeg * Math.PI) / 180);
+  }
+
+  /** 当前后坐力上抬量（度，调试/HUD 用） */
+  get recoilClimb(): number {
+    return this.recoilClimbDeg;
+  }
+
+  /**
+   * 触发一次后坐力。
+   * @param push 把自身沿瞄准反方向推开的冲量
+   * @param climbDeg 本次上抬角度（度）
+   * @param climbMaxDeg 上抬累计上限（度）
+   * @param recoverMs 从上限回落所需时间
+   */
+  applyRecoil(push: number, climbDeg: number, climbMaxDeg: number, recoverMs: number): void {
+    if (this.health.isDead) return;
+
+    // 枪口上抬
+    this.recoilClimbMaxDeg = Math.max(0.01, climbMaxDeg);
+    this.recoilRecoverMs = Math.max(60, recoverMs);
+    this.recoilClimbDeg = Math.min(this.recoilClimbMaxDeg, this.recoilClimbDeg + climbDeg);
+
+    // 自身被向后推（火箭/霰弹/狙击才有明显位移）
+    if (push > 0) {
+      this.pushTimer = 220;
+      const a = this.aimAngle;
+      const vx = this.body.velocity.x - Math.cos(a) * push;
+      const vy = this.body.velocity.y - Math.sin(a) * push * 0.35;
+      this.container.setVelocity(
+        Phaser.Math.Clamp(vx, -PLAYER_CONFIG.maxHorizontalSpeed, PLAYER_CONFIG.maxHorizontalSpeed),
+        vy,
+      );
+    }
   }
 
   /** 触发一次攻击动作（刺击/踢），供武器系统调用 */
@@ -447,6 +501,11 @@ export class Player extends Entity {
     };
   }
 
+  /** 绘制用瞄准角（含后坐力上抬） */
+  private get renderAim(): number {
+    return this.aim;
+  }
+
   /**
    * 枪口位置（世界坐标）：手部 + 武器长度。
    * 子弹必须从这里出，否则会从墙里穿出来。
@@ -456,9 +515,10 @@ export class Player extends Entity {
     const gunLen = held ? (getWeapon(held.id)?.visual.length ?? 0) : 0;
     const hx = this.container.x + this.facing * this.handLocal.x;
     const hy = this.container.y + this.visual.y + this.handLocal.y;
+    const aim = this.aim;
     return {
-      x: hx + Math.cos(this.aimAngle) * gunLen,
-      y: hy + Math.sin(this.aimAngle) * gunLen,
+      x: hx + Math.cos(aim) * gunLen,
+      y: hy + Math.sin(aim) * gunLen,
     };
   }
 
@@ -491,6 +551,14 @@ export class Player extends Entity {
 
     // 先记录「上一帧」着地状态（必须在射线刷新前），用于检测「刚落地」瞬间
     const wasGrounded = this.isGrounded;
+
+    // 后坐力上抬回落（线性回落到 0）
+    if (this.recoilClimbDeg > 0) {
+      const drop = (this.recoilClimbMaxDeg / this.recoilRecoverMs) * deltaMs;
+      this.recoilClimbDeg = Math.max(0, this.recoilClimbDeg - drop);
+    }
+    // 后坐力推力窗口
+    if (this.pushTimer > 0) this.pushTimer = Math.max(0, this.pushTimer - deltaMs);
 
     // 追踪下落速度峰值（用于摔落伤害）
     if (!this.isGrounded && this.body.velocity.y > 0) {
@@ -525,9 +593,11 @@ export class Player extends Entity {
     const targetVx =
       cmd.moveX !== 0
         ? cmd.moveX * PLAYER_CONFIG.moveSpeed * speedMul
-        : this.isGrounded
-          ? 0
-          : this.body.velocity.x * 0.85;
+        : this.pushTimer > 0
+          ? this.body.velocity.x * 0.94 // 后坐力击退中：只做轻微衰减，让它滑出去
+          : this.isGrounded
+            ? 0
+            : this.body.velocity.x * 0.85;
     const cappedVx = Phaser.Math.Clamp(targetVx, -PLAYER_CONFIG.maxHorizontalSpeed, PLAYER_CONFIG.maxHorizontalSpeed);
     this.container.setVelocityX(cappedVx);
 
@@ -749,7 +819,7 @@ export class Player extends Entity {
       // 持枪时前臂指向瞄准方向（挥砍时跟随刀身扫过）
       aim:
         (this.heldWeapon || this.grenadeMode) && !this.health.isDead
-          ? this.aimAngle + this.slashOffset
+          ? this.renderAim + this.slashOffset
           : null,
       backward: this.backward,
       attackKind: this.attack,
@@ -769,7 +839,7 @@ export class Player extends Entity {
         drawHeldWeapon(this.graphics, {
           visual: grenadeVisual,
           facing: this.facing,
-          aim: this.aimAngle,
+          aim: this.renderAim,
           hand: this.handLocal,
         });
       }
@@ -783,7 +853,7 @@ export class Player extends Entity {
         drawHeldWeapon(this.graphics, {
           visual,
           facing: this.facing,
-          aim: this.aimAngle + this.slashOffset,
+          aim: this.renderAim + this.slashOffset,
           hand: {
             x: this.handLocal.x + this.facing * Math.cos(this.aimAngle) * thrust,
             y: this.handLocal.y + Math.sin(this.aimAngle) * thrust,

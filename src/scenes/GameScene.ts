@@ -200,7 +200,14 @@ export class GameScene extends Phaser.Scene {
       this.pickups.spawn(weaponId, x, y, { falling: true });
     };
 
+    // 重武器后坐力 → 轻微镜头震动（火箭/霰弹/狙击手感更"重"）
+    const onWeaponRecoil = (_player: Player, push: number): void => {
+      if (push < 4) return;
+      this.gameFeel.addTrauma(Math.min(0.3, push / 40));
+    };
+
     this.events.on('player-hit', onPlayerHit);
+    this.events.on('weapon-recoil', onWeaponRecoil);
     this.events.on('explosion', onExplosion);
     this.events.on('object-destroyed', onObjectDestroyed);
     this.events.on('weapon-lost', onWeaponLost);
@@ -208,6 +215,7 @@ export class GameScene extends Phaser.Scene {
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.events.off('player-hit', onPlayerHit);
+      this.events.off('weapon-recoil', onWeaponRecoil);
       this.events.off('explosion', onExplosion);
       this.events.off('object-destroyed', onObjectDestroyed);
       this.events.off('weapon-lost', onWeaponLost);
