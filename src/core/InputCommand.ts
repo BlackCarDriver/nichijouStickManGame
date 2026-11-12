@@ -18,8 +18,10 @@ export interface InputCommand {
   attack: boolean;
   /** 攻击键是否按住（全自动武器连射用，如 AK47） */
   attackHeld: boolean;
-  /** 踢（P1 鼠标右键 / P2 Shift）—— M2 实现 */
+  /** 踢/投掷：本帧刚按下 */
   kick: boolean;
+  /** 踢/投掷键是否按住（按住 = 显示投掷抛物线预览，松开才投出） */
+  kickHeld: boolean;
   /** 替换武器（P2 E；P1 右键上下文）—— M4 实现 */
   swap: boolean;
   /**
@@ -38,6 +40,7 @@ export function emptyInput(): InputCommand {
     attack: false,
     attackHeld: false,
     kick: false,
+    kickHeld: false,
     swap: false,
     aimAngle: null,
   };

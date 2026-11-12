@@ -40,6 +40,7 @@ export class InputManager {
 
     const kick = pointer.rightButtonDown();
     c.kick = kick && !this.prevP1Kick;
+    c.kickHeld = kick;
     this.prevP1Kick = kick;
     return c;
   }
@@ -58,6 +59,7 @@ export class InputManager {
     c.attack = Phaser.Input.Keyboard.JustDown(this.p2.SPACE);
     c.attackHeld = this.p2.SPACE.isDown;
     c.kick = Phaser.Input.Keyboard.JustDown(this.p2.SHIFT);
+    c.kickHeld = this.p2.SHIFT.isDown;
     c.swap = Phaser.Input.Keyboard.JustDown(this.p2.E);
     return c;
   }

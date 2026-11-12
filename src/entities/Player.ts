@@ -27,8 +27,12 @@ export const PLAYER_CONFIG = {
   moveSpeed: 5,
   /** 跳跃初速度（负值向上） */
   jumpVelocity: -17,
-  /** 最大下落速度：防穿透 */
-  maxFallSpeed: 26,
+  /** 最大下落速度：防穿透（同时抬高摔落伤害的可测区间） */
+  maxFallSpeed: 32,
+  /** 摔落伤害阈值：低于此落地速度不掉血（普通跳跃落地应低于它） */
+  fallSafeSpeed: 21,
+  /** 摔落伤害系数：每超速 1 点造成多少伤害 */
+  fallDamagePerSpeed: 3.2,
   /** 最大水平速度（含被击飞冲量）：防穿透 */
   maxHorizontalSpeed: 18,
 
@@ -90,6 +94,10 @@ export class Player extends Entity {
   moveDir = 0;
   /** 是否在倒着走（面向与移动方向相反）→ 倒走动画 */
   backward = false;
+  /** 本段空中见过的最大下落速度（落地时用于算摔落伤害） */
+  private fallSpeedSeen = 0;
+  /** 最近一次落地的下落速度（调试/测试用） */
+  lastLandingSpeed = 0;
 
   // ---- 生命值 ----
   readonly health = new Health({ maxHp: PLAYER_CONFIG.maxHp });
@@ -484,6 +492,11 @@ export class Player extends Entity {
     // 先记录「上一帧」着地状态（必须在射线刷新前），用于检测「刚落地」瞬间
     const wasGrounded = this.isGrounded;
 
+    // 追踪下落速度峰值（用于摔落伤害）
+    if (!this.isGrounded && this.body.velocity.y > 0) {
+      this.fallSpeedSeen = Math.max(this.fallSpeedSeen, this.body.velocity.y);
+    }
+
     // 射线着地检测（先于跳跃判定，保证当帧状态最新）
     this.updateRayGrounded();
 
@@ -688,6 +701,15 @@ export class Player extends Entity {
 
     // 落地冲击（spine-animation：冲击吸收 → 稳定恢复，而非弹一下就完）
     if (!wasGrounded && this.isGrounded) {
+      // ---- 摔落伤害：速度越高伤害越高 ----
+      const impactSpeed = this.fallSpeedSeen;
+      this.fallSpeedSeen = 0;
+      this.lastLandingSpeed = impactSpeed;
+      if (impactSpeed > PLAYER_CONFIG.fallSafeSpeed) {
+        const fallDamage = (impactSpeed - PLAYER_CONFIG.fallSafeSpeed) * PLAYER_CONFIG.fallDamagePerSpeed;
+        this.applyDamage({ amount: fallDamage, kind: 'env', knockback: { x: 0, y: 0 } });
+      }
+
       const fallSpeed = this.body.velocity.y;
       // 下落速度 → 冲击强度（力的大小决定吸收深度）
       this.landImpactStrength = Phaser.Math.Clamp(fallSpeed / 18, 0.15, 1);

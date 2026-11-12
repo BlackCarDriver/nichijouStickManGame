@@ -16,6 +16,7 @@ import { DestructionSystem } from '../world/DestructionSystem';
 import { PickupSystem } from '../world/PickupSystem';
 import { DropSystem } from '../world/DropSystem';
 import { FragmentSystem } from '../world/FragmentSystem';
+import { ImpactDamageSystem } from '../world/ImpactDamageSystem';
 import { DamageSystem } from '../combat/DamageSystem';
 import { ProjectileSystem } from '../combat/ProjectileSystem';
 import { WeaponSystem } from '../combat/WeaponSystem';
@@ -78,6 +79,7 @@ export class GameScene extends Phaser.Scene {
   private pickups!: PickupSystem;
   private drops!: DropSystem;
   private fragments!: FragmentSystem;
+  private impactDamage!: ImpactDamageSystem;
 
   constructor() {
     super('GameScene');
@@ -155,6 +157,7 @@ export class GameScene extends Phaser.Scene {
     this.pickups = new PickupSystem(this, this.bodyToPlayer, this.fx);
     this.drops = new DropSystem(this, this.pickups, this.mapData);
     this.fragments = new FragmentSystem(this);
+    this.impactDamage = new ImpactDamageSystem(this, this.damageSystem, this.worldRegistry);
 
     this.hud = new Hud(this);
     this.hud.bind(this.players);
@@ -214,6 +217,8 @@ export class GameScene extends Phaser.Scene {
       this.grenades.destroy();
       this.pickups.destroy();
       this.fragments.destroy();
+      this.impactDamage.destroy();
+      this.weaponSystem.destroy();
       this.fx.destroy();
       this.hud.destroy();
     });
@@ -309,21 +314,33 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * 副攻击（右键 / Shift / E）：先尝试"替换地上的武器"，
-   * 没替换成功才执行踢 / 投掷。
+   * 副攻击（右键 / Shift / E）：
+   *   按下 → 优先"替换地上的武器"；否则手持可投掷近战武器时**开始瞄准**（显示抛物线预览）；
+   *          其余情况踢。
+   *   按住 → 持续显示预览；**松开才真正投出**。
    */
   private handleSecondary(cmds: InputCommand[]): void {
-    const intent = new Set<number>();
+    const pressed = new Set<number>();
     this.players.forEach((player, i) => {
-      if (cmds[i].kick || cmds[i].swap) intent.add(player.id);
+      if (cmds[i].kick || cmds[i].swap) pressed.add(player.id);
     });
-    if (intent.size === 0) return;
 
-    const consumed = this.pickups.tryPickup(intent);
-    for (const player of this.players) {
-      if (!intent.has(player.id) || consumed.has(player.id)) continue;
-      this.weaponSystem.trySecondary(player);
-    }
+    const consumed = pressed.size > 0 ? this.pickups.tryPickup(pressed) : new Set<number>();
+
+    this.players.forEach((player, i) => {
+      const cmd = cmds[i];
+
+      if (pressed.has(player.id) && !consumed.has(player.id)) {
+        // 手持可投掷近战武器 + 按住副攻击键 → 进入瞄准（不立刻投出）
+        const aiming = cmd.kickHeld && this.weaponSystem.beginThrowAim(player);
+        if (!aiming) {
+          this.weaponSystem.tryKick(player);
+        }
+      }
+
+      // 每帧推进：按住画预览，松开则投出
+      this.weaponSystem.updateThrowAim(player, cmd.kickHeld);
+    });
   }
 
   /** 单向平台：玩家在平台下方或上升中时忽略碰撞（可穿过） */

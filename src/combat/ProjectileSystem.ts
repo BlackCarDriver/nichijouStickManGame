@@ -270,10 +270,17 @@ export class ProjectileSystem {
 
     // ---- 投掷物（匕首/长矛）：先结算伤害，再插入目标停留 ----
     if (p.stickMs) {
-      // 目标硬度过高（伤害 <= 硬度）→ 插不进去，掉到地上（由场景生成掉落物）
+      // 能否钉进去：stickable 明确指定优先，否则按"投掷伤害 > 硬度"判定
       const runtime = this.registry.resolve(hit.body);
-      const hardness = runtime ? (MATERIALS[runtime.material]?.hardness ?? 0) : 0;
-      if (runtime && amount - hardness <= 0) {
+      const material = runtime ? MATERIALS[runtime.material] : undefined;
+      const canStick = runtime
+        ? material?.stickable === true
+          ? true
+          : material?.stickable === false
+            ? false
+            : amount - (material?.hardness ?? 0) > 0
+        : true;
+      if (!canStick) {
         this.scene.events.emit('thrown-blocked', p.weaponId, hit.point.x, hit.point.y);
         this.fx.hitSpark(hit.point, hit.normal, 0xdfe7f0);
         return true;

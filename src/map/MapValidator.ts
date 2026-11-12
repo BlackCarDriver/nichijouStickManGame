@@ -383,6 +383,9 @@ export function validateMaterialsFile(
         issues.push(err(`${path}.damageMultiplier`, '受伤倍率必须 >= 0 的数字'));
       }
     }
+    if (def.stickable !== undefined && typeof def.stickable !== 'boolean') {
+      issues.push(err(`${path}.stickable`, 'stickable 必须是布尔值（不填 = 按硬度判定）'));
+    }
     for (const key of ['bulletBounce', 'bulletPierce', 'destructible', 'fixed'] as const) {
       const v = def[key];
       if (v !== undefined && typeof v !== 'boolean') {

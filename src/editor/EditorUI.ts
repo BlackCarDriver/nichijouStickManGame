@@ -838,6 +838,8 @@ function materialForm(): HTMLElement {
       field('硬度', numberInput(mat.hardness, (v) => upd({ hardness: Math.max(0, v) }), 0.5)),
     ]),
     h('p', { class: 'ed-help' }, ['硬度抵扣伤害：单次伤害 ≤ 硬度则完全打不动；投掷武器也插不进去（会掉在地上）。']),
+    h('label', { class: 'ed-check' }, [checkbox(mat.stickable === true, (v) => upd({ stickable: v })), '投掷武器总能钉进去（如地面）']),
+    h('p', { class: 'ed-help' }, ['不勾选时按"投掷伤害 > 硬度"判定。']),
 
     // ---- 子弹 ----
     h('h3', { class: 'ed-h3' }, ['子弹交互']),

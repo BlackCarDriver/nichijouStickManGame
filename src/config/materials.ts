@@ -42,6 +42,16 @@ export interface MaterialJson {
    * （低于硬度的武器打不动；投掷的近战武器也插不进去，会掉在地上）。
    */
   hardness?: number;
+  /**
+   * 投掷武器（匕首/长矛）能否钉进这种材质：
+   * - `true`  → 总能钉进去（忽略硬度）—— 地面属于这种
+   * - `false` → 永远钉不进去（砖墙）—— 墙属于这种
+   * - 不填   → 按"投掷伤害 > 硬度"判定
+   *
+   * 为什么不复用耐受度/免伤：那两个是"抗伤害"，而"能不能钉进去"是穿透问题，
+   * 混在同一个数值里会互相干扰（地面不可破坏，但匕首显然应该能插在土里）。
+   */
+  stickable?: boolean;
   // ---- 子弹交互 ----
   /** 子弹击中是否反弹（金属） */
   bulletBounce?: boolean;
@@ -55,7 +65,7 @@ export interface MaterialsFile {
 }
 
 /** 运行时材质（解析后的形态） */
-export interface MaterialConfig extends Omit<MaterialJson, 'color' | 'textureMode' | 'damageMultiplier' | 'bulletBounce' | 'bulletPierce' | 'hardness'> {
+export interface MaterialConfig extends Omit<MaterialJson, 'color' | 'textureMode' | 'damageMultiplier' | 'bulletBounce' | 'bulletPierce' | 'hardness' | 'stickable'> {
   id: string;
   opacity: number;
   /** 解析后的颜色（Phaser number） */
@@ -65,6 +75,7 @@ export interface MaterialConfig extends Omit<MaterialJson, 'color' | 'textureMod
   textureMode: TextureMode;
   damageMultiplier: number;
   hardness: number;
+  stickable: boolean | undefined;
   bulletBounce: boolean;
   bulletPierce: boolean;
 }
@@ -124,6 +135,7 @@ export function toMaterialConfig(id: string, def: MaterialJson): MaterialConfig 
     durability: def.durability ?? 0,
     damageMultiplier: def.damageMultiplier ?? 1,
     hardness: def.hardness ?? 0,
+    stickable: def.stickable,
     bulletBounce: def.bulletBounce ?? false,
     bulletPierce: def.bulletPierce ?? false,
   };
@@ -146,6 +158,7 @@ export function materialToJson(m: MaterialConfig): MaterialJson {
     durability: m.durability,
     damageMultiplier: m.damageMultiplier,
     hardness: m.hardness,
+    stickable: m.stickable,
     bulletBounce: m.bulletBounce,
     bulletPierce: m.bulletPierce,
   };

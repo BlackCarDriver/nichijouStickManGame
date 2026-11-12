@@ -9,6 +9,7 @@ import { getWeapon, createHeldWeapon } from './WeaponFormat';
 import type { WeaponJson, BulletConfig, BeamConfig } from './WeaponFormat';
 import type { MapObjectRuntime } from '../map/MapLoader';
 import { raycast, getWorldBodies } from './Raycast';
+import { TrajectoryPreview } from './TrajectoryPreview';
 
 /** 玩家这一帧的攻击意图 */
 export interface AttackInput {
@@ -67,6 +68,9 @@ export class WeaponSystem {
   private readonly beams = new Map<number, { timer: number }>();
   /** 攻击批次自增 id（一次扣扳机 = 一个批次，霰弹的多弹丸共用） */
   private attackSeq = 0;
+  /** 正在"瞄准投掷"的玩家（按住副攻击键时显示抛物线预览） */
+  private readonly throwAiming = new Set<number>();
+  private preview!: TrajectoryPreview;
 
   constructor(
     scene: Phaser.Scene,
@@ -82,6 +86,70 @@ export class WeaponSystem {
     this.registry = registry;
     this.bodyToPlayer = bodyToPlayer;
     this.fx = fx;
+    this.preview = new TrajectoryPreview(scene, 829);
+  }
+
+  destroy(): void {
+    this.preview.destroy();
+  }
+
+  /** 该玩家手持的武器是否可投掷（匕首/长矛） */
+  private throwableWeaponOf(player: Player): WeaponJson | undefined {
+    const held = player.heldWeapon;
+    const weapon = held ? getWeapon(held.id) : undefined;
+    return weapon?.attackMode === 'melee' && weapon.throw ? weapon : undefined;
+  }
+
+  /** 是否正在瞄准投掷 */
+  isAimingThrow(player: Player): boolean {
+    return this.throwAiming.has(player.id);
+  }
+
+  /** 开始瞄准投掷（按住右键）：仅对可投掷的近战武器生效 */
+  beginThrowAim(player: Player): boolean {
+    if (player.health.isDead) return false;
+    if (!this.throwableWeaponOf(player)) return false;
+    this.throwAiming.add(player.id);
+    return true;
+  }
+
+  /**
+   * 每帧推进投掷瞄准：
+   * - 按住 → 画抛物线预览（与真实投掷同一套模拟）
+   * - 松开 → 投出
+   */
+  updateThrowAim(player: Player, holding: boolean): void {
+    if (!this.throwAiming.has(player.id)) return;
+
+    // 死亡 / 换掉武器 / 武器没了 → 取消
+    const weapon = this.throwableWeaponOf(player);
+    if (player.health.isDead || !weapon) {
+      this.throwAiming.delete(player.id);
+      return;
+    }
+
+    if (!holding) {
+      // 松开 → 投出
+      this.throwAiming.delete(player.id);
+      if (this.cooldowns.has(player.id)) return;
+      if (this.throwWeapon(player, weapon)) {
+        this.consume(player, weapon, false);
+      }
+      return;
+    }
+
+    // 按住 → 画预览
+    const preview = this.preview;
+    const cfg = weapon.throw;
+    if (!cfg) return;
+    const path = preview.compute(
+      player.muzzle,
+      player.aim,
+      cfg.speed,
+      cfg.range,
+      [player.body],
+    );
+    preview.drawPath(path, weapon.visual.color, 0.9);
   }
 
   /** 装备武器（null = 空手） */
@@ -97,6 +165,9 @@ export class WeaponSystem {
     const dt = deltaMs / 1000;
     this.tickMap(this.cooldowns, dt);
     this.tickMap(this.kickCooldowns, dt);
+    // 投掷预览：每帧清空并推进一次蚂蚁线相位（多人同时瞄准时共用一张画布）
+    this.preview.clear();
+    this.preview.tick(deltaMs);
   }
 
   private tickMap(map: Map<number, number>, dt: number): void {
