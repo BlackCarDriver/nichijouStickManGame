@@ -2,9 +2,11 @@
  * 材质贴图加载。
  *
  * 贴图引用（MaterialConfig.texture）支持三种写法：
- * 1. public 下的相对路径：`textures/wood.png` → 运行时 `/textures/wood.png`
- * 2. 根路径/绝对 URL：`/textures/wood.png`、`https://...`
+ * 1. public 下的相对路径：`textures/wood.png` → 运行时 `<BASE_URL>textures/wood.png`
+ * 2. 站点根/绝对 URL：`/textures/wood.png`、`https://...`（根路径也走 BASE_URL，兼容子路径部署）
  * 3. data: 内联图像（编辑器"内嵌到 JSON"时使用，自包含但会撑大 JSON）
+ *
+ * BASE_URL：vite 开发态为 `/`，打包为 `./`（子路径部署如 `/stickmanGame/` 时不写死站点根）。
  *
  * 纹理以 `mattex:<path>` 为 key 存在全局 TextureManager 里（跨场景共享）。
  */
@@ -28,10 +30,10 @@ export function matTextureKey(ref: string): string {
   return `mattex:${ref}`;
 }
 
-/** 贴图引用 → 可加载的 URL */
+/** 贴图引用 → 可加载的 URL（按构建 BASE_URL 解析，兼容根路径与子路径部署） */
 export function textureUrl(ref: string): string {
-  if (/^(data:|blob:|https?:\/\/|\/)/.test(ref)) return ref;
-  return `/${ref.replace(/^\/+/, '')}`;
+  if (/^(data:|blob:|https?:\/\/)/.test(ref)) return ref;
+  return `${import.meta.env.BASE_URL}${ref.replace(/^\/+/, '')}`;
 }
 
 /** 该引用是否已加载就绪 */
