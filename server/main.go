@@ -15,6 +15,10 @@ import (
 	"stickmangame/server/internal/nichijou"
 )
 
+// gameProtocolVersion 游戏同步协议版本（前端 src/net/protocol.ts 与 server/protocol.go 同一版）。
+// 发版检查：curl /healthz 看到 gameProtocol=3 才说明服务端已更新。
+const gameProtocolVersion = 3
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  8192,
 	WriteBufferSize: 8192,
@@ -116,13 +120,15 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"ok":        true,
-			"bridge":    bridgeReady,
-			"roomId":    integ.RoomID,
-			"closed":    hub.IsClosed(),
-			"protocol":  nichijou.ProtocolVersion,
-			"sdk":       nichijou.Version,
-			"staticDir": cfg.StaticDir,
+			"ok":       true,
+			"bridge":   bridgeReady,
+			"roomId":   integ.RoomID,
+			"closed":   hub.IsClosed(),
+			"protocol": nichijou.ProtocolVersion,
+			// gameProtocol：游戏前后端的同步协议版本（前端与后端必须一致，发版时一起换）
+			"gameProtocol": gameProtocolVersion,
+			"sdk":          nichijou.Version,
+			"staticDir":    cfg.StaticDir,
 		})
 	})
 	if integ.ExchangeSecret != "" && integ.Chatroom != "" {

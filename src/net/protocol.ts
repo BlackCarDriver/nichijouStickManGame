@@ -5,6 +5,9 @@
  * 并在 `docs/联机协议.md` 里记录。聊天室桥接协议（服务端 ↔ 聊天室）不在这里。
  */
 
+/** 游戏同步协议版本（与 server/main.go 的 gameProtocolVersion 一致；前后端必须同版本上线） */
+export const GAME_PROTOCOL_VERSION = 3;
+
 /** 输入边沿掩码（与 server/protocol.go 一致） */
 export const EDGE = {
   jump: 1 << 0,
