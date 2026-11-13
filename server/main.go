@@ -12,7 +12,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"stickmangame/server/internal/nichijou"
+	"github.com/BlackCarDriver/nichijouSDK"
 )
 
 // gameProtocolVersion 游戏同步协议版本（前端 src/net/protocol.ts 与 server/protocol.go 同一版）。
@@ -31,7 +31,7 @@ type server struct {
 	hub *Hub
 
 	pub   *rsa.PublicKey
-	integ nichijou.IntegrationConfig
+	integ nichijouSDK.IntegrationConfig
 	// 允许本地开发时跳过 JWT（仅 --dev 时可用）
 	devIdentity bool
 }
@@ -58,7 +58,7 @@ func main() {
 		cfg.AllowDevIdentity = true
 	}
 
-	integ, err := nichijou.LoadIntegrationConfig(resolvePath(*integrationPath))
+	integ, err := nichijouSDK.LoadIntegrationConfig(resolvePath(*integrationPath))
 	if err != nil {
 		log.Fatalf("读取接入配置失败: %v", err)
 	}
@@ -71,7 +71,7 @@ func main() {
 
 	var pub *rsa.PublicKey
 	if cfg.PubKeyPath != "" {
-		pub, err = nichijou.LoadPublicKey(resolvePath(cfg.PubKeyPath))
+		pub, err = nichijouSDK.LoadPublicKey(resolvePath(cfg.PubKeyPath))
 		if err != nil {
 			log.Printf("[main] 公钥加载失败（将只提供页面服务）: %v", err)
 			pub = nil
@@ -91,7 +91,7 @@ func main() {
 
 	bridgeReady := integ.Chatroom != "" && integ.RoomID != 0 && integ.IntegrationID != "" && integ.BridgeSecret != "" && pub != nil
 	if bridgeReady {
-		bridge := nichijou.NewBridge(nichijou.Config{
+		bridge := nichijouSDK.NewBridge(nichijouSDK.Config{
 			ChatroomWSBase: chatroomWSBase(integ.Chatroom),
 			RoomID:         integ.RoomID,
 			IntegrationID:  integ.IntegrationID,
@@ -99,7 +99,7 @@ func main() {
 			SecretVersion:  integ.SecretVersion,
 			InstanceID:     cfg.InstanceID,
 			PublicKey:      pub,
-		}, nichijou.Hooks{
+		}, nichijouSDK.Hooks{
 			States:       hub.states,
 			RoomLP:       hub.roomLP,
 			OnUserLeave:  hub.onUserLeave,
@@ -124,15 +124,15 @@ func main() {
 			"bridge":   bridgeReady,
 			"roomId":   integ.RoomID,
 			"closed":   hub.IsClosed(),
-			"protocol": nichijou.ProtocolVersion,
+			"protocol": nichijouSDK.ProtocolVersion,
 			// gameProtocol：游戏前后端的同步协议版本（前端与后端必须一致，发版时一起换）
 			"gameProtocol": gameProtocolVersion,
-			"sdk":          nichijou.Version,
+			"sdk":          nichijouSDK.Version,
 			"staticDir":    cfg.StaticDir,
 		})
 	})
 	if integ.ExchangeSecret != "" && integ.Chatroom != "" {
-		mux.Handle("/exchange", nichijou.NewExchangeHandler(nichijou.ExchangeConfig{
+		mux.Handle("/exchange", nichijouSDK.NewExchangeHandler(nichijouSDK.ExchangeConfig{
 			ChatroomBase:   integ.Chatroom,
 			ExchangeSecret: integ.ExchangeSecret,
 		}))
@@ -211,7 +211,7 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 }
 
 // authenticate 优先用聊天室签发的 JWT；--dev 时允许假身份（只用于本地联调）。
-func (s *server) authenticate(r *http.Request) (string, *nichijou.Claims, error) {
+func (s *server) authenticate(r *http.Request) (string, *nichijouSDK.Claims, error) {
 	if s.devIdentity && r.URL.Query().Get("dev") == "1" {
 		nick := strings.TrimSpace(r.URL.Query().Get("nick"))
 		if nick == "" {
@@ -219,7 +219,7 @@ func (s *server) authenticate(r *http.Request) (string, *nichijou.Claims, error)
 		}
 		// 本地联调可以用 ?avatar=<url> 模拟聊天室头像，验证头像加载/裁圆效果
 		avatar := strings.TrimSpace(r.URL.Query().Get("avatar"))
-		return nick, &nichijou.Claims{Sub: nick, Avatar: avatar}, nil
+		return nick, &nichijouSDK.Claims{Sub: nick, Avatar: avatar}, nil
 	}
 	if s.pub == nil {
 		return "", nil, errors.New("未配置公钥")
@@ -228,7 +228,7 @@ func (s *server) authenticate(r *http.Request) (string, *nichijou.Claims, error)
 	if token == "" {
 		return "", nil, errors.New("缺少 token")
 	}
-	claims, err := nichijou.VerifyJWT(token, s.pub, s.integ.IntegrationID, s.integ.RoomID)
+	claims, err := nichijouSDK.VerifyJWT(token, s.pub, s.integ.IntegrationID, s.integ.RoomID)
 	if err != nil {
 		return "", nil, err
 	}

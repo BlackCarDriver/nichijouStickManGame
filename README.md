@@ -2,7 +2,7 @@
 
 H5 2D 横版火柴人对战游戏。当前阶段：**聊天室插件房联机（多人乱斗）已跑通**，
 同时保留单机双人沙盒用于调试与手感回归。
-引擎：Phaser 3 + Matter.js + TypeScript + Vite；联机服务：Go（复用聊天室 `nichijouSDK`）。
+引擎：Phaser 3 + Matter.js + TypeScript + Vite；联机服务：Go（引用插件房接入包 `github.com/BlackCarDriver/nichijouSDK`）。
 
 ## 快速开始
 

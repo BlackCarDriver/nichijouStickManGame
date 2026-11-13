@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"stickmangame/server/internal/nichijou"
+	"github.com/BlackCarDriver/nichijouSDK"
 )
 
 // RuntimeConfig 是本游戏自己的部署配置（监听地址、静态目录、玩法参数）。
@@ -91,7 +91,7 @@ func envInt(name string, fallback int) int {
 }
 
 // integrationFromEnv 允许用环境变量覆盖接入配置（部署时不必改文件）。
-func integrationFromEnv(base nichijou.IntegrationConfig) nichijou.IntegrationConfig {
+func integrationFromEnv(base nichijouSDK.IntegrationConfig) nichijouSDK.IntegrationConfig {
 	out := base
 	if v := os.Getenv("CHATROOM"); v != "" {
 		out.Chatroom = v

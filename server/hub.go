@@ -11,7 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"stickmangame/server/internal/nichijou"
+	"github.com/BlackCarDriver/nichijouSDK"
 )
 
 const (
@@ -177,7 +177,7 @@ type Hub struct {
 	cfg  RuntimeConfig
 	data *gameData
 
-	bridge *nichijou.Bridge
+	bridge *nichijouSDK.Bridge
 
 	clients map[string]*client
 	order   []string // 入场顺序（决定座位分配优先级）
@@ -187,7 +187,7 @@ type Hub struct {
 	// 桥接上报用的状态快照。
 	// 关键：SDK 的 ScheduleFullReport 可能同步回调 States()，而调用点大多持有 h.mu，
 	// 直接在里面加锁会自锁死。所以这里用原子快照：写侧持锁刷新，读侧无锁。
-	statesSnap atomic.Value // map[string]nichijou.State
+	statesSnap atomic.Value // map[string]nichijouSDK.State
 	m          *match
 	matchSeq   int64
 	// 最近一帧全量世界快照（房主上报），给中途加入的客户端还原动态世界
@@ -204,11 +204,11 @@ func NewHub(cfg RuntimeConfig, data *gameData) *Hub {
 		data:    data,
 		clients: map[string]*client{},
 	}
-	h.statesSnap.Store(map[string]nichijou.State{})
+	h.statesSnap.Store(map[string]nichijouSDK.State{})
 	return h
 }
 
-func (h *Hub) SetBridge(b *nichijou.Bridge, roomID int) {
+func (h *Hub) SetBridge(b *nichijouSDK.Bridge, roomID int) {
 	h.bridge = b
 	h.roomID = roomID
 }
@@ -1532,39 +1532,39 @@ func (h *Hub) sendToLocked(c *client, payload any) {
 // 注意：SDK 会在持有自身锁的情况下**同步**调用这个回调（ScheduleFullReport 的立即路径），
 // 而业务侧调用 ScheduleFullReport 时通常持有 h.mu。因此这里绝不能加 h.mu，
 // 只读一份由写侧维护的原子快照。
-func (h *Hub) states() map[string]nichijou.State {
-	if v, ok := h.statesSnap.Load().(map[string]nichijou.State); ok && v != nil {
-		out := make(map[string]nichijou.State, len(v))
+func (h *Hub) states() map[string]nichijouSDK.State {
+	if v, ok := h.statesSnap.Load().(map[string]nichijouSDK.State); ok && v != nil {
+		out := make(map[string]nichijouSDK.State, len(v))
 		for k, s := range v {
 			out[k] = s
 		}
 		return out
 	}
-	return map[string]nichijou.State{}
+	return map[string]nichijouSDK.State{}
 }
 
 // refreshStatesLocked 在持锁状态下重算状态快照（每个会改变"谁在玩什么"的操作末尾调用）。
 func (h *Hub) refreshStatesLocked() {
-	out := map[string]nichijou.State{}
+	out := map[string]nichijouSDK.State{}
 	m := h.m
 	for nick := range h.clients {
 		if m != nil && !m.Over {
 			if seat := seatOfMatch(m, nick); seat >= 0 {
 				if p := m.Players[seat]; p != nil && p.Dead {
-					out[nick] = nichijou.State{State: "playing", Text: "阵亡"}
+					out[nick] = nichijouSDK.State{State: "playing", Text: "阵亡"}
 				} else {
-					out[nick] = nichijou.State{State: "playing"}
+					out[nick] = nichijouSDK.State{State: "playing"}
 				}
 			} else {
-				out[nick] = nichijou.State{State: "spectating"}
+				out[nick] = nichijouSDK.State{State: "spectating"}
 			}
 			continue
 		}
 		// 结算展示期间：活着的人算 waiting（下一局马上开始）
 		if c := h.clients[nick]; c != nil && c.seat >= 0 {
-			out[nick] = nichijou.State{State: "waiting"}
+			out[nick] = nichijouSDK.State{State: "waiting"}
 		} else {
-			out[nick] = nichijou.State{State: "spectating"}
+			out[nick] = nichijouSDK.State{State: "spectating"}
 		}
 	}
 	h.statesSnap.Store(out)
