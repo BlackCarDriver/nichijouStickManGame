@@ -20,8 +20,10 @@ type RuntimeConfig struct {
 	DataDir    string `json:"dataDir"`
 	MaxPlayers int    `json:"maxPlayers"`
 	// 一局结束后的结算展示时长（秒），到点自动换图重开
-	RoundEndSeconds  int  `json:"roundEndSeconds"`
-	AllowDevIdentity bool `json:"allowDevIdentity"`
+	RoundEndSeconds int `json:"roundEndSeconds"`
+	// 结算弹窗延迟（秒）：先看"被谁击败"的镜头，再弹结算
+	ResultDelaySeconds int  `json:"resultDelaySeconds"`
+	AllowDevIdentity   bool `json:"allowDevIdentity"`
 }
 
 const (
@@ -31,14 +33,15 @@ const (
 
 func defaultRuntimeConfig() RuntimeConfig {
 	return RuntimeConfig{
-		Addr:             ":8092",
-		InstanceID:       "stickman-1",
-		PubKeyPath:       "config/plugin_jwt.pub.pem",
-		StaticDir:        "../dist",
-		DataDir:          "../data",
-		MaxPlayers:       8,
-		RoundEndSeconds:  4,
-		AllowDevIdentity: false,
+		Addr:               ":8092",
+		InstanceID:         "stickman-1",
+		PubKeyPath:         "config/plugin_jwt.pub.pem",
+		StaticDir:          "../dist",
+		DataDir:            "../data",
+		MaxPlayers:         8,
+		RoundEndSeconds:    4,
+		ResultDelaySeconds: 4,
+		AllowDevIdentity:   false,
 	}
 }
 

@@ -375,6 +375,49 @@ async function main() {
   }
   check('输入经服务端中继后对端玩家移动', relayOk, relayDetail);
 
+  // ---- 跳跃高度固定（取消"按得越久跳得越高"）----
+  const hostCdp0 = async () => ((await a.cdp.eval(`window.__game.scene.getScene('GameScene').online.isAuthority`)) ? a.cdp : b.cdp);
+  const jumpTest = await hostCdp0().then(async (cdp) => {
+    const measure = async (hold) => {
+      const r = await cdp.eval(`(async () => {
+        const s = window.__game.scene.getScene('GameScene');
+        const p = s.online.localPlayer;
+        const sp = s.mapData.spawnPoints[0];
+        p.container.setPosition(sp.x, sp.y - 4);
+        p.container.setVelocity(0, 0);
+        await new Promise((r) => setTimeout(r, 600));
+        const orig = s.inputManager.readP1.bind(s.inputManager);
+        window.__origJumpRead = orig;
+        let frames = 0;
+        s.inputManager.readP1 = () => {
+          const c = orig();
+          frames++;
+          c.moveX = 0;
+          c.jump = frames === 2;
+          c.jumpHeld = ${hold ? 'true' : 'false'};
+          return c;
+        };
+        const y0 = p.container.y;
+        let minY = y0;
+        for (let i = 0; i < 70; i++) {
+          await new Promise((r) => setTimeout(r, 16));
+          if (p.container.y < minY) minY = p.container.y;
+        }
+        s.inputManager.readP1 = orig;
+        return { apex: Math.round((y0 - minY) * 10) / 10 };
+      })()`);
+      return r.apex;
+    };
+    const tapped = await measure(false);
+    const held = await measure(true);
+    return { tapped, held };
+  });
+  check(
+    '跳跃高度与按键时长无关（取消可变跳跃）',
+    jumpTest.tapped > 80 && Math.abs(jumpTest.tapped - jumpTest.held) <= 12,
+    JSON.stringify(jumpTest),
+  );
+
   // ---- 屏幕外对手箭头 ----
   // v2 下玩家位置由"世界权威（房主）"决定：改位置必须改在房主的世界上，
   // 其它客户端会通过快照收到并跟随（这也是本次重构的核心行为）。
@@ -663,19 +706,44 @@ async function main() {
     const other = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
     const target = s.online.playerOf(other);
     s.damageSystem.damagePlayer(target, {
-      amount: 400, kind: 'bullet', sourceId: me.id,
+      amount: 400, kind: 'bullet', sourceId: me.id, weaponId: 'ak47',
       point: { x: target.container.x, y: target.container.y - 30 },
       normal: { x: -1, y: 0 }, knockback: { x: -4, y: -2 }, attackId: 120, ignoreInvuln: true,
     });
     return true;
   })()`);
-  await a.cdp.waitFor(`document.querySelector('.mp-modal:not(.hidden)') !== null`, 5000);
+  // 结算弹窗延迟 4 秒：期间先看"被谁用什么击败 + 观战镜头"
+  const deathUi = await b.cdp.eval(`(async () => {
+    const s = window.__game.scene.getScene('GameScene');
+    for (let i = 0; i < 100; i++) {
+      if (s.deathNotice && s.deathNotice.isVisible) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    // 镜头目标在下一帧才更新，等两帧再读
+    await new Promise((r) => setTimeout(r, 200));
+    const allowed = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
+    const killer = s.online.playerOf(allowed);
+    return {
+      visible: !!s.deathNotice?.isVisible,
+      title: s.deathNotice?.title?.text ?? '',
+      sub: s.deathNotice?.sub?.text ?? '',
+      dead: s.online.localPlayer.health.isDead,
+      camIsKiller: s.cameraTarget === killer,
+      modalShown: document.querySelector('.mp-modal:not(.hidden)') !== null,
+      matchId: s.onlineData.matchId,
+    };
+  })()`);
+  check('死亡提示展示"被谁用什么击败"', deathUi.visible && deathUi.title.includes(nickA) && deathUi.title.includes('AK47'), JSON.stringify(deathUi));
+  check('死亡后观战镜头跟随击败者', deathUi.camIsKiller === true, JSON.stringify({ cam: deathUi.camIsKiller }));
+  check('结算弹窗延迟弹出（此时还不该出现）', deathUi.modalShown === false);
+
+  await a.cdp.waitFor(`document.querySelector('.mp-modal:not(.hidden)') !== null`, 12000);
   const modalText = await a.cdp.eval(`document.querySelector('.mp-modal-card').textContent`);
   check('最后一人胜出后弹出结算', modalText.includes(nickA) && /秒后切换/.test(modalText), modalText.slice(0, 90));
 
   await a.cdp.waitFor(
     `(() => { const s = window.__game.scene.getScene('GameScene'); return s && s.mapData.name !== ${JSON.stringify(mapBefore)}; })()`,
-    12000,
+    25000,
   );
   const restarted = await a.cdp.eval(`(() => {
     const s = window.__game.scene.getScene('GameScene');
@@ -694,7 +762,7 @@ async function main() {
   const oldMatch = await a.cdp.eval(`window.__game.scene.getScene('GameScene').online.deps.ctx.matchId`);
   await a.cdp.eval(`(() => { window.__room.net.ws.close(); return true; })()`);
   // B 端：最后一人胜出 → 结算弹窗
-  await b.cdp.waitFor(`document.querySelector('.mp-modal:not(.hidden)') !== null`, 10000);
+  await b.cdp.waitFor(`document.querySelector('.mp-modal:not(.hidden)') !== null`, 16000);
   check('玩家离开视为死亡：对端立即结算', true);
 
   // A 自动重连后收到下一局 match_start（新对局 id），以满血新玩家进入

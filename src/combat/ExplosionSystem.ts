@@ -20,6 +20,8 @@ export interface ExplosionRequest {
   /** 投掷者实体 id（自伤判定 / 击杀归属） */
   ownerId: number;
   sourceId: number;
+  /** 造成爆炸的武器 id（击杀回放用；手榴弹为 'grenade'） */
+  weaponId?: string;
   /**
    * 无视受击无敌帧（可选）。
    * 用于"同一瞬间先挨了子弹、随后怀里榴弹爆炸"这种场景：
@@ -41,7 +43,9 @@ export interface ExplosionRequest {
 export class ExplosionSystem {
   private readonly scene: Phaser.Scene;
   /** 破片系统（可选注入，避免构造函数参数过长） */
-  private shrapnelSystem: { burst: (x: number, y: number, count: number, damage: number, speed: number, range: number, ownerId: number) => void } | null = null;
+  private shrapnelSystem: {
+    burst: (x: number, y: number, count: number, damage: number, speed: number, range: number, ownerId: number, weaponId?: string) => void;
+  } | null = null;
   private readonly damageSystem: DamageSystem;
   private readonly registry: WorldRegistry;
   private readonly bodyToPlayer: Map<number, Player>;
@@ -68,7 +72,7 @@ export class ExplosionSystem {
 
   /** 注入破片系统（GameScene 构造完两个系统后调用） */
   attachShrapnel(system: {
-    burst: (x: number, y: number, count: number, damage: number, speed: number, range: number, ownerId: number) => void;
+    burst: (x: number, y: number, count: number, damage: number, speed: number, range: number, ownerId: number, weaponId?: string) => void;
   }): void {
     this.shrapnelSystem = system;
   }
@@ -84,7 +88,7 @@ export class ExplosionSystem {
     // ---- 破片：向四周弹射（需求 4）----
     if (req.shrapnel && this.shrapnelSystem) {
       const sh = req.shrapnel;
-      this.shrapnelSystem.burst(x, y, sh.count, sh.damage, sh.speed, sh.range, req.sourceId);
+      this.shrapnelSystem.burst(x, y, sh.count, sh.damage, sh.speed, sh.range, req.sourceId, req.weaponId);
     }
 
     // ---- 玩家 ----
@@ -101,6 +105,7 @@ export class ExplosionSystem {
         amount: damage * falloff,
         kind: 'explosion',
         sourceId: req.sourceId,
+        weaponId: req.weaponId,
         point: { x, y },
         knockback: {
           x: dirX * knockback * falloff,

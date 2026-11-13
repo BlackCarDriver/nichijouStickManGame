@@ -231,6 +231,14 @@ export class OnlineMatch {
     return this.entityToNet.get(player.id) ?? -1;
   }
 
+  /** 实体 id → Player（伤害归因用） */
+  private playerByEntityId(entityId: number): Player | undefined {
+    for (const player of this.deps.players.values()) {
+      if (player.id === entityId) return player;
+    }
+    return undefined;
+  }
+
   playerOf(netId: number): Player | undefined {
     return this.deps.players.get(netId);
   }
@@ -678,10 +686,15 @@ export class OnlineMatch {
     if (targetNet < 0) return;
     // 攻击者：用实体 id 反查座位号；拿不到就当作环境伤害
     const srcNet = info.sourceId !== undefined ? (this.entityToNet.get(info.sourceId) ?? -1) : -1;
+    // 武器：优先伤害来源自带的 id（投掷物/光束/近战各自准确），
+    // 否则退回攻击者当前手持武器（爆炸/连招这类没有显式武器的场景）
+    const shooter = info.sourceId !== undefined ? this.playerByEntityId(info.sourceId) : undefined;
+    const weapon = info.weaponId ?? shooter?.heldWeapon?.id;
     this.send({
       t: 'dmg',
       target: targetNet,
       src: srcNet,
+      weapon,
       amount: info.amount,
       kind: info.kind,
       crit: info.critical === true,
@@ -839,6 +852,9 @@ export class OnlineMatch {
   private applyHp(msg: ServerMsg & { t: 'hp' }): void {
     const p = this.deps.players.get(msg.id);
     if (!p) return;
+    // hp.src 是"座位号"，这里统一换算成实体 id：
+    // 单机与联机都用实体 id 做击杀归属/死亡镜头，调用方不需要区分两套 id 体系。
+    const killer = msg.src >= 0 ? this.deps.players.get(msg.src) : undefined;
     // 本地玩家同样以服务端为准
     p.applyNetDamage({
       hp: msg.hp,
@@ -849,7 +865,8 @@ export class OnlineMatch {
       crit: msg.crit,
       point: msg.point,
       knockback: msg.kb,
-      sourceId: msg.src,
+      sourceId: killer ? killer.id : undefined,
+      weaponId: msg.weapon,
     });
     if (msg.id === this.localNetId) this.lastShieldSent = msg.shield;
 

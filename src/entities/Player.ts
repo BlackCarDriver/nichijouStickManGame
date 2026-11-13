@@ -58,8 +58,6 @@ export const PLAYER_CONFIG = {
   coyoteTime: 0.1,
   /** 跳跃缓冲（秒）：落地前提前按跳被记住的窗口 */
   jumpBuffer: 0.12,
-  /** 可变跳跃：松开跳键时上升速度的保留比例 */
-  jumpCutMultiplier: 0.45,
   /** 非对称重力：下落时的重力倍数 */
   fallGravityMultiplier: 1.8,
   /** 起跳后的土狼锁定（秒）：防止同一着地段内重复起跳（伪二段跳） */
@@ -239,6 +237,9 @@ export class Player extends Entity {
   private lastHitAttackId: number | undefined;
   /** 最近一次伤害的来源实体 id（击杀归属） */
   private lastDamageSourceId: number | undefined;
+  /** 最近一次伤害的武器 id 与类型（死亡回放用） */
+  private lastHitWeaponId: string | undefined;
+  private lastHitKind: string | undefined;
 
   private static readonly HIT_INVULN_MS = 180;
 
@@ -279,7 +280,6 @@ export class Player extends Entity {
   // ---- 跳跃手感计时器 ----
   private coyoteTimer = 0;
   private jumpBufferTimer = 0;
-  private jumpCutArmed = false;
   private jumpLockout = 0;
 
   // ---- 动画状态机 ----
@@ -490,6 +490,8 @@ export class Player extends Entity {
 
     if (info.attackId !== undefined) this.lastHitAttackId = info.attackId;
     this.lastDamageSourceId = info.sourceId;
+    this.lastHitWeaponId = info.weaponId;
+    this.lastHitKind = info.kind;
 
     if (absorbed > 0) {
       // 护盾吸收：拿出来血事件（顿帧/音效/火花），但不弹伤害数字
@@ -549,6 +551,8 @@ export class Player extends Entity {
 
     this.health.setState(n.hp, n.shield, n.dead);
     if (n.sourceId !== undefined && n.sourceId >= 0) this.lastDamageSourceId = n.sourceId;
+    if (n.weaponId !== undefined) this.lastHitWeaponId = n.weaponId;
+    if (n.kind !== undefined) this.lastHitKind = n.kind;
 
     if (absorbed > 0) {
       this.scene.events.emit('player-shielded', this, absorbed, n.kind);
@@ -574,6 +578,16 @@ export class Player extends Entity {
       this.respawnTimer = 0;
       this.visual.setAlpha(0.55);
     }
+  }
+
+  /** 最近一次致伤/致命伤害的武器 id（'fist'/'kick' 等特殊值；环境伤害为 undefined） */
+  get lastHitWeapon(): string | undefined {
+    return this.lastHitWeaponId;
+  }
+
+  /** 最近一次致伤/致命伤害的类型（bullet/melee/explosion/kick/env） */
+  get lastHitType(): string | undefined {
+    return this.lastHitKind;
   }
 
   /** 联机：服务端指定的复活位置 */
@@ -1026,20 +1040,12 @@ export class Player extends Entity {
       this.jumpBufferTimer = 0;
       this.coyoteTimer = 0;
       this.jumpLockout = PLAYER_CONFIG.jumpLockout;
-      this.jumpCutArmed = true;
       this.jumpAnticipation = Player.JUMP_ANTICIPATION_DURATION; // 起跳前摇（下一帧起显示压缩姿态）
       GameFeel.pop(this.graphics, 0.85, 1.15, 200);
     }
 
-    // ===== 可变跳跃高度：上升中松开跳键，切短跳跃（只切一次）=====
-    if (this.jumpCutArmed && !cmd.jumpHeld && this.body.velocity.y < 0) {
-      this.container.setVelocityY(this.body.velocity.y * PLAYER_CONFIG.jumpCutMultiplier);
-      this.jumpCutArmed = false;
-    }
-    if (this.isGrounded && this.body.velocity.y >= 0) {
-      this.jumpCutArmed = false;
-    }
-
+    // 跳跃高度固定：不再根据按键时长缩短跳跃（玩家反馈"时高时低"），
+    // 好处是同一段输入在任何端/任何帧率下轨迹一致，联机预测也更稳。
     // ===== 垂直方向：最小干预（每帧强行改 vy 会破坏 Matter 碰撞平衡）=====
     if (this.body.velocity.y > PLAYER_CONFIG.maxFallSpeed) {
       this.container.setVelocityY(PLAYER_CONFIG.maxFallSpeed);
@@ -1492,4 +1498,6 @@ export interface NetDamageEvent {
   point?: { x: number; y: number };
   knockback?: { x: number; y: number };
   sourceId?: number;
+  /** 造成这次伤害的武器 id（死亡回放用） */
+  weaponId?: string;
 }

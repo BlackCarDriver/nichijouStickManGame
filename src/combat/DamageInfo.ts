@@ -20,6 +20,11 @@ export interface DamageInfo {
   kind: DamageKind;
   /** 来源实体 id（玩家/投掷物），用于自伤判定与击杀归属 */
   sourceId?: number;
+  /**
+   * 造成这次伤害的武器 id（'fist'/'kick'/'grenade' 等特殊值也用它）。
+   * 用于"被谁用什么击败"的死亡回放；环境伤害不带。
+   */
+  weaponId?: string;
   /** 命中点（世界坐标），用于火花/碎片方向 */
   point?: Vec2;
   /** 表面法线（朝向来袭方向），用于火花方向 */

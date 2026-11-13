@@ -186,6 +186,8 @@ export interface SuperModeConfig {
 }
 
 export interface WeaponJson {
+  /** 武器 id（由 weapons.json 的键在加载时注入） */
+  id?: string;
   name: string;
   attackMode: AttackMode;
   /**
@@ -239,8 +241,10 @@ export function resolveGravity(override?: number): number {
   return override ?? PROJECTILE_GRAVITY;
 }
 
-/** 武器表（只读） */
-export const WEAPONS: Readonly<Record<string, WeaponJson>> = file.weapons;
+/** 武器表（只读）：加载时把 json 的键注入成 `id`，方便"被什么武器击败"这类归因 */
+export const WEAPONS: Readonly<Record<string, WeaponJson>> = Object.fromEntries(
+  Object.entries(file.weapons).map(([id, w]) => [id, { ...w, id }]),
+) as Record<string, WeaponJson>;
 
 export function getWeapon(id: string): WeaponJson | undefined {
   return WEAPONS[id];

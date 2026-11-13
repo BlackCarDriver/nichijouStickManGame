@@ -96,6 +96,7 @@ type playerState struct {
 
 	lastDamagedAt time.Time
 	lastAttackID  int64
+	lastWeaponID  string
 	budget        float64
 	budgetAt      time.Time
 }
@@ -502,13 +503,18 @@ func (h *Hub) endRoundLocked() {
 
 	nextMap := h.pickMapLocked()
 	m.NextMap = nextMap
-	restartMs := h.cfg.RoundEndSeconds * 1000
-	m.NextRoundAt = time.Now().Add(time.Duration(h.cfg.RoundEndSeconds) * time.Second)
+	// 先留 resultDelay 秒给"击败镜头"，再弹结算，最后换图重开
+	delaySeconds := h.cfg.ResultDelaySeconds
+	if delaySeconds < 0 {
+		delaySeconds = 0
+	}
+	restartMs := (delaySeconds + h.cfg.RoundEndSeconds) * 1000
+	m.NextRoundAt = time.Now().Add(time.Duration(restartMs) * time.Millisecond)
 
 	log.Printf("[hub] 第 %d 局结束：胜者=%s 死亡=%d 下一张=%s", m.ID, winner, m.Deaths, nextMap)
 	h.broadcastLocked(&matchEndMsg{
 		T: "match_end", Results: results, Winner: winner, Reason: "lastman",
-		RestartInMs: restartMs, NextMap: nextMap,
+		RestartInMs: restartMs, DelayMs: delaySeconds * 1000, NextMap: nextMap,
 	})
 	if h.bridge != nil {
 		if winner != "" {
@@ -1030,6 +1036,8 @@ func (h *Hub) handleDamage(c *client, msg damageMsg) {
 	if msg.Attack != 0 {
 		target.lastAttackID = msg.Attack
 	}
+	// 记录本次伤害的武器 id：与血量一起广播，客户端据此做"被谁用什么击败"
+	target.lastWeaponID = msg.Weapon
 
 	// 护盾先承受
 	remaining := amount
@@ -1090,7 +1098,7 @@ func (h *Hub) broadcastHPFullLocked(p *playerState, amount int, kind string, cri
 	h.broadcastLocked(&hpMsg{
 		T: "hp", ID: p.Seat, HP: p.HP, Shield: p.Shield, Dead: p.Dead,
 		Amount: float64(amount), Kind: kind, Crit: crit, Point: point, KB: kb,
-		Src: src, Kills: h.killsMapLocked(),
+		Src: src, Weapon: p.lastWeaponID, Kills: h.killsMapLocked(),
 	})
 }
 

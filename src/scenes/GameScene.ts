@@ -32,6 +32,7 @@ import { AimSightSystem } from '../combat/AimSightSystem';
 import { GrenadeSystem } from '../combat/GrenadeSystem';
 import { FxSystem } from '../fx/FxSystem';
 import { Hud } from '../ui/Hud';
+import { DeathNotice } from '../ui/DeathNotice';
 import { getFakeProfiles } from '../config/playerProfiles';
 import { DamageNumbers } from '../ui/DamageNumbers';
 import { SlashTrail } from '../fx/SlashTrail';
@@ -108,6 +109,9 @@ export class GameScene extends Phaser.Scene {
   private cameraRig!: CameraRig;
   private gameFeel!: GameFeel;
   private hitStop!: HitStop;
+  private deathNotice!: DeathNotice;
+  /** 联机：死亡后观战跟随的目标（默认跟随击败自己的人） */
+  private spectateTarget: Player | null = null;
   private audio!: AudioSystem;
   /** 顿帧期间物理是否已被暂停（避免重复 pause/resume） */
   private physicsFrozen = false;
@@ -319,6 +323,7 @@ export class GameScene extends Phaser.Scene {
     this.damageNumbers = new DamageNumbers(this);
     this.slashTrail = new SlashTrail(this);
     this.hud = new Hud(this);
+    this.deathNotice = new DeathNotice(this);
     // 单机用假资料占位；联机用服务端下发的房间玩家昵称
     this.hud.bind(this.players, this.profiles());
     this.hud.bindKills(this.kills);
@@ -542,6 +547,7 @@ export class GameScene extends Phaser.Scene {
         knockback: explosion.knockback,
         ownerId: player.id,
         sourceId: shooterId ?? player.id,
+        weaponId: 'grenade',
         // 子弹刚造成受击无敌，这里必须穿透，否则爆炸会被自己这一发子弹免疫掉
         ignoreInvuln: true,
       });
@@ -604,14 +610,19 @@ export class GameScene extends Phaser.Scene {
       // 伤害气泡用"本次攻击的伤害值"（incoming），而不是被剩余血量截断后的 amount
       this.damageNumbers.show(_player, incoming, { crit: critical });
     };
-    // 死亡 → 音效 + 击杀计数（记录凶手）
+    // 死亡 → 音效 + 击杀计数（记录凶手）+ 死亡回放（被谁/用什么击败 + 观战镜头）
     const onPlayerDied = (victim: Player, killerId?: number): void => {
       this.audio.play('death');
       // 联机：击杀数由服务端 hp 消息下发，本地不再累加
-      if (this.online) return;
-      if (killerId !== undefined && killerId !== victim.id) {
+      if (!this.online && killerId !== undefined && killerId !== victim.id) {
         this.kills.set(killerId, (this.kills.get(killerId) ?? 0) + 1);
       }
+      this.handlePlayerDeath(victim, killerId);
+    };
+    // 复活（单机倒计时结束 / 联机换局）：收起死亡提示
+    const onPlayerRespawn = (player: Player): void => {
+      if (this.online && player !== this.online.localPlayer) return;
+      this.deathNotice?.hide();
     };
     // 统一音效路由
     const onSfx = (name: string): void => {
@@ -622,6 +633,7 @@ export class GameScene extends Phaser.Scene {
     this.events.on('weapon-recoil', onWeaponRecoil);
     this.events.on('player-damaged', onPlayerDamaged);
     this.events.on('player-died', onPlayerDied);
+    this.events.on('player-respawn', onPlayerRespawn);
     this.events.on('sfx', onSfx);
     this.events.on('explosion', () => this.audio.play('explosion'));
     this.events.on('explosion', onExplosion);
@@ -639,6 +651,7 @@ export class GameScene extends Phaser.Scene {
       this.events.off('weapon-recoil', onWeaponRecoil);
       this.events.off('player-damaged', onPlayerDamaged);
       this.events.off('player-died', onPlayerDied);
+      this.events.off('player-respawn', onPlayerRespawn);
       this.events.off('sfx', onSfx);
       this.input.off('pointerdown', this.unlockAudio);
       this.input.keyboard?.off('keydown', this.unlockAudio);
@@ -695,6 +708,7 @@ export class GameScene extends Phaser.Scene {
       ['damageNumbers', () => this.damageNumbers.destroy()],
       ['slashTrail', () => this.slashTrail.destroy()],
       ['hud', () => this.hud.destroy()],
+      ['deathNotice', () => this.deathNotice?.destroy()],
     ];
     for (const [name, destroy] of systems) {
       try {
@@ -776,6 +790,99 @@ export class GameScene extends Phaser.Scene {
     this.slashTrail.update(delta, this.players);
     this.damageNumbers.update(delta);
     this.hud.update();
+    this.deathNotice.update();
+  }
+
+  /**
+   * 死亡回放：提示"被谁用什么击败"，并把镜头交给击败者（联机）。
+   *
+   * 联机里 `player-died` 的 killerId 已被 OnlineMatch 换算成实体 id，
+   * 与单机使用同一套 id 体系，这里不需要区分模式。
+   */
+  private handlePlayerDeath(victim: Player, killerId?: number): void {
+    const killer =
+      killerId !== undefined && killerId !== victim.id
+        ? this.players.find((p) => p.id === killerId)
+        : undefined;
+    const isLocal =
+      this.online !== null ? victim === this.online.localPlayer : true;
+    if (!isLocal) return;
+
+    // 镜头：击败者还在场 → 跟着他；否则退到第一个存活玩家（resolveOnlineCamera 里兜底）
+    if (this.online) {
+      this.spectateTarget = killer ?? null;
+      if (!killer) {
+        this.spectateTarget = this.players.find((p) => !p.health.isDead) ?? null;
+      }
+    } else if (killer) {
+      this.switchCameraTarget(killer);
+    }
+
+    const weapon = this.deathWeaponLabel(victim);
+    const envDeath = !killer && victim.lastHitType === 'env';
+    const title = envDeath
+      ? '你摔落阵亡'
+      : killer
+        ? `你被 ${this.playerDisplayName(killer)} 用 ${weapon} 击败`
+        : `你被${weapon}击败`;
+    const follow = this.online
+      ? this.spectateTarget
+        ? `观战中 · 跟随 ${this.playerDisplayName(this.spectateTarget)}`
+        : '观战中'
+      : '';
+    this.deathNotice?.show(title, follow);
+  }
+
+  /** 致命伤害的武器名（'fist'/'kick' 等特殊值 + 环境伤害都有可读文案） */
+  private deathWeaponLabel(victim: Player): string {
+    const id = victim.lastHitWeapon;
+    if (id === 'fist') return '拳脚';
+    if (id === 'kick') return '踢击';
+    if (id) {
+      const name = getWeapon(id)?.name;
+      if (name) return name;
+    }
+    switch (victim.lastHitType) {
+      case 'explosion':
+        return '爆炸';
+      case 'melee':
+        return '近战';
+      case 'bullet':
+        return '子弹';
+      case 'kick':
+        return '踢击';
+      case 'env':
+        return '坠落/环境伤害';
+      default:
+        return '未知手段';
+    }
+  }
+
+  /** 玩家显示名（联机用房间昵称，单机用占位资料） */
+  private playerDisplayName(player: Player): string {
+    if (this.online) {
+      return this.onlineNicks.get(this.netIdOfEntity(player)) ?? '玩家';
+    }
+    const idx = this.players.indexOf(player);
+    return this.profiles()[idx]?.nickname ?? '玩家';
+  }
+
+  /**
+   * 联机镜头目标：
+   * - 活着：跟随自己；
+   * - 阵亡/无本地角色（旁观）：优先跟随击败自己的人，其次第一个存活玩家。
+   */
+  private resolveOnlineCamera(local: Player | null): Player | null {
+    if (local && !local.health.isDead) {
+      this.spectateTarget = null;
+      return local;
+    }
+    const preferred = this.spectateTarget;
+    if (preferred && this.players.includes(preferred) && !preferred.health.isDead) {
+      return preferred;
+    }
+    const alive = this.players.find((p) => !p.health.isDead);
+    return alive ?? preferred ?? local ?? this.players[0] ?? null;
   }
 
   /**
@@ -833,8 +940,8 @@ export class GameScene extends Phaser.Scene {
     this.updateOneWayCollisions();
     syncCompoundVisuals(this.mapObjects);
 
-    // 镜头：本地玩家优先；旁观者跟随第一个仍在场的玩家
-    const target = local ?? this.players[0] ?? null;
+    // 镜头：活着跟本地玩家；阵亡/旁观跟随击败自己的人，其次第一个存活玩家
+    const target = this.resolveOnlineCamera(local);
     this.cameraTarget = target;
     if (target && this.cameraRig) this.cameraRig.update(target, delta);
     this.updateCameraZoom(target);
@@ -844,6 +951,7 @@ export class GameScene extends Phaser.Scene {
     this.slashTrail.update(delta, this.players);
     this.damageNumbers.update(delta);
     this.hud.update();
+    this.deathNotice.update();
     this.offscreen?.update(this.players, local, this.onlineNicks, (p) => online.netIdOf(p));
     online.update(delta);
   }

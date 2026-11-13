@@ -22,6 +22,8 @@ interface Shrapnel {
   range: number;
   damage: number;
   ownerId: number;
+  /** 造成这枚破片的武器 id（死亡回放用） */
+  weaponId?: string;
   gfx: Phaser.GameObjects.Graphics;
 }
 
@@ -85,6 +87,7 @@ export class ShrapnelSystem {
     speed: number,
     range: number,
     ownerId: number,
+    weaponId?: string,
   ): void {
     const n = Math.max(0, Math.min(64, Math.round(count)));
     for (let i = 0; i < n; i++) {
@@ -107,6 +110,7 @@ export class ShrapnelSystem {
         range,
         damage,
         ownerId,
+        weaponId,
         gfx,
       });
     }
@@ -160,6 +164,7 @@ export class ShrapnelSystem {
           amount: s.damage,
           kind: 'explosion',
           sourceId: s.ownerId,
+          weaponId: s.weaponId,
           point,
         });
       }

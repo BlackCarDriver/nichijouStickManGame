@@ -361,6 +361,7 @@ export class ProjectileSystem {
         amount,
         kind: 'bullet',
         sourceId: p.ownerId,
+        weaponId: p.weaponId,
         point: hit.point,
         normal: hit.normal,
         knockback,
@@ -449,6 +450,7 @@ export class ProjectileSystem {
         amount,
         kind: 'melee',
         sourceId: p.ownerId,
+        weaponId: p.weaponId,
         point: hit.point,
         normal: hit.normal,
         knockback,
@@ -478,6 +480,7 @@ export class ProjectileSystem {
       knockback: p.explosion.knockback,
       ownerId: p.ownerId,
       sourceId: p.ownerId,
+      weaponId: p.weaponId,
       shrapnel: p.explosion.shrapnel,
     });
   }

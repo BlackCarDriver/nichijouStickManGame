@@ -241,9 +241,15 @@ async function main() {
   const end = await a.wait('match_end', undefined, 4000);
   check('最后一死触发本局结束', end.winner === `smokeA_${tag}`, JSON.stringify({ winner: end.winner, results: end.results }));
   check('结算带下一张地图与倒计时', typeof end.nextMap === 'string' && end.restartInMs > 0, JSON.stringify({ nextMap: end.nextMap, ms: end.restartInMs }));
+  check(
+    '结算弹窗带延迟（先看击败镜头）',
+    typeof end.delayMs === 'number' && end.delayMs >= 0 && end.restartInMs > end.delayMs,
+    JSON.stringify({ delayMs: end.delayMs, restartInMs: end.restartInMs }),
+  );
   check('B 也收到结算', (await b.wait('match_end')).winner === `smokeA_${tag}`);
 
-  const nextA = await a.wait('match_start', (m) => m.matchId !== startB1.matchId, 6000);
+  // 结算有 4s 延迟 + 4s 展示，下一局至少 8s 后才开始
+  const nextA = await a.wait('match_start', (m) => m.matchId !== startB1.matchId, 18000);
   check('结算后自动开新局', nextA.matchId !== startB1.matchId);
   check('新局换成另一张地图', nextA.map === end.nextMap && nextA.map !== startB1.map, `${startB1.map} → ${nextA.map}`);
   check('新局双方满血复活', nextA.stats.every((s) => s.hp === 100 && !s.dead), JSON.stringify(nextA.stats));
@@ -270,7 +276,7 @@ async function main() {
   const a3 = await new Player(`smokeA_${tag}`).connect();
   await a3.wait('welcome');
   a3.send({ t: 'enter' });
-  const rejoin = await a3.wait('match_start', (m) => m.you >= 0 && m.matchId !== nextA.matchId, 10000);
+  const rejoin = await a3.wait('match_start', (m) => m.you >= 0 && m.matchId !== nextA.matchId, 20000);
   const meStat = rejoin.stats.find((st) => st.id === rejoin.you);
   check('重进作为新玩家进入下一局', rejoin.you >= 0 && !!meStat, JSON.stringify({ you: rejoin.you, stats: rejoin.stats }));
   check('重进不保留血量/状态（满血、未阵亡、0 杀）', !!meStat && meStat.hp === 100 && meStat.dead === false && meStat.kills === 0, JSON.stringify(meStat));

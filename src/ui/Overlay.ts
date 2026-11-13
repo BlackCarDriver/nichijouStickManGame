@@ -58,6 +58,8 @@ export class Overlay {
 
   private fullscreen = false;
   private countdownTimer: number | null = null;
+  /** 结算弹窗延迟计时（先让玩家看完"击败镜头"） */
+  private resultsTimer: number | null = null;
   private room: RoomSnapshot | null = null;
   private hudText = '';
 
@@ -330,7 +332,34 @@ export class Overlay {
     this.chatLog.scrollTop = this.chatLog.scrollHeight;
   }
 
+  /**
+   * 结算弹窗。
+   *
+   * `msg.delayMs`：先延迟弹出（留出"被谁击败"的镜头），倒计时仍按
+   * `restartInMs`（服务端给的总时长）计算，所以延迟期间时间不会"白等"。
+   */
   showResults(msg: MatchEndMsg, you: number): void {
+    this.stopCountdown();
+    this.clearResultsTimer();
+    const restartAt = Date.now() + Math.max(0, msg.restartInMs || 0);
+    const delay = Math.max(0, msg.delayMs || 0);
+    if (delay <= 0) {
+      this.renderResults(msg, you, restartAt);
+      return;
+    }
+    this.resultsTimer = window.setTimeout(() => {
+      this.resultsTimer = null;
+      this.renderResults(msg, you, restartAt);
+    }, delay);
+  }
+
+  private clearResultsTimer(): void {
+    if (this.resultsTimer === null) return;
+    window.clearTimeout(this.resultsTimer);
+    this.resultsTimer = null;
+  }
+
+  private renderResults(msg: MatchEndMsg, you: number, restartAt: number): void {
     this.stopCountdown();
     this.modalBody.innerHTML = '';
 
@@ -363,7 +392,6 @@ export class Overlay {
     const tip = document.createElement('div');
     tip.className = 'mp-hint mp-countdown';
     const nextMap = msg.nextMap ? `「${msg.nextMap}」` : '下一张地图';
-    const restartAt = Date.now() + Math.max(0, msg.restartInMs || 0);
     const tick = (): void => {
       const left = Math.max(0, Math.ceil((restartAt - Date.now()) / 1000));
       tip.textContent = left > 0 ? `${left} 秒后切换到 ${nextMap}` : `正在切换到 ${nextMap}…`;
@@ -379,6 +407,7 @@ export class Overlay {
 
   hideResults(): void {
     this.stopCountdown();
+    this.clearResultsTimer();
     this.modal.classList.add('hidden');
     const inMatch = this.hudbar.textContent !== '';
     if (inMatch) this.el.classList.add('in-match');

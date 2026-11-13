@@ -59,7 +59,9 @@ type damageMsg struct {
 	T      string `json:"t"`
 	Target int    `json:"target"`
 	// Src 攻击者座位号（房主代报他人伤害时使用；0 也是合法座位，所以用 -1 表示未填）
-	Src          int     `json:"src"`
+	Src int `json:"src"`
+	// Weapon 造成伤害的武器 id（死亡回放用；环境伤害为空）
+	Weapon       string  `json:"weapon,omitempty"`
 	Amount       float64 `json:"amount"`
 	Kind         string  `json:"kind"`
 	Crit         bool    `json:"crit"`
@@ -294,17 +296,19 @@ type posBatchMsg struct {
 }
 
 type hpMsg struct {
-	T      string         `json:"t"`
-	ID     int            `json:"id"`
-	HP     int            `json:"hp"`
-	Shield int            `json:"shield"`
-	Dead   bool           `json:"dead"`
-	Amount float64        `json:"amount"`
-	Kind   string         `json:"kind"`
-	Crit   bool           `json:"crit"`
-	Point  *vec2          `json:"point"`
-	KB     *vec2          `json:"kb"`
-	Src    int            `json:"src"`
+	T      string  `json:"t"`
+	ID     int     `json:"id"`
+	HP     int     `json:"hp"`
+	Shield int     `json:"shield"`
+	Dead   bool    `json:"dead"`
+	Amount float64 `json:"amount"`
+	Kind   string  `json:"kind"`
+	Crit   bool    `json:"crit"`
+	Point  *vec2   `json:"point"`
+	KB     *vec2   `json:"kb"`
+	Src    int     `json:"src"`
+	// Weapon 造成这次伤害的武器 id（死亡回放用）
+	Weapon string         `json:"weapon,omitempty"`
 	Kills  map[string]int `json:"kills"`
 }
 
@@ -361,7 +365,9 @@ type matchEndMsg struct {
 	Winner      string        `json:"winner"`
 	Reason      string        `json:"reason"`
 	RestartInMs int           `json:"restartInMs"`
-	NextMap     string        `json:"nextMap"`
+	// DelayMs 结算弹窗延迟（留出"击败镜头"的时间）
+	DelayMs int    `json:"delayMs"`
+	NextMap string `json:"nextMap"`
 }
 
 type errorMsg struct {

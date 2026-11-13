@@ -210,6 +210,8 @@ export interface HpMsg {
   point?: { x: number; y: number };
   kb?: { x: number; y: number };
   src: number;
+  /** 造成这次伤害的武器 id（死亡回放用） */
+  weapon?: string;
   kills: Record<string, number>;
 }
 
@@ -261,6 +263,8 @@ export interface MatchEndMsg {
   reason: string;
   /** 多少毫秒后自动开始下一局（换图） */
   restartInMs: number;
+  /** 结算弹窗延迟多少毫秒再弹出（留出击败镜头） */
+  delayMs: number;
   nextMap: string;
 }
 
@@ -330,6 +334,8 @@ export type ClientMsg =
       target: number;
       /** 攻击者座位号（-1 = 环境/未知）；房主代报时必须填 */
       src: number;
+      /** 造成伤害的武器 id（死亡回放用） */
+      weapon?: string;
       amount: number;
       kind: string;
       crit: boolean;
