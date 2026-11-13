@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import type { Player } from '../entities/Player';
+import { getRenderScale } from '../config/display';
 
 /**
  * 镜头系统（camera-systems 技能驱动）：
@@ -27,14 +28,35 @@ export class CameraRig {
   private initialized = false;
   /** 屏幕震动偏移（game-feel 写入，跟随之上叠加） */
   readonly shakeOffset = new Phaser.Math.Vector2();
+  /** 目标缩放（按武器切换），每帧平滑逼近 */
+  private zoomTarget: number;
+  /** 变焦速率：越大切换越快（约 0.25s 收敛） */
+  private static readonly ZOOM_RATE = 5.5;
 
   constructor(
     private readonly camera: Phaser.Cameras.Scene2D.Camera,
     private readonly mapWidth: number,
     private readonly mapHeight: number,
-    private readonly zoom: number,
+    zoom: number,
   ) {
+    this.zoomTarget = zoom;
     camera.setZoom(zoom);
+  }
+
+  /**
+   * 渲染分辨率变化（性能降级）时调用：相机 zoom 同比缩放，
+   * 保证"看到的世界范围"完全不变，只是画布像素变少。
+   */
+  rescale(factor: number): void {
+    if (!Number.isFinite(factor) || factor <= 0) return;
+    this.zoomTarget *= factor;
+    this.camera.setZoom(this.camera.zoom * factor);
+  }
+
+  /** 设置目标缩放（武器切换时调用）；镜头会平滑过渡，不会瞬跳 */
+  setZoomTarget(zoom: number): void {
+    const k = getRenderScale();
+    this.zoomTarget = Phaser.Math.Clamp(zoom, 0.4 * k, 2.2 * k);
   }
 
   /** 每帧更新：目标玩家位置 → 平滑跟随 + 预判 + 边界 clamp + 震动叠加 */
@@ -73,9 +95,16 @@ export class CameraRig {
     this.focus.x += (targetX + this.leadOffset.x - this.focus.x) * t;
     this.focus.y += (targetY + this.leadOffset.y - this.focus.y) * t;
 
+    // 变焦：按当前武器平滑逼近目标缩放（狙击拉远 / 近战拉近）
+    const zoomNow = this.camera.zoom;
+    const zt = 1 - Math.exp(-CameraRig.ZOOM_RATE * dt);
+    const zNext = Phaser.Math.Linear(zoomNow, this.zoomTarget, zt);
+    if (Math.abs(zNext - zoomNow) > 0.0004) this.camera.setZoom(zNext);
+    const zoomView = Math.abs(zNext - zoomNow) > 0.0004 ? zNext : zoomNow;
+
     // 边界 clamp：视口（半宽/半高）不越出地图
-    const viewW = this.camera.width / this.zoom;
-    const viewH = this.camera.height / this.zoom;
+    const viewW = this.camera.width / zoomView;
+    const viewH = this.camera.height / zoomView;
     const halfW = viewW / 2;
     const halfH = viewH / 2;
     const minX = halfW;

@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "safe_case",
+  "name": "保险柜",
+  "anchor": "center",
+  "bodyMode": "loose",
+  "parts": [
+    {
+      "type": "rect",
+      "x": -90,
+      "y": 30,
+      "w": 60,
+      "h": 100,
+      "material": "metal"
+    },
+    {
+      "type": "rect",
+      "x": 30,
+      "y": 30,
+      "w": 60,
+      "h": 100,
+      "material": "metal"
+    },
+    {
+      "type": "rect",
+      "x": -90,
+      "y": -30,
+      "w": 180,
+      "h": 60,
+      "material": "metal"
+    }
+  ]
+}

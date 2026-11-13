@@ -1,0 +1,343 @@
+/* 联机覆盖层（顶栏 / 等待提示 / 结算 / 开发聊天），与 Phaser 画布叠加 */
+
+.mp-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  box-sizing: border-box;
+  font-family: 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  color: #e8edf5;
+  pointer-events: none;
+  user-select: none;
+}
+
+.mp-overlay.hidden { display: none; }
+
+/* 没有对局时的等待背景 */
+.mp-overlay:not(.in-match) {
+  background:
+    radial-gradient(1200px 600px at 20% -10%, rgba(52, 152, 219, 0.16), transparent 60%),
+    radial-gradient(900px 500px at 110% 110%, rgba(231, 76, 60, 0.14), transparent 60%),
+    rgba(10, 12, 22, 0.96);
+}
+
+/* ---------- 顶栏 ---------- */
+
+.mp-topbar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: clamp(8px, 1.6vmin, 18px) clamp(10px, 2vmin, 24px);
+  pointer-events: auto;
+}
+
+.mp-sub {
+  font-size: clamp(11px, 1.2vmin, 13px);
+  color: #9aa8bd;
+  display: inline-flex;
+  align-items: center;
+}
+
+.mp-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6b7280;
+  margin-right: 6px;
+}
+.mp-dot.ok { background: #2ecc71; box-shadow: 0 0 8px rgba(46, 204, 113, 0.7); }
+.mp-dot.warn { background: #f1c40f; }
+.mp-dot.bad { background: #e74c3c; }
+
+.mp-spacer { flex: 1; }
+
+/* ---------- 按钮 ---------- */
+
+.mp-btn {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(18, 22, 34, 0.72);
+  color: #e8edf5;
+  border-radius: 9px;
+  padding: 5px 12px;
+  font-size: clamp(11px, 1.25vmin, 14px);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.08s ease;
+}
+.mp-btn:hover { background: rgba(40, 48, 68, 0.9); }
+.mp-btn:active { transform: translateY(1px); }
+
+.mp-fullscreen { backdrop-filter: blur(4px); }
+
+/* ---------- 对局信息条 ---------- */
+
+.mp-hudbar {
+  position: absolute;
+  /* 右上角：左下角留给玩家状态面板（HUD），避免遮挡 */
+  right: clamp(10px, 2vmin, 24px);
+  left: auto;
+  top: clamp(40px, 5.4vmin, 64px);
+  text-align: right;
+  display: none;
+  align-items: center;
+  gap: 8px;
+  background: rgba(12, 16, 26, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 9px;
+  padding: 4px 10px;
+  font-size: clamp(10px, 1.15vmin, 12px);
+  color: #b9c6d8;
+}
+.mp-overlay.in-match .mp-hudbar { display: inline-flex; }
+
+/* ---------- 等待提示 ---------- */
+
+.mp-waiting {
+  position: absolute;
+  inset: 0;
+  display: none;
+  /* 覆盖层整体是 pointer-events:none，这里必须显式打开，否则"开始/观战"点不动 */
+  pointer-events: auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  padding: 0 8vw;
+}
+.mp-waiting.show { display: flex; }
+
+.mp-waiting-main {
+  font-size: clamp(16px, 2.4vmin, 26px);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.mp-progress {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  width: min(460px, 72vw);
+  margin: 2px 0 6px;
+}
+.mp-progress.show { display: flex; }
+
+.mp-progress-track {
+  flex: 1;
+  height: 10px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.mp-progress-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #3b82f6, #22c55e);
+  transition: width 0.18s ease;
+}
+
+.mp-progress-text {
+  min-width: 34px;
+  text-align: right;
+  font-size: 12px;
+  color: #9aa8bd;
+  font-variant-numeric: tabular-nums;
+}
+
+.mp-start-actions {
+  display: none;
+  gap: 10px;
+  margin-top: 6px;
+  align-items: center;
+}
+.mp-start-actions.show { display: flex; }
+
+.mp-start-btn { font-size: clamp(14px, 1.8vmin, 19px); padding: 9px 20px; }
+
+.mp-spectate-btn { font-size: clamp(12px, 1.4vmin, 15px); padding: 8px 16px; }
+
+.mp-spectate-btn.primary {
+  background: linear-gradient(180deg, #3b82f6, #2563eb);
+  border-color: #60a5fa;
+}
+
+.mp-waiting-sub {
+  font-size: clamp(11px, 1.3vmin, 14px);
+  color: #93a0b4;
+  line-height: 1.9;
+  max-width: 70vw;
+}
+
+/* ---------- 结算弹窗 ---------- */
+
+.mp-modal {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4, 6, 12, 0.58);
+  pointer-events: auto;
+}
+.mp-modal.hidden { display: none; }
+
+.mp-modal-card {
+  min-width: min(380px, 84vw);
+  background: rgba(16, 20, 32, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  padding: clamp(14px, 2.2vmin, 22px);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+}
+.mp-modal-card h2 {
+  margin: 0 0 4px;
+  font-size: clamp(16px, 2.2vmin, 24px);
+}
+.mp-modal-list { margin: 12px 0; display: flex; flex-direction: column; gap: 5px; }
+.mp-modal-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: clamp(11px, 1.3vmin, 14px);
+}
+.mp-modal-row .rank { color: #93a0b4; width: 1.8em; }
+.mp-modal-row .nick { font-weight: 600; }
+.mp-modal-row .kills { margin-left: auto; color: #86efac; }
+
+.mp-hint { font-size: clamp(10px, 1.2vmin, 13px); color: #8b98ab; line-height: 1.7; }
+
+/* ---------- 开发模式聊天 ---------- */
+
+.mp-chat {
+  position: absolute;
+  right: clamp(10px, 2vmin, 24px);
+  bottom: clamp(10px, 2vmin, 24px);
+  width: min(340px, 46vw);
+  max-height: 46vh;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(12, 16, 26, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 11px;
+  padding: 8px;
+  backdrop-filter: blur(6px);
+  pointer-events: auto;
+}
+
+.mp-chat-log {
+  flex: 1;
+  min-height: 48px;
+  max-height: 26vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  line-height: 1.5;
+  padding-right: 4px;
+}
+.mp-chat-line { word-break: break-word; }
+.mp-chat-line .who { color: #7dd3fc; font-weight: 600; margin-right: 4px; }
+.mp-chat-line .who.room { color: #fbbf24; }
+.mp-chat-line.system { color: #94a3b8; font-style: italic; }
+
+.mp-chat-row { display: flex; gap: 6px; }
+.mp-chat input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(9, 12, 20, 0.9);
+  color: #e8edf5;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+.mp-chat input:focus { border-color: #60a5fa; }
+
+/* ---------- 致命错误 / 关房 ---------- */
+
+.mp-fatal {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  background: rgba(6, 8, 14, 0.92);
+  font-size: clamp(13px, 1.5vmin, 17px);
+  pointer-events: auto;
+}
+.mp-fatal.hidden { display: none; }
+.mp-fatal .detail { color: #94a3b8; font-size: 12px; max-width: 70vw; text-align: center; }
+
+@media (max-aspect-ratio: 4/5) {
+  .mp-chat { width: min(320px, 72vw); }
+  .mp-progress {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  width: min(460px, 72vw);
+  margin: 2px 0 6px;
+}
+.mp-progress.show { display: flex; }
+
+.mp-progress-track {
+  flex: 1;
+  height: 10px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.mp-progress-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #3b82f6, #22c55e);
+  transition: width 0.18s ease;
+}
+
+.mp-progress-text {
+  min-width: 34px;
+  text-align: right;
+  font-size: 12px;
+  color: #9aa8bd;
+  font-variant-numeric: tabular-nums;
+}
+
+.mp-start-actions {
+  display: none;
+  gap: 10px;
+  margin-top: 6px;
+  align-items: center;
+}
+.mp-start-actions.show { display: flex; }
+
+.mp-start-btn { font-size: clamp(14px, 1.8vmin, 19px); padding: 9px 20px; }
+
+.mp-spectate-btn { font-size: clamp(12px, 1.4vmin, 15px); padding: 8px 16px; }
+
+.mp-spectate-btn.primary {
+  background: linear-gradient(180deg, #3b82f6, #2563eb);
+  border-color: #60a5fa;
+}
+
+.mp-waiting-sub { max-width: 84vw; }
+}

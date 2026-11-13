@@ -79,7 +79,8 @@ export class StickmanRenderer {
   /** 肩部相对原点 */
   static readonly SHOULDER_Y = -34;
 
-  private static readonly HEAD_R = RIG_BONES.HEAD_R;
+  /** 头部半径（头像贴图/昵称定位也要用） */
+  static readonly HEAD_R = RIG_BONES.HEAD_R;
   /** 线宽层次：躯干 > 腿 > 手臂 */
   private static readonly W_TORSO = 7;
   private static readonly W_LEG = 5.5;
@@ -106,6 +107,8 @@ export class StickmanRenderer {
   static lastWeaponHand: Vec2 | null = null;
   /** 双手动作下的长矛世界方向 */
   static lastWeaponAim: number | null = null;
+  /** 本帧头部圆心（visual 局部坐标），供头像贴图/昵称定位 */
+  static lastHead: Vec2 | null = null;
 
   /** 跟随滞后时长（秒）：末端相对根节点的延迟 */
   private static readonly FOLLOW_LAG = 0.055;
@@ -115,6 +118,7 @@ export class StickmanRenderer {
     this.lastAimHand = null;
     this.lastWeaponHand = null;
     this.lastWeaponAim = null;
+    this.lastHead = null;
     const speedPxPerSec = Math.abs(o.velocityX) * 60;
 
     if (o.actionPose) {
@@ -629,6 +633,7 @@ export class StickmanRenderer {
     // 头心继续沿同一方向偏移（保持骨骼链笔直）
     const headX = neck.x + sin * this.HEAD_R * 0.75;
     const headY = neck.y - cos * this.HEAD_R * 0.75 + offsetY;
+    this.lastHead = { x: headX, y: headY };
     g.fillStyle(color, 1);
     g.fillCircle(headX, headY, this.HEAD_R);
   }

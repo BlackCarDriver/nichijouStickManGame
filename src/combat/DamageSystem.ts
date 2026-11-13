@@ -5,6 +5,17 @@ import type { FxSystem } from '../fx/FxSystem';
 import type { DamageInfo, DamageResult } from './DamageInfo';
 
 /**
+ * 联机仲裁钩子：伤害不再本地结算，而是上报服务端，等权威 hp 事件回来再表现。
+ * 单机模式下为 null（走原来的本地结算）。
+ */
+export interface DamageNetSink {
+  /** 上报对玩家的伤害（只有"自己的攻击"会被网络层真正发出） */
+  playerDamage(target: Player, info: DamageInfo): void;
+  /** 地图物体被摧毁 → 广播给所有人（服务端按 id 去重） */
+  objectDestroyed(runtimeId: string): void;
+}
+
+/**
  * 统一伤害入口。
  *
  * 所有伤害来源（子弹 / 近战 / 踢 / 爆炸 / 环境）都调用这里，
@@ -21,10 +32,15 @@ export class DamageSystem {
 
   private readonly fx: FxSystem;
   private readonly destruction: DestructionSystem;
+  private netSink: DamageNetSink | null = null;
 
   constructor(fx: FxSystem, destruction: DestructionSystem) {
     this.fx = fx;
     this.destruction = destruction;
+  }
+
+  setNetSink(sink: DamageNetSink | null): void {
+    this.netSink = sink;
   }
 
   /**
@@ -42,6 +58,15 @@ export class DamageSystem {
       ? { ...info, amount: info.amount * DamageSystem.CRIT_MULTIPLIER, critical: true }
       : info;
 
+    // 联机：火花表现本地照常播（各端都能看到命中），生命值以上报为准
+    if (this.netSink) {
+      if (effective.point) {
+        this.fx.hitSpark(effective.point, effective.normal, crit ? 0xffd166 : 0xff6b6b);
+      }
+      this.netSink.playerDamage(player, effective);
+      return { applied: 0, killed: false };
+    }
+
     const applied = player.applyDamage(effective);
     if (applied <= 0) {
       return { applied: 0, killed: false };
@@ -56,6 +81,9 @@ export class DamageSystem {
   /** 对地图物体造成伤害 */
   damageObject(runtime: MapObjectRuntime, info: DamageInfo): DamageResult {
     const result = this.destruction.damage(runtime, info);
+    if (result.destroyed && this.netSink) {
+      this.netSink.objectDestroyed(runtime.id);
+    }
     return { applied: result.applied, killed: result.destroyed };
   }
 }

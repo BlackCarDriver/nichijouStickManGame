@@ -1,0 +1,8 @@
+{
+  "chatroom": "http://127.0.0.1:4300",
+  "roomId": 20000,
+  "integrationId": "intg_xxxxxxxx",
+  "bridgeSecret": "replace-with-bridge-secret",
+  "exchangeSecret": "",
+  "secretVersion": 1
+}

@@ -35,6 +35,19 @@ import { Hud } from '../ui/Hud';
 import { getFakeProfiles } from '../config/playerProfiles';
 import { DamageNumbers } from '../ui/DamageNumbers';
 import { SlashTrail } from '../fx/SlashTrail';
+import { OnlineMatch } from '../net/OnlineMatch';
+import type { MatchContext, MatchPlayer } from '../net/protocol';
+import { emptyInput } from '../core/InputCommand';
+import type { PlayerProfile } from '../config/playerProfiles';
+import { OffscreenIndicators } from '../ui/OffscreenIndicators';
+import { startGate } from '../net/startGate';
+import {
+  DESIGN_HEIGHT,
+  DESIGN_WIDTH,
+  getRenderScale,
+  RENDER_SCALE_EXPLICIT,
+  setRenderScale,
+} from '../config/display';
 
 /**
  * 玩家配色（按出生点顺序取用）。
@@ -58,8 +71,12 @@ function playerColor(i: number): number {
 }
 /** 空的"按下集合"（自动拾取不需要按键） */
 const EMPTY_PRESSED: ReadonlySet<number> = new Set<number>();
-/** 镜头缩放（固定，聚焦单角色时画面清晰） */
-const CAMERA_ZOOM = 0.9;
+/**
+ * 默认镜头缩放（设计单位；比原来更近）。
+ * 具体武器可在 data/weapons.json 用 cameraZoom 覆盖。
+ * 实际相机 zoom = 设计值 × RENDER_SCALE（内部渲染分辨率放大后保持同一视野）。
+ */
+const CAMERA_ZOOM = 1.12;
 
 /** 启动场景时可传入的数据（编辑器 Play test 用） */
 export interface GameSceneData {
@@ -71,6 +88,8 @@ export interface GameSceneData {
   actions?: ActionClip[];
   /** 返回编辑器等外部回调（Esc 键触发） */
   onExit?: () => void;
+  /** 联机对局：由 RoomController 在 match_start 时传入 */
+  online?: MatchContext;
 }
 
 /**
@@ -95,6 +114,24 @@ export class GameScene extends Phaser.Scene {
   /** playerId → 击杀数 */
   private readonly kills = new Map<number, number>();
   private mapObjects: MapObjectRuntime[] = [];
+  // ---- 联机 ----
+  private onlineData: MatchContext | null = null;
+  private online: OnlineMatch | null = null;
+  /** netId → Player（联机时玩家来自 roster，而非地图出生点数量） */
+  private onlinePlayers = new Map<number, Player>();
+  private onlineNicks = new Map<number, string>();
+  private offscreen: OffscreenIndicators | null = null;
+  /** netId → 聊天室头像地址 / 已生成的圆形头像贴图 key */
+  /** netId → 头像 URL（初始 roster + 中途加入的玩家） */
+  private avatarSources = new Map<number, string>();
+  private avatarUrls = new Map<number, string>();
+  /** 性能看门狗：连续低帧率时降低内部渲染分辨率（每局只降一次） */
+  private perfTimer = 0;
+  private perfLowStreak = 0;
+  private perfDowngraded = false;
+  /** 头像贴图还在异步加载（决定什么时候算"开局就绪"） */
+  private avatarLoading = false;
+  private avatarCircleKeys = new Map<number, string>();
   private oneWayBodies: MatterJS.BodyType[] = [];
   private mapData!: MapData;
   private prefabTable!: Record<string, PrefabData>;
@@ -119,11 +156,12 @@ export class GameScene extends Phaser.Scene {
   private sights!: AimSightSystem;
   private grenades!: GrenadeSystem;
   private pickups!: PickupSystem;
-  private drops!: DropSystem;
-  private itemDrops!: ItemDropSystem;
+  // 联机时掉落/空投由服务端仲裁，这三个本地系统不创建
+  private drops: DropSystem | null = null;
+  private itemDrops: ItemDropSystem | null = null;
+  private weaponSpawner: WeaponSpawnerSystem | null = null;
   private fragments!: FragmentSystem;
   private shrapnel!: ShrapnelSystem;
-  private weaponSpawner!: WeaponSpawnerSystem;
   private impactDamage!: ImpactDamageSystem;
 
   /** 首次用户手势时启动 AudioContext（浏览器自动播放策略） */
@@ -151,7 +189,15 @@ export class GameScene extends Phaser.Scene {
   }
 
   init(data: GameSceneData = {}): void {
-    this.mapData = data.map ?? GameScene.mapFromUrl() ?? getDefaultMap();
+    this.onlineData = data.online ?? null;
+    this.onlinePlayers = new Map();
+    this.onlineNicks = new Map();
+    this.avatarSources = new Map();
+    this.avatarUrls = new Map();
+    this.avatarCircleKeys = new Map();
+    this.mapData = data.online
+      ? getMapByName(data.online.map) ?? getDefaultMap()
+      : data.map ?? GameScene.mapFromUrl() ?? getDefaultMap();
     this.prefabTable = data.prefabs ?? getPrefabTable();
     this.actionClips = data.actions ?? [];
     this.onExit = data.onExit;
@@ -162,6 +208,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   preload(): void {
+    if (this.onlineData) {
+      startGate.setProgress(0.3, '加载地图与贴图…');
+      this.load.on(Phaser.Loader.Events.PROGRESS, (p: number) => {
+        startGate.setProgress(0.3 + Math.max(0, Math.min(1, p)) * 0.5, '加载地图与贴图…');
+      });
+    }
     // 材质贴图 + 地图物体自带的对象级贴图
     const objectTextures = (this.mapData.objects ?? [])
       .map((o) => (o.type === 'rect' ? o.texture : undefined))
@@ -181,8 +233,25 @@ export class GameScene extends Phaser.Scene {
     this.oneWayBodies = this.mapObjects.filter((o) => o.oneWay && o.body).map((o) => o.body!);
 
     const spawn = this.mapData.spawnPoints;
-    this.players = spawn.map((p, i) => new Player(this, p.x, p.y, playerColor(i), this.actionClips));
-    this.cameraTarget = this.players[0];
+    if (this.onlineData) {
+      // 联机：玩家列表来自服务端 roster（顺序、颜色、出生点都由服务端分配）
+      const roster = [...this.onlineData.players].sort((a, b) => a.netId - b.netId);
+      this.players = roster.map((entry) => {
+        const point = spawn[entry.spawn % spawn.length];
+        const player = new Player(this, point.x, point.y, playerColor(entry.color), this.actionClips);
+        this.onlinePlayers.set(entry.netId, player);
+        this.onlineNicks.set(entry.netId, entry.nick);
+        return player;
+      });
+    } else {
+      // 单机双人沙盒：只取前两个出生点（地图现在为多人乱斗准备了更多出生点）
+      this.players = spawn
+        .slice(0, 2)
+        .map((p, i) => new Player(this, p.x, p.y, playerColor(i), this.actionClips));
+    }
+    const localPlayer =
+      this.onlineData && this.onlineData.you >= 0 ? this.onlinePlayers.get(this.onlineData.you) : undefined;
+    this.cameraTarget = localPlayer ?? this.players[0];
     for (const player of this.players) {
       this.bodyToPlayer.set(player.body.id, player);
     }
@@ -228,11 +297,13 @@ export class GameScene extends Phaser.Scene {
 
     // ---- 掉落 / 碎片 ----
     this.pickups = new PickupSystem(this, this.bodyToPlayer, this.fx);
-    this.drops = new DropSystem(this, this.pickups, this.mapData);
-    // 补给道具（医疗包/防弹衣）：地图固定点 + 维持数量
-    this.itemDrops = new ItemDropSystem(this, this.pickups, this.mapData);
-    // 武器掉落点（固定/随机武器，可配刷新）
-    this.weaponSpawner = new WeaponSpawnerSystem(this, this.pickups, this.mapData);
+    if (!this.onlineData) {
+      this.drops = new DropSystem(this, this.pickups, this.mapData);
+      // 补给道具（医疗包/防弹衣）：地图固定点 + 维持数量
+      this.itemDrops = new ItemDropSystem(this, this.pickups, this.mapData);
+      // 武器掉落点（固定/随机武器，可配刷新）
+      this.weaponSpawner = new WeaponSpawnerSystem(this, this.pickups, this.mapData);
+    }
     this.fragments = new FragmentSystem(this);
     // 爆炸破片（手榴弹/火箭炮）：真刚体 + 命中伤害
     this.shrapnel = new ShrapnelSystem(
@@ -248,15 +319,20 @@ export class GameScene extends Phaser.Scene {
     this.damageNumbers = new DamageNumbers(this);
     this.slashTrail = new SlashTrail(this);
     this.hud = new Hud(this);
-    // 昵称/头像：现阶段用假资料占位，接联机后换成房间玩家列表
-    this.hud.bind(this.players, getFakeProfiles(this.players.length));
+    // 单机用假资料占位；联机用服务端下发的房间玩家昵称
+    this.hud.bind(this.players, this.profiles());
     this.hud.bindKills(this.kills);
     // 出生空手：所有武器一律靠捡（天降武器 + 场上掉落物）
 
     const cam = this.cameras.main;
     cam.setBackgroundColor('#1a1a2e');
     cam.setBounds(0, 0, this.mapData.width, this.mapData.height);
-    this.cameraRig = new CameraRig(cam, this.mapData.width, this.mapData.height, CAMERA_ZOOM);
+    this.cameraRig = new CameraRig(
+      cam,
+      this.mapData.width,
+      this.mapData.height,
+      CAMERA_ZOOM * getRenderScale(),
+    );
     this.gameFeel = new GameFeel();
     this.hitStop = new HitStop();
     this.audio = new AudioSystem();
@@ -269,7 +345,141 @@ export class GameScene extends Phaser.Scene {
     // M 键静音切换
     this.input.keyboard?.on('keydown-M', () => this.audio.toggleMute());
 
+    if (this.onlineData) {
+      this.offscreen = new OffscreenIndicators(this);
+      this.online = new OnlineMatch({
+        scene: this,
+        ctx: this.onlineData,
+        players: this.onlinePlayers,
+        pickups: this.pickups,
+        destruction: this.destruction,
+        damage: this.damageSystem,
+        kills: this.kills,
+        onRosterChanged: () => this.onRosterChanged(),
+        spawnPlayer: (entry, stat) => this.spawnNetPlayer(entry, stat),
+        onChat: (nick, text) => this.showChatBubble(nick, text),
+      });
+      // 昵称先就位；头像贴图异步加载完后再补
+      for (const entry of this.onlineData.players) {
+        if (entry.avatar) this.avatarSources.set(entry.netId, entry.avatar);
+      }
+      for (const [netId, player] of this.onlinePlayers) this.applyIdentity(netId, player);
+      this.loadAvatars();
+      startGate.setProgress(0.92, '准备战场…');
+      if (!this.avatarLoading) {
+        // 没有头像要加载：下一帧算就绪（先让首帧渲染完，再弹"点击 W 开始"）
+        this.time.delayedCall(0, () => startGate.markReady());
+      }
+    }
+
     this.bindEvents();
+  }
+
+  /** 玩家展示资料：联机取 roster 昵称，单机取假数据占位 */
+  private profiles(): PlayerProfile[] {
+    if (!this.onlineData) return getFakeProfiles(this.players.length);
+    return this.players.map((player) => ({
+      nickname: this.onlineNicks.get(this.netIdOfEntity(player)) ?? '玩家',
+    }));
+  }
+
+  /** 给玩家套上聊天室昵称与（已加载好的）圆形头像 */
+  private applyIdentity(netId: number, player: Player): void {
+    const nick = this.onlineNicks.get(netId) ?? '';
+    const circleKey = this.avatarCircleKeys.get(netId);
+    player.setIdentity(nick, circleKey);
+  }
+
+  /** 联机：加载聊天室头像（跨域头像加载失败时自动退回程序化火柴人头像） */
+  private loadAvatars(): void {
+    this.load.crossOrigin = 'anonymous';
+    let pending = 0;
+    for (const [netId, url] of this.avatarSources) {
+      if (!url) continue;
+      const key = avatarRawKey(netId, url);
+      this.avatarUrls.set(netId, key);
+      if (this.textures.exists(key) || this.textures.exists(`${key}_c`)) continue;
+      this.load.image(key, url);
+      pending++;
+    }
+    if (pending === 0) {
+      this.finishAvatars();
+      return;
+    }
+    this.avatarLoading = true;
+    this.load.once(Phaser.Loader.Events.COMPLETE, () => this.finishAvatars());
+    this.load.start();
+  }
+
+  /** 头像加载完成：做成圆形贴图 → 应用到玩家头顶 + HUD */
+  private finishAvatars(): void {
+    for (const [netId, rawKey] of this.avatarUrls) {
+      if (!this.textures.exists(rawKey)) continue;
+      const circleKey = `${rawKey}_c`;
+      if (!this.textures.exists(circleKey) && !makeCircleAvatar(this, rawKey, circleKey)) continue;
+      this.avatarCircleKeys.set(netId, circleKey);
+      const player = this.onlinePlayers.get(netId);
+      if (player) this.applyIdentity(netId, player);
+    }
+    this.hud.bind(this.players, this.profiles());
+    this.avatarLoading = false;
+    startGate.markReady();
+  }
+
+  /** 对局中途加入的新玩家（服务端 player_join） */
+  private spawnNetPlayer(entry: MatchPlayer, stat: { hp: number; shield: number; dead: boolean; kills: number }): void {
+    if (this.onlinePlayers.has(entry.netId)) return;
+    const spawn = this.mapData.spawnPoints[entry.spawn % this.mapData.spawnPoints.length];
+    const player = new Player(this, spawn.x, spawn.y, playerColor(entry.color), this.actionClips);
+    player.netControlled = true;
+    player.autoRespawn = false;
+    player.envDamageReporter = (amount) => this.online?.reportEnvDamage(amount);
+    this.players.push(player);
+    this.onlinePlayers.set(entry.netId, player);
+    this.onlineNicks.set(entry.netId, entry.nick);
+    if (entry.avatar) {
+      this.avatarSources.set(entry.netId, entry.avatar);
+      this.loadAvatars();
+    }
+    this.bodyToPlayer.set(player.body.id, player);
+    this.kills.set(player.id, stat.kills ?? 0);
+    player.applyNetSnapshot({ hp: stat.hp, shield: stat.shield, dead: stat.dead });
+    this.applyIdentity(entry.netId, player);
+    this.hud.bind(this.players, this.profiles());
+  }
+
+  /** 聊天室消息 → 对应火柴人头顶气泡 */
+  private showChatBubble(nick: string, text: string): void {
+    for (const [netId, name] of this.onlineNicks) {
+      if (name !== nick) continue;
+      this.onlinePlayers.get(netId)?.showChat(text);
+      return;
+    }
+  }
+
+  /** 实体 → 网络座位号（不依赖 OnlineMatch 是否已创建） */
+  private netIdOfEntity(player: Player): number {
+    for (const [netId, p] of this.onlinePlayers) {
+      if (p === player) return netId;
+    }
+    return -1;
+  }
+
+  /** 有玩家退出后重建 HUD（OnlineMatch 已销毁对应 Player） */
+  private onRosterChanged(): void {
+    const entries = [...this.onlinePlayers.entries()].sort((a, b) => a[0] - b[0]);
+    for (const player of this.players) {
+      if (!entries.some(([, p]) => p === player)) {
+        this.bodyToPlayer.delete(player.body.id);
+        this.kills.delete(player.id);
+      }
+    }
+    this.players = entries.map(([, p]) => p);
+    if (this.cameraTarget && !entries.some(([, p]) => p === this.cameraTarget)) {
+      this.cameraTarget = this.players[0] ?? null;
+      if (this.cameraTarget) this.cameraRig?.snapTo(this.cameraTarget.container.x, this.cameraTarget.container.y);
+    }
+    this.hud.bind(this.players, this.profiles());
   }
 
   /** 事件接线（场景重启时必须解除，避免重复触发/泄漏） */
@@ -298,6 +508,11 @@ export class GameScene extends Phaser.Scene {
 
     // 投掷武器插不进去（目标硬度 >= 投掷伤害）→ 掉到地上变成可拾取物
     const onThrownBlocked = (weaponId: string, x: number, y: number): void => {
+      if (this.online) {
+        // 联机：由服务端生成掉落并广播，否则这件武器只存在于本地
+        this.online.requestDrop(weaponId, -1, x, y);
+        return;
+      }
       this.pickups.spawn(weaponId, x, y, { falling: true });
     };
 
@@ -342,6 +557,8 @@ export class GameScene extends Phaser.Scene {
     const onPlayerShielded = (player: Player, absorbed: number, _kind: string): void => {
       this.hitStop.trigger(HitStop.durationForDamage(absorbed) * 0.6);
       this.audio.play('hit');
+      // 护盾被消耗：灰色气泡（消耗量）
+      this.damageNumbers.show(player, absorbed, { kind: 'shieldLoss' });
       this.fx.hitSpark(
         { x: player.container.x, y: player.container.y - 20 },
         { x: 0, y: -1 },
@@ -383,6 +600,8 @@ export class GameScene extends Phaser.Scene {
     // 死亡 → 音效 + 击杀计数（记录凶手）
     const onPlayerDied = (victim: Player, killerId?: number): void => {
       this.audio.play('death');
+      // 联机：击杀数由服务端 hp 消息下发，本地不再累加
+      if (this.online) return;
       if (killerId !== undefined && killerId !== victim.id) {
         this.kills.set(killerId, (this.kills.get(killerId) ?? 0) + 1);
       }
@@ -429,6 +648,14 @@ export class GameScene extends Phaser.Scene {
       this.events.off('player-shielded', onPlayerShielded);
       this.events.off('super-mode', onSuperMode);
       this.events.off('carried-grenade-hit', onCarriedGrenadeHit);
+      try {
+        this.online?.dispose();
+      } catch (err) {
+        console.error('[GameScene] 联机层清理失败:', err);
+      }
+      this.online = null;
+      this.offscreen?.destroy();
+      this.offscreen = null;
       this.teardownSystems();
     });
 
@@ -454,7 +681,7 @@ export class GameScene extends Phaser.Scene {
       ['pickups', () => this.pickups.destroy()],
       ['fragments', () => this.fragments.destroy()],
       ['shrapnel', () => this.shrapnel.destroy()],
-      ['weaponSpawner', () => this.weaponSpawner.destroy()],
+      ['weaponSpawner', () => this.weaponSpawner?.destroy()],
       ['impactDamage', () => this.impactDamage.destroy()],
       ['weapon', () => this.weaponSystem.destroy()],
       ['fx', () => this.fx.destroy()],
@@ -486,6 +713,13 @@ export class GameScene extends Phaser.Scene {
       this.physicsFrozen = false;
     }
 
+    this.updatePerformance(delta);
+
+    if (this.online) {
+      this.updateOnline(delta);
+      return;
+    }
+
     const cmd1 = this.inputManager.readP1();
     const cmd2 = this.inputManager.readP2();
     const cmds = [cmd1, cmd2];
@@ -515,22 +749,167 @@ export class GameScene extends Phaser.Scene {
     // 每帧检测自动拾取（空手路过武器 / 手榴弹进背包）
     this.pickups.tryPickup(EMPTY_PRESSED);
     this.pickups.update(delta);
-    this.drops.update(delta);
-    this.itemDrops.update(delta);
+    this.drops?.update(delta);
+    this.itemDrops?.update(delta);
     this.fragments.update(delta);
     this.shrapnel.update(delta);
-    this.weaponSpawner.update(delta);
+    this.weaponSpawner?.update(delta);
     this.updateOneWayCollisions();
     syncCompoundVisuals(this.mapObjects);
     this.updateCameraTarget(cmd1, cmd2);
     if (this.cameraTarget && this.cameraRig) {
       this.cameraRig.update(this.cameraTarget, delta);
     }
+    this.updateCameraZoom(this.cameraTarget);
     this.gameFeel.update(this.cameras.main, this.cameraRig.shakeOffset, delta);
     this.fx.update(delta);
     this.slashTrail.update(delta, this.players);
     this.damageNumbers.update(delta);
     this.hud.update();
+  }
+
+  /**
+   * 联机对局的主循环。
+   *
+   * 与单机的区别：
+   * - 每个玩家一帧一个 InputCommand：本地玩家来自键鼠，远端玩家来自服务端中继的输入流；
+   * - 镜头固定跟随本地玩家（旁观者跟随第一个玩家）；
+   * - 瞄准只由本地玩家用鼠标决定，远端玩家的瞄准角来自网络。
+   */
+  private updateOnline(delta: number): void {
+    const online = this.online!;
+    const local = online.localPlayer;
+
+    let localCmd = emptyInput();
+    if (local) {
+      // 开局闸门：还没按 W（或选择观战）时冻结本地输入，避免"没开始就能动"
+      const blocked = startGate.blocked;
+      localCmd = blocked ? emptyInput() : this.inputManager.readP1();
+      if (!blocked) this.aimLocal(localCmd, local);
+      const grenadeToggle = !blocked && this.inputManager.readGrenadeToggle();
+      if (grenadeToggle) this.grenades.toggle(local);
+      online.feedLocalInput(localCmd, grenadeToggle);
+      online.sendLocalInput(localCmd);
+    }
+
+    // 逐玩家组装本帧指令（远端要先取"手榴弹切换"边沿，再消费其它边沿）
+    const cmds: InputCommand[] = [];
+    for (const player of this.players) {
+      const netId = online.netIdOf(player);
+      if (netId === online.localNetId) {
+        cmds.push(localCmd);
+        continue;
+      }
+      if (online.takeGrenadeToggle(netId)) this.grenades.toggle(player);
+      cmds.push(online.commandFor(netId));
+    }
+
+    this.players.forEach((player, i) => player.update(cmds[i] ?? emptyInput(), delta));
+
+    this.weaponSystem.update(delta);
+    this.players.forEach((player, i) => {
+      this.weaponSystem.updateContinuous(player, cmds[i]?.attackHeld ?? false, delta);
+    });
+    this.handleAttacks(cmds);
+    this.handleSecondary(cmds);
+
+    this.sights.update(this.players);
+    this.grenades.update(delta, this.players);
+    this.projectileSystem.update(delta);
+    this.pickups.tryPickup(EMPTY_PRESSED);
+    this.pickups.update(delta);
+    this.fragments.update(delta);
+    this.shrapnel.update(delta);
+    this.updateOneWayCollisions();
+    syncCompoundVisuals(this.mapObjects);
+
+    // 镜头：本地玩家优先；旁观者跟随第一个仍在场的玩家
+    const target = local ?? this.players[0] ?? null;
+    this.cameraTarget = target;
+    if (target && this.cameraRig) this.cameraRig.update(target, delta);
+    this.updateCameraZoom(target);
+
+    this.gameFeel.update(this.cameras.main, this.cameraRig.shakeOffset, delta);
+    this.fx.update(delta);
+    this.slashTrail.update(delta, this.players);
+    this.damageNumbers.update(delta);
+    this.hud.update();
+    this.offscreen?.update(this.players, local, this.onlineNicks, (p) => online.netIdOf(p));
+    online.update(delta);
+  }
+
+  /**
+   * 性能看门狗。
+   *
+   * 2 倍分辨率意味着 4 倍像素填充，低端集显/老手机会吃力。这里每秒采样一次
+   * `game.loop.actualFps`：连续 3 秒低于 45fps 就把内部渲染倍数降一档（2→1），
+   * 同时相机 zoom 与 UI 补偿同比缩放，玩家看到的画面范围不变。
+   *
+   * `?pixel=N` 显式指定分辨率时不自动降级（方便对照测试）。
+   */
+  private updatePerformance(deltaMs: number): void {
+    if (this.perfDowngraded || RENDER_SCALE_EXPLICIT) return;
+    const scale = getRenderScale();
+    if (scale <= 1) return;
+
+    this.perfTimer += deltaMs;
+    if (this.perfTimer < 1000) return;
+    this.perfTimer = 0;
+
+    const fps = this.game.loop.actualFps;
+    if (fps > 0 && fps < 45) this.perfLowStreak++;
+    else this.perfLowStreak = Math.max(0, this.perfLowStreak - 1);
+
+    if (this.perfLowStreak < 3) return;
+
+    this.perfDowngraded = true;
+    this.perfLowStreak = 0;
+    try {
+      // 分级降级：2 → 1.5 → 1（触屏设备从 1.5 起步）
+      this.applyRenderScale(scale > 1.5 ? 1.5 : 1);
+    } catch (err) {
+      console.warn('[perf] 降级渲染分辨率失败:', err);
+    }
+    console.info(`[perf] 帧率偏低（${fps.toFixed(1)}fps），内部渲染分辨率降为 ${getRenderScale()}×`);
+  }
+
+  /**
+   * 切换内部渲染倍数（性能降级用）：
+   * 画布像素、相机 zoom、HUD/箭头补偿三者同比缩放，画面范围与 UI 尺寸保持不变。
+   */
+  applyRenderScale(next: number): void {
+    const cur = getRenderScale();
+    if (next === cur || next < 1) return;
+    setRenderScale(next);
+    const k = getRenderScale();
+    this.scale.resize(DESIGN_WIDTH * k, DESIGN_HEIGHT * k);
+    this.cameraRig?.rescale(k / cur);
+    this.hud.bind(this.players, this.profiles());
+  }
+
+  /**
+   * 镜头视觉范围跟着当前武器走：
+   * - 狙击/激光/火箭 → 拉远（看清远处目标）
+   * - 匕首/长矛/光刀 → 拉近（看清打击动作）
+   * 手榴弹持握时按手榴弹的配置。
+   */
+  private updateCameraZoom(focus: Player | null): void {
+    if (!this.cameraRig) return;
+    let zoom = CAMERA_ZOOM;
+    if (focus) {
+      const weaponId = focus.grenadeMode ? 'grenade' : focus.heldWeapon?.id;
+      const weapon = weaponId ? getWeapon(weaponId) : undefined;
+      if (weapon?.cameraZoom && weapon.cameraZoom > 0) zoom = weapon.cameraZoom;
+    }
+    this.cameraRig.setZoomTarget(zoom * getRenderScale());
+  }
+
+  /** 联机：本地玩家的瞄准只跟自己的鼠标 */
+  private aimLocal(cmd: InputCommand, player: Player): void {
+    const pointer = this.input.activePointer;
+    const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+    const shoulder = player.shoulderWorld;
+    cmd.aimAngle = Math.atan2(world.y - shoulder.y, world.x - shoulder.x);
   }
 
   /**
@@ -665,5 +1044,43 @@ export class GameScene extends Phaser.Scene {
       cmd.kick ||
       cmd.swap
     );
+  }
+}
+
+/** 头像贴图 key（同一 netId 换头像时会重新加载） */
+function avatarRawKey(netId: number, url: string): string {
+  let hash = 0;
+  for (let i = 0; i < url.length; i++) hash = (hash * 31 + url.charCodeAt(i)) | 0;
+  return `avatar_${netId}_${(hash >>> 0).toString(36)}`;
+}
+
+/**
+ * 把方形/任意比例头像裁成圆形贴图（用 canvas 一次性处理，避免运行时遮罩）。
+ * 返回 false 表示拿不到源图（加载失败/跨域被拒），调用方退回程序化头像。
+ */
+function makeCircleAvatar(scene: Phaser.Scene, rawKey: string, outKey: string): boolean {
+  const source = scene.textures.get(rawKey)?.getSourceImage() as HTMLImageElement | undefined;
+  if (!source || !source.width) return false;
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return false;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+  ctx.clip();
+  // cover 裁切：保持比例填满圆形
+  const scale = Math.max(size / source.width, size / source.height);
+  const w = source.width * scale;
+  const h = source.height * scale;
+  ctx.drawImage(source, (size - w) / 2, (size - h) / 2, w, h);
+  ctx.restore();
+  try {
+    scene.textures.addCanvas(outKey, canvas);
+    return true;
+  } catch {
+    return false;
   }
 }

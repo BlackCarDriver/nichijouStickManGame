@@ -188,6 +188,12 @@ export interface SuperModeConfig {
 export interface WeaponJson {
   name: string;
   attackMode: AttackMode;
+  /**
+   * 镜头缩放（越大越近，1 = 标准视角）。
+   * 远程武器（狙击/激光）拉远看清战场，近战武器拉近增强打击感。
+   * 不填 = 游戏内默认（1.12）。
+   */
+  cameraZoom?: number;
   /** 是否全自动（长按连射） */
   automatic: boolean;
   /** 射速（发/秒） */

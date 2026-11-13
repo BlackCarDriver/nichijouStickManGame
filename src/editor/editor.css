@@ -251,6 +251,18 @@ body {
 
 .ed-grid2 .ed-field {
   margin: 0;
+  /* 两列里的字段改成"标签在上、输入框整列宽"，否则 250px 侧栏里的数字框会被挤成几像素 */
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+}
+
+.ed-grid2 .ed-field-label {
+  max-width: none;
+}
+
+.ed-grid2 .ed-input {
+  min-width: 60px;
 }
 
 .ed-check {

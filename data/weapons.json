@@ -20,7 +20,8 @@
         "maxBounces": 3,
         "bounceDamageMul": 0.7,
         "pierceDamageMul": 0.6,
-        "piercePlayers": false
+        "piercePlayers": false,
+        "bounceRestitution": 0.72
       },
       "recoil": {
         "push": 1.2,
@@ -33,7 +34,8 @@
         "length": 22,
         "thickness": 5,
         "color": "#2b2b36"
-      }
+      },
+      "cameraZoom": 1.08
     },
     "ak47": {
       "name": "AK47",
@@ -54,7 +56,8 @@
         "bounceDamageMul": 0.7,
         "pierceDamageMul": 0.6,
         "piercePlayers": false,
-        "spreadDeg": 3.5
+        "spreadDeg": 3.5,
+        "bounceRestitution": 0.72
       },
       "recoil": {
         "push": 0.9,
@@ -67,7 +70,8 @@
         "length": 40,
         "thickness": 6,
         "color": "#3a3a46"
-      }
+      },
+      "cameraZoom": 1.0
     },
     "laser": {
       "name": "激光枪",
@@ -97,7 +101,8 @@
         "length": 34,
         "thickness": 5,
         "color": "#2f4858"
-      }
+      },
+      "cameraZoom": 0.82
     },
     "rocket": {
       "name": "火箭炮",
@@ -142,7 +147,8 @@
         "length": 44,
         "thickness": 9,
         "color": "#4a4a55"
-      }
+      },
+      "cameraZoom": 0.9
     },
     "dagger": {
       "name": "匕首",
@@ -173,7 +179,8 @@
         "length": 26,
         "thickness": 4,
         "color": "#cfd8e3"
-      }
+      },
+      "cameraZoom": 1.24
     },
     "spear": {
       "name": "长矛",
@@ -204,7 +211,8 @@
         "length": 62,
         "thickness": 3,
         "color": "#b98b4e"
-      }
+      },
+      "cameraZoom": 1.18
     },
     "sniper": {
       "name": "狙击枪",
@@ -224,7 +232,8 @@
         "maxBounces": 1,
         "bounceDamageMul": 0.5,
         "pierceDamageMul": 1,
-        "piercePlayers": false
+        "piercePlayers": false,
+        "bounceRestitution": 0.7
       },
       "sight": {
         "color": "#ff9b9b",
@@ -243,7 +252,8 @@
         "length": 58,
         "thickness": 5,
         "color": "#2f3a2f"
-      }
+      },
+      "cameraZoom": 0.6
     },
     "shotgun": {
       "name": "霰弹枪",
@@ -260,12 +270,13 @@
         "size": 2.4,
         "color": "#ffd8a8",
         "trail": 10,
-        "maxBounces": 0,
-        "bounceDamageMul": 1,
+        "maxBounces": 2,
+        "bounceDamageMul": 0.55,
         "pierceDamageMul": 1,
         "piercePlayers": false,
         "pellets": 7,
-        "spreadDeg": 5.3
+        "spreadDeg": 5.3,
+        "bounceRestitution": 0.68
       },
       "recoil": {
         "push": 7.0,
@@ -278,7 +289,8 @@
         "length": 46,
         "thickness": 7,
         "color": "#5a3d2b"
-      }
+      },
+      "cameraZoom": 0.96
     },
     "lightsaber": {
       "name": "光刀",
@@ -311,7 +323,8 @@
         "thickness": 5,
         "color": "#8ef7ff",
         "glow": "#3ad2ff"
-      }
+      },
+      "cameraZoom": 1.12
     },
     "grenade": {
       "name": "手榴弹",
@@ -351,7 +364,8 @@
         "length": 12,
         "thickness": 8,
         "color": "#4e6b3a"
-      }
+      },
+      "cameraZoom": 1.08
     }
   }
 }

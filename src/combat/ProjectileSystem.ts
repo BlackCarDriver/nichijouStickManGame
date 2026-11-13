@@ -68,6 +68,12 @@ interface Projectile {
   elapsed: number;
   bounceLeft: number;
   alive: boolean;
+  /**
+   * 是否仍忽略发射者本人。
+   * 初始 true（子弹不会立刻打到自己），**反弹一次后置 false**：
+   * 跳弹可以打回自己（伤害/速度都已按反弹衰减）。
+   */
+  ignoreOwner: boolean;
   ignore: MatterJS.BodyType[];
   color: number;
   smokeTimer: number;
@@ -180,6 +186,7 @@ export class ProjectileSystem {
       elapsed: 0,
       bounceLeft: Math.max(bullet.maxBounces, bullet.bounceAny ? 6 : 0),
       alive: true,
+      ignoreOwner: true,
       ignore: [],
       color: parseColor(bullet.color, 0xffffff),
       smokeTimer: 0,
@@ -275,7 +282,7 @@ export class ProjectileSystem {
         { x: p.x, y: p.y },
         { x: dirX, y: dirY },
         maxDist,
-        { ignore: [p.ownerBody, ...p.ignore], maxHits: 1 },
+        { ignore: [...(p.ignoreOwner ? [p.ownerBody] : []), ...p.ignore], maxHits: 1 },
       );
       const hit = hits[0];
 
@@ -400,11 +407,14 @@ export class ProjectileSystem {
     const canBounce = material?.bulletBounce || p.bullet.bounceAny;
     if (canBounce && p.bounceLeft > 0) {
       const dot = p.vx * hit.normal.x + p.vy * hit.normal.y;
-      const rest = p.bullet.bounceRestitution ?? 1;
+      // 反弹后速度衰减（未配置时默认 0.72，避免弹来弹去一直是原速）
+      const rest = p.bullet.bounceRestitution ?? 0.72;
       p.vx = (p.vx - 2 * dot * hit.normal.x) * rest;
       p.vy = (p.vy - 2 * dot * hit.normal.y) * rest;
       p.bounceLeft -= 1;
       p.damageMul *= p.bullet.bounceDamageMul;
+      // 反弹一次后不再免疫：跳弹可以打回自己（自伤由服务端/本地伤害系统正常结算）
+      p.ignoreOwner = false;
       p.x = hit.point.x + hit.normal.x * 0.8;
       p.y = hit.point.y + hit.normal.y * 0.8;
       return false;

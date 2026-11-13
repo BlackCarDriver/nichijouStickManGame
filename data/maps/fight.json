@@ -1,0 +1,271 @@
+{
+  "version": 1,
+  "name": "fight",
+  "width": 2400,
+  "height": 1200,
+  "spawnPoints": [
+    {
+      "x": 80,
+      "y": 1071
+    },
+    {
+      "x": 640,
+      "y": 1071
+    },
+    {
+      "x": 1200,
+      "y": 1071
+    },
+    {
+      "x": 270,
+      "y": 811
+    },
+    {
+      "x": 460,
+      "y": 811
+    },
+    {
+      "x": 1570,
+      "y": 811
+    },
+    {
+      "x": 1770,
+      "y": 811
+    },
+    {
+      "x": 970,
+      "y": 371
+    }
+  ],
+  "weaponDropZones": [
+    {
+      "x": 200,
+      "y": 80,
+      "w": 2000,
+      "h": 100
+    }
+  ],
+  "objects": [
+    {
+      "id": "ground",
+      "type": "rect",
+      "x": 0,
+      "y": 1120,
+      "w": 2400,
+      "h": 80,
+      "material": "ground"
+    },
+    {
+      "id": "wall_left",
+      "type": "rect",
+      "x": 0,
+      "y": 0,
+      "w": 40,
+      "h": 1200,
+      "material": "wall"
+    },
+    {
+      "id": "wall_right",
+      "type": "rect",
+      "x": 2360,
+      "y": 0,
+      "w": 40,
+      "h": 1200,
+      "material": "wall"
+    },
+    {
+      "type": "rect",
+      "x": 240,
+      "y": 860,
+      "w": 620,
+      "h": 20,
+      "material": "ground",
+      "id": "o1",
+      "oneWay": true
+    },
+    {
+      "type": "rect",
+      "x": 660,
+      "y": 640,
+      "w": 1120,
+      "h": 40,
+      "material": "ground",
+      "id": "o2",
+      "oneWay": true
+    },
+    {
+      "type": "rect",
+      "x": 1540,
+      "y": 860,
+      "w": 660,
+      "h": 20,
+      "material": "ground",
+      "id": "o3",
+      "oneWay": true
+    },
+    {
+      "type": "rect",
+      "x": 940,
+      "y": 420,
+      "w": 600,
+      "h": 20,
+      "material": "ground",
+      "id": "o4",
+      "oneWay": true
+    },
+    {
+      "type": "rect",
+      "x": 920,
+      "y": 460,
+      "w": 100,
+      "h": 180,
+      "material": "wood",
+      "id": "o5"
+    },
+    {
+      "type": "rect",
+      "x": 1480,
+      "y": 460,
+      "w": 100,
+      "h": 180,
+      "material": "wood",
+      "id": "o6"
+    },
+    {
+      "type": "rect",
+      "x": 1130,
+      "y": 280,
+      "w": 200,
+      "h": 140,
+      "material": "ice",
+      "id": "o7"
+    },
+    {
+      "type": "polygon",
+      "x": 1240,
+      "y": 600,
+      "material": "wood_2",
+      "id": "o9",
+      "vertices": [
+        {
+          "x": -13.33333333333316,
+          "y": -79.9999999999999
+        },
+        {
+          "x": 246.66666666666643,
+          "y": 39.99999999999989
+        },
+        {
+          "x": -233.33333333333326,
+          "y": 40
+        }
+      ]
+    },
+    {
+      "type": "circle",
+      "x": 1420,
+      "y": 560,
+      "radius": 40,
+      "material": "wood_2",
+      "id": "o10"
+    },
+    {
+      "type": "circle",
+      "x": 1060,
+      "y": 560,
+      "radius": 40,
+      "material": "wood_2",
+      "id": "o11"
+    },
+    {
+      "type": "circle",
+      "x": 1120,
+      "y": 520,
+      "radius": 40,
+      "material": "wood_2",
+      "id": "o12"
+    },
+    {
+      "type": "circle",
+      "x": 1340,
+      "y": 540,
+      "radius": 30,
+      "material": "wood_2",
+      "id": "o13"
+    }
+  ],
+  "prefabs": [
+    {
+      "id": "p1",
+      "ref": "boxs",
+      "x": 960,
+      "y": 1000
+    },
+    {
+      "id": "p2",
+      "ref": "table_wood",
+      "x": 560,
+      "y": 1080
+    },
+    {
+      "id": "p3",
+      "ref": "table_wood",
+      "x": 760,
+      "y": 1080
+    }
+  ],
+  "joints": [],
+  "weapons": [
+    {
+      "x": 242.62253795619654,
+      "y": 129.40092554748367,
+      "mode": "fixed",
+      "pool": [
+        "spear"
+      ],
+      "respawnMs": 10000,
+      "maxRespawns": 0,
+      "weapon": "spear"
+    },
+    {
+      "x": 860,
+      "y": 140,
+      "mode": "fixed",
+      "weapon": "ak47",
+      "respawnMs": 10000,
+      "maxRespawns": 0
+    },
+    {
+      "x": 1100,
+      "y": 140,
+      "mode": "fixed",
+      "weapon": "shotgun",
+      "respawnMs": 10000,
+      "maxRespawns": 0
+    },
+    {
+      "x": 380,
+      "y": 140,
+      "mode": "fixed",
+      "weapon": "grenade",
+      "respawnMs": 10000,
+      "maxRespawns": 0
+    },
+    {
+      "x": 1300,
+      "y": 140,
+      "mode": "fixed",
+      "weapon": "rocket",
+      "respawnMs": 10000,
+      "maxRespawns": 0
+    },
+    {
+      "x": 1235.0816919707975,
+      "y": 360.1089226277302,
+      "mode": "fixed",
+      "weapon": "lightsaber",
+      "respawnMs": 10000,
+      "maxRespawns": 0
+    }
+  ]
+}

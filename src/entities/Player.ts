@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { Entity } from '../core/Entity';
 import type { InputCommand } from '../core/InputCommand';
 import { StickmanRenderer } from '../render/StickmanRenderer';
+import { TEXT_RESOLUTION } from '../config/display';
 import type { StickmanPose } from '../render/StickmanRenderer';
 import { GameFeel } from '../feel/GameFeel';
 import { COLLISION_CATEGORY, PLAYER_MASK_ALL } from '../core/CollisionCategories';
@@ -151,10 +152,33 @@ export class Player extends Entity {
 
   // ---- 生命值 ----
   /** 护盾上限（防弹衣/超级战士共用同一个上限） */
+  /** 普通角色的护盾上限（一件防弹衣 +50，最多两件） */
+  static readonly BASE_MAX_SHIELD = 100;
+  /** 超级战士（光刀）的护盾上限 */
   static readonly MAX_SHIELD = 500;
-  readonly health = new Health({ maxHp: PLAYER_CONFIG.maxHp, maxShield: Player.MAX_SHIELD });
+  readonly health = new Health({ maxHp: PLAYER_CONFIG.maxHp, maxShield: Player.BASE_MAX_SHIELD });
   /** 死亡后剩余复活倒计时（ms） */
   private respawnTimer = 0;
+
+  // ---- 联机（netControlled）----
+  /** 血量/死亡由网络事件驱动：本地伤害结算与自动复活关闭 */
+  netControlled = false;
+  /** 是否本地倒计时自动复活（联机时由服务端下发 respawn 事件） */
+  autoRespawn = true;
+  /** 环境伤害（摔落）上报钩子：联机模式下交给网络层 */
+  envDamageReporter?: (amount: number) => void;
+
+  // ---- 联机展示：聊天室头像（圆形贴图）/ 昵称 / 聊天气泡 ----
+  /** HUD 用的圆形头像贴图 key */
+  avatarCircleKey?: string;
+  private headAvatar?: Phaser.GameObjects.Image;
+  private nameLabel?: Phaser.GameObjects.Text;
+  private chatBubble?: {
+    root: Phaser.GameObjects.Container;
+    bg: Phaser.GameObjects.Graphics;
+    text: Phaser.GameObjects.Text;
+    remainMs: number;
+  };
   /** 出生点（复活用） */
   private readonly spawnX: number;
   private readonly spawnY: number;
@@ -428,6 +452,8 @@ export class Player extends Entity {
    * 无敌帧拦截、击杀判定、受击姿态都在这里统一处理。
    */
   applyDamage(info: DamageInfo): number {
+    // 联机：伤害由服务端仲裁，本地不做生命值结算
+    if (this.netControlled) return 0;
     if (this.health.isDead) return 0;
 
     // 同一攻击批次（霰弹的多颗弹丸 / 激光的连续 tick）允许穿透无敌帧
@@ -473,6 +499,178 @@ export class Player extends Entity {
     return hpApplied;
   }
 
+  /**
+   * 联机：以服务端下发的数值结算受击。
+   *
+   * 与 applyDamage 的区别：不再自己算血/护盾/无敌，只负责
+   *  1) 写入权威数值；
+   *  2) 用前后差值触发表现事件（伤害数字、护盾吸收、顿帧、音效）；
+   *  3) 处理击退、受击姿态与死亡。
+   */
+  applyNetDamage(n: NetDamageEvent): void {
+    // 服务端已复活但本地还停在尸体状态：直接恢复
+    if (this.health.isDead && !n.dead) {
+      this.respawnTimer = 0;
+      this.health.setState(n.hp, n.shield, false);
+      this.visual.setAlpha(1);
+      this.container.setRotation(0);
+      this.scene.events.emit('player-respawn', this);
+      return;
+    }
+    if (this.health.isDead) return;
+
+    const prevHp = this.health.hp;
+    const prevShield = this.health.shield;
+    const hpApplied = Math.max(0, prevHp - n.hp);
+    const absorbed = Math.max(0, prevShield - n.shield);
+
+    this.health.setState(n.hp, n.shield, n.dead);
+    if (n.sourceId !== undefined && n.sourceId >= 0) this.lastDamageSourceId = n.sourceId;
+
+    if (absorbed > 0) {
+      this.scene.events.emit('player-shielded', this, absorbed, n.kind);
+    }
+    if (hpApplied > 0) {
+      this.scene.events.emit('player-damaged', this, hpApplied, n.kind, n.crit, n.amount);
+    }
+
+    if (n.dead) {
+      this.die();
+      return;
+    }
+
+    const kb = n.knockback ?? { x: 0, y: 0 };
+    this.hit(kb.x, kb.y, 190);
+    this.health.setInvulnerable(Player.HIT_INVULN_MS);
+  }
+
+  /** 联机：首次进入/重连时用服务端快照初始化（不触发伤害表现） */
+  applyNetSnapshot(s: { hp: number; shield: number; dead: boolean }): void {
+    this.health.setState(s.hp, s.shield, s.dead);
+    if (this.health.isDead) {
+      this.respawnTimer = 0;
+      this.visual.setAlpha(0.55);
+    }
+  }
+
+  /** 联机：服务端指定的复活位置 */
+  netRespawn(x: number, y: number): void {
+    this.respawn(x, y);
+  }
+
+  // ==========================================================
+  //  联机展示：头像 / 昵称 / 聊天气泡
+  // ==========================================================
+
+  /** 设置头顶昵称（灰色小字）与头像贴图 */
+  setIdentity(nick: string, circleKey?: string): void {
+    this.setDisplayName(nick);
+    if (circleKey) this.setHeadAvatar(circleKey);
+  }
+
+  setDisplayName(nick: string): void {
+    const name = nick.trim();
+    if (!name) return;
+    if (!this.nameLabel) {
+      this.nameLabel = this.scene.add.text(0, 0, name, {
+        fontFamily: 'PingFang SC, Microsoft YaHei, monospace',
+        fontSize: '11px',
+        color: '#c3cad6',
+        stroke: '#0a0c12',
+        strokeThickness: 3,
+      });
+      this.nameLabel.setOrigin(0.5, 1);
+      this.nameLabel.setResolution(TEXT_RESOLUTION);
+      this.visual.add(this.nameLabel);
+    }
+    this.nameLabel.setText(name);
+  }
+
+  /** 用圆形头像贴图替换头部（没有贴图时保留程序化彩色圆头） */
+  setHeadAvatar(circleKey: string): void {
+    if (!this.scene.textures.exists(circleKey)) return;
+    this.avatarCircleKey = circleKey;
+    const size = StickmanRenderer.HEAD_R * 2 * 1.12;
+    if (!this.headAvatar) {
+      this.headAvatar = this.scene.add.image(0, 0, circleKey);
+      this.visual.add(this.headAvatar);
+    }
+    this.headAvatar.setTexture(circleKey);
+    this.headAvatar.setDisplaySize(size, size);
+  }
+
+  /** 头顶聊天气泡（聊天室消息） */
+  showChat(text: string, durationMs = 5200): void {
+    const clean = text.trim();
+    if (!clean) return;
+    if (!this.chatBubble) {
+      const root = this.scene.add.container(0, 0);
+      const bg = this.scene.add.graphics();
+      const label = this.scene.add.text(0, 0, '', {
+        fontFamily: 'PingFang SC, Microsoft YaHei, monospace',
+        fontSize: '12px',
+        color: '#0f172a',
+        wordWrap: { width: 168, useAdvancedWrap: true },
+        align: 'center',
+      });
+      label.setOrigin(0.5, 0.5);
+      label.setResolution(TEXT_RESOLUTION);
+      root.add([bg, label]);
+      root.setDepth(6);
+      this.visual.add(root);
+      this.chatBubble = { root, bg, text: label, remainMs: durationMs };
+    }
+    const bubble = this.chatBubble;
+    bubble.text.setText(clean);
+    bubble.remainMs = durationMs;
+
+    // 底板：白色圆角 + 底部小尖角（跟着文字尺寸走）
+    const padX = 7;
+    const padY = 5;
+    const w = Math.min(184, bubble.text.width + padX * 2);
+    const h = bubble.text.height + padY * 2;
+    const g = bubble.bg;
+    g.clear();
+    g.fillStyle(0xf7f9fc, 0.96);
+    g.lineStyle(1.5, 0xffffff, 0.9);
+    g.fillRoundedRect(-w / 2, -h / 2, w, h, 7);
+    g.strokeRoundedRect(-w / 2, -h / 2, w, h, 7);
+    g.fillStyle(0xf7f9fc, 0.96);
+    g.fillTriangle(-5, h / 2 - 1, 5, h / 2 - 1, 0, h / 2 + 6);
+    bubble.root.setVisible(true);
+    bubble.root.setAlpha(1);
+  }
+
+  /** 每帧把头像/昵称/气泡贴到头部位置（由 draw 调用） */
+  private syncHeadDecor(): void {
+    const head = StickmanRenderer.lastHead;
+    if (!head) return;
+    const dead = this.health.isDead;
+    // visual 会按 facing 整体水平镜像（火柴人左右朝向），但昵称/气泡/头像不能跟着反：
+    // - 文本用反向 scaleX 抵消
+    // - 头像用 flipX 抵消（保留 setDisplaySize 的缩放）
+    const facing = this.facing;
+    if (this.headAvatar) {
+      this.headAvatar.setVisible(!dead);
+      this.headAvatar.setPosition(head.x, head.y);
+      this.headAvatar.setFlipX(facing < 0);
+    }
+    if (this.nameLabel) {
+      this.nameLabel.setVisible(!dead);
+      this.nameLabel.setPosition(head.x, head.y - StickmanRenderer.HEAD_R - 3);
+      this.nameLabel.setScale(facing, 1);
+    }
+    if (this.chatBubble) {
+      const b = this.chatBubble;
+      const h = b.text.height + 10;
+      b.root.setPosition(head.x, head.y - StickmanRenderer.HEAD_R - 12 - h / 2);
+      b.root.setScale(facing, 1);
+      b.root.setVisible(!dead && b.remainMs > 0);
+      // 末尾 500ms 淡出
+      b.root.setAlpha(Math.max(0, Math.min(1, b.remainMs / 500)));
+    }
+  }
+
   // ==========================================================
   //  增益 / 超级战士（光刀）
   // ==========================================================
@@ -486,6 +684,8 @@ export class Player extends Entity {
     if (this.superMode) return;
     this.superMode = true;
     this.weaponLocked = true;
+    // 光刀战士护盾上限提高到 500，再叠加配置里的护盾
+    this.health.setMaxShield(Player.MAX_SHIELD);
     this.buffSpeedMul = cfg.speedMul ?? 1.3;
     this.buffJumpMul = cfg.jumpMul ?? 1.1;
     if (cfg.glow) this.superGlowColor = parseColor(cfg.glow, this.superGlowColor);
@@ -498,6 +698,8 @@ export class Player extends Entity {
     if (!this.superMode) return;
     this.superMode = false;
     this.weaponLocked = false;
+    // 退出超级战士：护盾上限回落，超出部分直接丢弃
+    this.health.setMaxShield(Player.BASE_MAX_SHIELD);
     this.buffSpeedMul = 1;
     this.buffJumpMul = 1;
     this.scene.events.emit('super-mode', this, false);
@@ -556,11 +758,11 @@ export class Player extends Entity {
   }
 
   /** 复活：回到出生点、满血、短无敌 */
-  private respawn(): void {
+  private respawn(x = this.spawnX, y = this.spawnY): void {
     this.respawnTimer = 0;
     this.health.reset();
     this.health.setInvulnerable(PLAYER_CONFIG.spawnInvulnMs);
-    this.container.setPosition(this.spawnX, this.spawnY);
+    this.container.setPosition(x, y);
     this.container.setVelocity(0, 0);
     this.container.setRotation(0);
     this.hitTimer = 0;
@@ -708,16 +910,21 @@ export class Player extends Entity {
   update(cmd: InputCommand, deltaMs: number): void {
     const dt = deltaMs / 1000;
 
+    if (this.chatBubble && this.chatBubble.remainMs > 0) {
+      this.chatBubble.remainMs = Math.max(0, this.chatBubble.remainMs - deltaMs);
+    }
+
     // ---- 生命值 / 死亡 → 复活 ----
     this.health.update(deltaMs);
     if (this.health.isDead) {
-      this.respawnTimer -= deltaMs;
-      if (this.respawnTimer <= 0) {
-        this.respawn();
-      } else {
-        // 死亡期间不接受操作（物理与渲染照常：尸体继续被打飞）
-        cmd = emptyInput();
+      if (this.respawnTimer > 0) {
+        this.respawnTimer = Math.max(0, this.respawnTimer - deltaMs);
       }
+      if (this.autoRespawn && this.respawnTimer <= 0) {
+        this.respawn();
+      }
+      // 死亡期间不接受操作（物理与渲染照常：尸体继续被打飞）
+      cmd = emptyInput();
     }
 
     // 持续离地超过 150ms 才把地面法线重置为平地（短暂滑动/抖动不重置，避免闪烁）
@@ -1016,7 +1223,11 @@ export class Player extends Entity {
       this.lastLandingSpeed = impactSpeed;
       if (impactSpeed > PLAYER_CONFIG.fallSafeSpeed) {
         const fallDamage = (impactSpeed - PLAYER_CONFIG.fallSafeSpeed) * PLAYER_CONFIG.fallDamagePerSpeed;
-        this.applyDamage({ amount: fallDamage, kind: 'env', knockback: { x: 0, y: 0 } });
+        if (this.netControlled) {
+          this.envDamageReporter?.(fallDamage);
+        } else {
+          this.applyDamage({ amount: fallDamage, kind: 'env', knockback: { x: 0, y: 0 } });
+        }
       }
 
       const fallSpeed = this.body.velocity.y;
@@ -1091,6 +1302,9 @@ export class Player extends Entity {
     };
     this.weaponHandLocal = StickmanRenderer.lastWeaponHand ?? this.handLocal;
     this.weaponAimOverride = StickmanRenderer.lastWeaponAim;
+
+    // 头顶装饰（头像/昵称/聊天气泡）：跟着本帧头部位置
+    this.syncHeadDecor();
 
     // 超级战士身体光晕（每帧重画，非超级状态时清空）
     this.drawBodyGlow();
@@ -1201,6 +1415,9 @@ export class Player extends Entity {
     // world 可能已在场景关闭时被置空（见 ImpactDamageSystem.destroy 的注释）
     this.scene.matter?.world?.off('collisionactive', this.handleCollisionActive, this);
     this.scene.matter?.world?.remove(this.body);
+    this.headAvatar?.destroy();
+    this.nameLabel?.destroy();
+    this.chatBubble?.root.destroy(true);
     this.bodyGlowGraphics.destroy();
     this.glowGraphics.destroy();
     this.visual.destroy();
@@ -1239,4 +1456,17 @@ export class Player extends Entity {
     g.lineBetween(-31, -45, -22, -48);
     g.lineBetween(22, -48, 31, -45);
   }
+}
+
+/** 联机受击事件（服务端 hp 消息） */
+export interface NetDamageEvent {
+  hp: number;
+  shield: number;
+  dead: boolean;
+  amount: number;
+  kind: string;
+  crit: boolean;
+  point?: { x: number; y: number };
+  knockback?: { x: number; y: number };
+  sourceId?: number;
 }

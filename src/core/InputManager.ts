@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import type { InputCommand } from './InputCommand';
 import { emptyInput } from './InputCommand';
+import { inputBlock } from '../net/inputBlock';
 
 /**
  * 双人键位绑定 → InputCommand。
@@ -42,12 +43,14 @@ export class InputManager {
     c.kick = kick && !this.prevP1Kick;
     c.kickHeld = kick;
     this.prevP1Kick = kick;
-    return c;
+    // 聊天框聚焦时：按键照常消费（避免残留边沿），但不驱动角色
+    return inputBlock.typing ? emptyInput() : c;
   }
 
   /** G 键（本帧刚按下）：切换手榴弹持握状态 */
   readGrenadeToggle(): boolean {
-    return Phaser.Input.Keyboard.JustDown(this.grenadeKey);
+    const pressed = Phaser.Input.Keyboard.JustDown(this.grenadeKey);
+    return pressed && !inputBlock.typing;
   }
 
   readP2(): InputCommand {

@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import type { Player } from '../entities/Player';
+import { TEXT_RESOLUTION } from '../config/display';
 
 interface Bubble {
   text: Phaser.GameObjects.Text;
@@ -13,8 +14,14 @@ interface Bubble {
   kind: BubbleKind;
 }
 
-/** 气泡类型：伤害（红）/ 治疗（绿 +）/ 护盾（灰蓝 +） */
-export type BubbleKind = 'damage' | 'heal' | 'shield';
+/**
+ * 气泡类型：
+ * - damage      受伤（红 -）
+ * - heal        治疗（绿 +）
+ * - shield      获得护盾（灰 +）
+ * - shieldLoss  护盾被消耗（灰 -）
+ */
+export type BubbleKind = 'damage' | 'heal' | 'shield' | 'shieldLoss';
 
 interface BubbleStyle {
   color: string;
@@ -26,6 +33,7 @@ const BUBBLE_STYLES: Record<BubbleKind, BubbleStyle> = {
   damage: { color: '#ff5a5a', stroke: '#2a0a0a', prefix: '-' },
   heal: { color: '#4ade80', stroke: '#0a2a12', prefix: '+' },
   shield: { color: '#c8d0dc', stroke: '#1a2028', prefix: '+' },
+  shieldLoss: { color: '#c8d0dc', stroke: '#1a2028', prefix: '-' },
 };
 
 /**
@@ -38,8 +46,8 @@ const BUBBLE_STYLES: Record<BubbleKind, BubbleStyle> = {
  */
 export class DamageNumbers {
   private readonly scene: Phaser.Scene;
-  /** playerId → 当前气泡 */
-  private readonly bubbles = new Map<number, Bubble>();
+  /** "playerId:kind" → 当前气泡（同目标的不同类型可以同时显示） */
+  private readonly bubbles = new Map<string, Bubble>();
 
   /** 合并窗口（ms）：这段时间内的伤害累加到同一个气泡 */
   private static readonly MERGE_WINDOW = 320;
@@ -55,7 +63,8 @@ export class DamageNumbers {
     const kind: BubbleKind = opts.kind ?? 'damage';
     const style = BUBBLE_STYLES[kind];
     const rounded = Math.max(1, Math.round(amount));
-    const existing = this.bubbles.get(player.id);
+    const key = `${player.id}:${kind}`;
+    const existing = this.bubbles.get(key);
 
     if (existing && existing.kind === kind) {
       existing.total += rounded;
@@ -73,7 +82,7 @@ export class DamageNumbers {
     // 类型不同（例如"扣血"紧跟着"回血"）→ 先收掉旧气泡，避免数字串味
     if (existing) {
       existing.text.destroy();
-      this.bubbles.delete(player.id);
+      this.bubbles.delete(key);
     }
 
     const x = player.container.x + (Math.random() - 0.5) * 12;
@@ -87,9 +96,10 @@ export class DamageNumbers {
       stroke: style.stroke,
       strokeThickness: 4,
     });
+    text.setResolution(TEXT_RESOLUTION);
     text.setOrigin(0.5, 1);
     text.setDepth(1002);
-    this.bubbles.set(player.id, {
+    this.bubbles.set(key, {
       text,
       total: rounded,
       remain: DamageNumbers.MERGE_WINDOW,
@@ -100,7 +110,7 @@ export class DamageNumbers {
 
   update(deltaMs: number): void {
     const dt = deltaMs / 1000;
-    for (const [playerId, bubble] of this.bubbles) {
+    for (const [key, bubble] of this.bubbles) {
       bubble.remain -= deltaMs;
       bubble.text.y -= DamageNumbers.RISE_SPEED * dt;
       // 缩放回 1
@@ -110,7 +120,7 @@ export class DamageNumbers {
 
       if (bubble.remain <= 0) {
         bubble.text.destroy();
-        this.bubbles.delete(playerId);
+        this.bubbles.delete(key);
       }
     }
   }

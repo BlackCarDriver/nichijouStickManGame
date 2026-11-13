@@ -7,6 +7,12 @@ import type { FxSystem } from '../fx/FxSystem';
 import { GrenadeSystem } from '../combat/GrenadeSystem';
 import { getItem, itemPickupRadius, type ItemJson } from './ItemFormat';
 import { parseColor } from '../config/materials';
+import type { DropWire, PickGrant } from '../net/protocol';
+
+/** 联机拾取请求桥（由 OnlineMatch 提供） */
+export interface PickupNetBridge {
+  request(item: GroundPickup, player: Player, swap: boolean): void;
+}
 
 /** 手榴弹背包上限（PickupSystem 与 GrenadeSystem 共用同一常量） */
 const GRENADE_MAX = GrenadeSystem.MAX;
@@ -21,6 +27,8 @@ interface GroundPickupBase {
   bob: number;
   /** 来源标记（武器掉落点用：判断"这个点上的武器是否已被捡走"） */
   tag?: string;
+  /** 联机：服务端下发的掉落物 id（单机为 undefined） */
+  netId?: number;
 }
 
 /** 地面上的武器（可拾取，占用武器槽） */
@@ -68,6 +76,13 @@ export class PickupSystem {
   private readonly bodyToPlayer: Map<number, Player>;
   private readonly fx: FxSystem;
   private items: GroundPickup[] = [];
+
+  // ---- 联机 ----
+  private net: PickupNetBridge | null = null;
+  private localPlayer: Player | null = null;
+  /** 请求节流：同一件掉落物 250ms 内只上报一次 */
+  private readonly requestAt = new WeakMap<GroundPickup, number>();
+  private static readonly REQUEST_INTERVAL = 250;
 
   /** 自动拾取半径 */
   private static readonly AUTO_RADIUS = 46;
@@ -215,6 +230,7 @@ export class PickupSystem {
    * @returns 本帧真正完成了拾取/替换的玩家 id 集合（未完成的才去做踢/投掷）
    */
   tryPickup(swapRequested: ReadonlySet<number>): Set<number> {
+    if (this.net) return this.tryPickupNet(swapRequested);
     const consumed = new Set<number>();
     for (const player of this.bodyToPlayer.values()) {
       if (player.health.isDead) continue;
@@ -249,7 +265,7 @@ export class PickupSystem {
 
         // 空手 → 自动拾取
         if (!holding && dist <= PickupSystem.AUTO_RADIUS) {
-          this.give(player, item);
+          this.give(player, item.weaponId, item.ammo, { x: item.x, y: item.y });
           this.remove(item);
           consumed.add(player.id);
           break;
@@ -259,7 +275,7 @@ export class PickupSystem {
         // 超级战士（光刀）锁定武器槽 → 不能替换
         if (holding && wantSwap && !player.weaponLocked && dist <= PickupSystem.SWAP_RADIUS) {
           const old = holding;
-          this.give(player, item);
+          this.give(player, item.weaponId, item.ammo, { x: item.x, y: item.y });
           this.remove(item);
           this.spawn(old.id, player.container.x, player.container.y, {
             ammo: old.ammo,
@@ -271,6 +287,116 @@ export class PickupSystem {
       }
     }
     return consumed;
+  }
+
+  /** 联机模式：只处理本地玩家的拾取，并交给服务端仲裁 */
+  private tryPickupNet(swapRequested: ReadonlySet<number>): Set<number> {
+    const consumed = new Set<number>();
+    const player = this.localPlayer;
+    if (!player || player.health.isDead || !this.net) return consumed;
+
+    const now = performance.now();
+    const request = (item: GroundPickup, swap: boolean): void => {
+      const last = this.requestAt.get(item) ?? -Infinity;
+      if (now - last < PickupSystem.REQUEST_INTERVAL) return;
+      this.requestAt.set(item, now);
+      this.net!.request(item, player, swap);
+    };
+
+    for (const item of [...this.items]) {
+      const dist = Phaser.Math.Distance.Between(player.container.x, player.container.y, item.x, item.y);
+
+      if (item.kind === 'item') {
+        if (this.itemWanted(player, item, dist)) request(item, false);
+        continue;
+      }
+
+      // 手榴弹：进背包，不占武器槽
+      if (item.weaponId === 'grenade') {
+        if (dist <= PickupSystem.AUTO_RADIUS * 1.4 && player.grenadeCount < GRENADE_MAX) {
+          request(item, false);
+        }
+        continue;
+      }
+
+      const holding = player.heldWeapon;
+      if (!holding && dist <= PickupSystem.AUTO_RADIUS) {
+        request(item, false);
+        consumed.add(player.id);
+        break;
+      }
+      if (holding && swapRequested.has(player.id) && !player.weaponLocked && dist <= PickupSystem.SWAP_RADIUS) {
+        request(item, true);
+        consumed.add(player.id);
+        break;
+      }
+    }
+    return consumed;
+  }
+
+  /** 联机：判断这件补给此刻是否值得请求（条件判断与单机一致，但不本地生效） */
+  private itemWanted(player: Player, item: ItemGroundPickup, dist: number): boolean {
+    const def = getItem(item.itemId);
+    if (!def || dist > itemPickupRadius(def)) return false;
+    if (def.kind === 'heal') return player.health.hp < player.health.maxHp;
+    return player.health.shield < player.health.maxShield;
+  }
+
+  /** 挂接联机桥（single = 本地玩家）；传 null 恢复单机行为 */
+  setNet(net: PickupNetBridge | null, localPlayer: Player | null): void {
+    this.net = net;
+    this.localPlayer = localPlayer;
+  }
+
+  /** 联机：按服务端下发的掉落物创建地面物品 */
+  spawnNet(drop: DropWire): void {
+    if (drop.kind === 'weapon') {
+      if (!drop.weaponId) return;
+      const item = this.spawn(drop.weaponId, drop.x, drop.y, {
+        ammo: drop.ammo,
+        falling: drop.falling,
+        tag: drop.tag,
+      });
+      if (item) item.netId = drop.id;
+      return;
+    }
+    if (!drop.itemId) return;
+    const item = this.spawnItem(drop.itemId, drop.x, drop.y, { falling: drop.falling, tag: drop.tag });
+    if (item) item.netId = drop.id;
+  }
+
+  /** 联机：服务端授予拾取（所有人都会收到，用来同步"谁捡到了什么"） */
+  applyGrant(netId: number, player: Player | null, grant: PickGrant): void {
+    const item = this.items.find((it) => it.netId === netId);
+    const at = item ? { x: item.x, y: item.y } : player ? { x: player.container.x, y: player.container.y } : null;
+    if (item) this.remove(item);
+    if (!player) return;
+
+    if (grant.kind === 'weapon' && grant.weaponId) {
+      // 手榴弹是道具：进背包（腰挂），不占武器槽
+      if (grant.weaponId === 'grenade') {
+        player.grenadeCount = Math.min(GRENADE_MAX, player.grenadeCount + 1);
+        if (at) this.fx.hitSpark({ x: at.x, y: at.y }, { x: 0, y: -1 }, 0x8fd06a);
+        this.scene.events.emit('grenade-picked', player, player.grenadeCount);
+        this.scene.events.emit('sfx', 'pickup');
+        return;
+      }
+      this.give(player, grant.weaponId, grant.ammo ?? 0, at);
+      return;
+    }
+    if (grant.kind === 'item' && at) {
+      // 生命/护盾由服务端结算并通过 hp 消息下发，这里只播表现（含 +40 / +100 气泡）
+      const def = grant.itemId ? getItem(grant.itemId) : undefined;
+      if (def) {
+        this.fx.burst(at, parseColor(def.glow ?? def.color));
+        if (def.kind === 'heal') {
+          this.scene.events.emit('item-used', player, 'medkit', def.heal ?? 0);
+        } else {
+          this.scene.events.emit('item-used', player, 'armor', def.shield ?? 0);
+        }
+      }
+      this.scene.events.emit('sfx', 'pickup');
+    }
   }
 
   /**
@@ -303,14 +429,19 @@ export class PickupSystem {
     return true;
   }
 
-  /** 把武器掉落物塞给玩家 */
-  private give(player: Player, item: WeaponGroundPickup): void {
-    player.heldWeapon = createHeldWeapon(item.weaponId) ?? null;
+  /** 把武器塞给玩家 */
+  private give(
+    player: Player,
+    weaponId: string,
+    ammo: number,
+    at: { x: number; y: number } | null,
+  ): void {
+    player.heldWeapon = createHeldWeapon(weaponId) ?? null;
     if (player.heldWeapon) {
-      player.heldWeapon.ammo = item.ammo;
+      player.heldWeapon.ammo = ammo;
     }
-    this.fx.hitSpark({ x: item.x, y: item.y }, { x: 0, y: -1 }, 0x9ad0ff);
-    this.scene.events.emit('weapon-picked', player, item.weaponId);
+    if (at) this.fx.hitSpark({ x: at.x, y: at.y }, { x: 0, y: -1 }, 0x9ad0ff);
+    this.scene.events.emit('weapon-picked', player, weaponId);
     this.scene.events.emit('sfx', 'pickup');
   }
 

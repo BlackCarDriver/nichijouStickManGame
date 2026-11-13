@@ -57,6 +57,10 @@ export function buildMap(
   const runtime: MapObjectRuntime[] = [];
   const bodiesById = new Map<string, MatterJS.BodyType>();
 
+  // 每次构建都从 0 开始编号：未显式写 id 的物体/预制件会得到稳定 id
+  // （联机时各客户端靠这个 id 对齐"哪个物体被摧毁了"）
+  autoIdSeq = 0;
+
   // 1) 收集所有形状：地图内联物体 + 展开的预制件部件
   interface PendingObject {
     obj: MapObject;

@@ -242,9 +242,13 @@ export class WeaponSystem {
     }
     if (!fired) return false;
 
+    // 音效 id 必须在 consume 之前取：最后一发会触发 releaseWeapon('empty')，
+    // 之后 player.heldWeapon 已经是 null，再读 id 就会变成空字符串 → 最后一发没声音。
+    const sfxId = weapon.visual.style === 'lightsaber' ? 'melee' : held.id;
+
     this.consume(player, weapon, held.ammo > 0);
     this.applyRecoil(player, weapon);
-    this.scene.events.emit('sfx', weapon.visual.style === 'lightsaber' ? 'melee' : (player.heldWeapon?.id ?? ''));
+    this.scene.events.emit('sfx', sfxId);
     return true;
   }
 

@@ -78,6 +78,14 @@ export class DestructionSystem {
     return { applied, destroyed, remaining: runtime.durability };
   }
 
+  /** 联机：按地图物体 id 强制摧毁（其它客户端上报的销毁事件）。幂等。 */
+  forceDestroyById(id: string): boolean {
+    const runtime = this.registry.getById(id);
+    if (!runtime) return false;
+    this.destroyObject(runtime);
+    return true;
+  }
+
   /** 摧毁物体：从物理世界、注册表、渲染层移除，并广播事件 */
   private destroyObject(runtime: MapObjectRuntime): void {
     if (!runtime.body) return;

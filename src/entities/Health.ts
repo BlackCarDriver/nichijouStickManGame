@@ -29,7 +29,8 @@ const NO_DAMAGE: DamageOutcome = { hp: 0, shield: 0 };
 
 export class Health {
   readonly maxHp: number;
-  readonly maxShield: number;
+  /** 护盾上限（普通角色 100 / 超级战士 500，可动态切换） */
+  private maxShieldValue: number;
   private readonly defaultInvulnMs: number;
   private hpValue: number;
   private shieldValue = 0;
@@ -38,7 +39,7 @@ export class Health {
 
   constructor(options: HealthOptions) {
     this.maxHp = options.maxHp;
-    this.maxShield = options.maxShield ?? 0;
+    this.maxShieldValue = options.maxShield ?? 0;
     this.defaultInvulnMs = options.invulnMs ?? 0;
     this.hpValue = options.maxHp;
   }
@@ -54,6 +55,16 @@ export class Health {
 
   get shield(): number {
     return this.shieldValue;
+  }
+
+  get maxShield(): number {
+    return this.maxShieldValue;
+  }
+
+  /** 调整护盾上限（进入/退出超级战士时调用）；当前护盾超出部分直接裁掉 */
+  setMaxShield(value: number): void {
+    this.maxShieldValue = Math.max(0, Math.round(value));
+    if (this.shieldValue > this.maxShieldValue) this.shieldValue = this.maxShieldValue;
   }
 
   /** 护盾比例 0~1（HUD 用；无护盾能力时恒为 0） */
@@ -140,6 +151,17 @@ export class Health {
 
   setInvulnerable(ms: number): void {
     this.invulnTimer = Math.max(this.invulnTimer, ms);
+  }
+
+  /**
+   * 直接写入状态（联机：以服务端下发的数值为准）。
+   * 只做边界钳制，不触发无敌帧/死亡副作用。
+   */
+  setState(hp: number, shield: number, dead: boolean): void {
+    this.hpValue = Math.max(0, Math.min(this.maxHp, Math.round(hp)));
+    this.shieldValue = Math.max(0, Math.min(this.maxShield, Math.round(shield)));
+    this.dead = dead || this.hpValue <= 0;
+    if (this.dead) this.hpValue = 0;
   }
 
   /** 复活/重置：满血、清空护盾与无敌、复活死亡状态 */

@@ -394,55 +394,61 @@ function renderLeft(): void {
         h('label', { class: 'ed-check' }, [checkbox(store.snapToGrid, (v) => { store.snapToGrid = v; store.touch(); }), '吸附']),
         h('label', { class: 'ed-check' }, [checkbox(store.showGrid, (v) => { store.showGrid = v; store.touch(); }), '显示网格']),
       ]),
-      h('h3', { class: 'ed-h3' }, ['新物体材质']),
-      selectInput(
-        materialIds().map((id) => ({ value: id, label: `${MATERIALS[id].name} (${id})` })),
-        store.activeMaterialId,
-        (v) => {
-          store.activeMaterialId = v;
-          store.touch();
-        },
-      ),
-      h('h3', { class: 'ed-h3' }, ['预制件库']),
-      h(
-        'div',
-        { class: 'ed-list' },
-        listPrefabs().map((p) =>
-          h(
-            'button',
-            {
-              class: `ed-list-row ${store.activePrefabId === p.id ? 'active' : ''}`,
-              onclick: () => {
-                store.activePrefabId = p.id;
-                store.tool = 'prefab';
-                store.message = `已选择预制件 ${p.name}，点击画布放置`;
+      // 放武器时只显示武器选项，避免"材质/预制件"干扰；其它工具下不显示武器选项
+      ...(store.tool === 'weapon'
+        ? [
+            h('h3', { class: 'ed-h3' }, ['武器掉落点（点击画布放置）']),
+            selectInput(
+              [
+                { value: RANDOM_WEAPON_SENTINEL, label: '随机武器（从全部武器抽）' },
+                ...listWeaponIds().map((id) => ({ value: id, label: `${getWeapon(id)?.name ?? id} (${id})` })),
+              ],
+              store.activeWeaponId ?? '',
+              (v) => {
+                store.activeWeaponId = v || null;
+                if (v) {
+                  store.message =
+                    v === RANDOM_WEAPON_SENTINEL
+                      ? '随机武器掉落点：点击画布放置'
+                      : '已选择武器，点击画布放置掉落点';
+                }
                 store.touch();
               },
-            },
-            [h('span', { class: 'ed-list-main' }, [p.name]), h('span', { class: 'ed-list-sub' }, [p.id])],
-          ),
-        ),
-      ),
-      h('h3', { class: 'ed-h3' }, ['武器掉落点（点击画布放置）']),
-      selectInput(
-        [
-          { value: RANDOM_WEAPON_SENTINEL, label: '随机武器（从全部武器抽）' },
-          ...listWeaponIds().map((id) => ({ value: id, label: `${getWeapon(id)?.name ?? id} (${id})` })),
-        ],
-        store.activeWeaponId ?? '',
-        (v) => {
-          store.activeWeaponId = v || null;
-          if (v) {
-            store.tool = 'weapon';
-            store.message =
-              v === RANDOM_WEAPON_SENTINEL
-                ? '随机武器掉落点：点击画布放置'
-                : '已选择武器，点击画布放置掉落点';
-          }
-          store.touch();
-        },
-        '选择武器…',
-      ),
+              '选择武器…',
+            ),
+            h('p', { class: 'ed-help' }, ['放置后可在画布上拖动调整位置；右侧属性面板可配刷新规则。']),
+          ]
+        : [
+            h('h3', { class: 'ed-h3' }, ['新物体材质']),
+            selectInput(
+              materialIds().map((id) => ({ value: id, label: `${MATERIALS[id].name} (${id})` })),
+              store.activeMaterialId,
+              (v) => {
+                store.activeMaterialId = v;
+                store.touch();
+              },
+            ),
+            h('h3', { class: 'ed-h3' }, ['预制件库']),
+            h(
+              'div',
+              { class: 'ed-list' },
+              listPrefabs().map((p) =>
+                h(
+                  'button',
+                  {
+                    class: `ed-list-row ${store.activePrefabId === p.id ? 'active' : ''}`,
+                    onclick: () => {
+                      store.activePrefabId = p.id;
+                      store.tool = 'prefab';
+                      store.message = `已选择预制件 ${p.name}，点击画布放置`;
+                      store.touch();
+                    },
+                  },
+                  [h('span', { class: 'ed-list-main' }, [p.name]), h('span', { class: 'ed-list-sub' }, [p.id])],
+                ),
+              ),
+            ),
+          ]),
       h('h3', { class: 'ed-h3' }, [`对象列表（${(store.map.objects ?? []).length})`]),
       buildObjectList(),
     );
@@ -1144,10 +1150,7 @@ function weaponSpawnForm(index: number): HTMLElement {
       '间隔 >0 且次数留空（=无限）→ 被捡走后按间隔一直补。',
     ]),
 
-    h('div', { class: 'ed-grid2' }, [
-      field('x', numberInput(w.x, (v) => store.updateWeaponSpawn(index, { x: v }))),
-      field('y', numberInput(w.y, (v) => store.updateWeaponSpawn(index, { y: v }))),
-    ]),
+    h('p', { class: 'ed-help' }, ['位置：直接在画布上拖动该掉落点即可（无需手动填坐标）。']),
     h('div', { class: 'ed-row' }, [
       button('删除该掉落点', () => store.removeWeaponSpawn(index), 'danger'),
     ]),

@@ -1,0 +1,10 @@
+{
+  "addr": ":8092",
+  "instanceId": "stickman-1",
+  "pubkey": "config/plugin_jwt.pub.pem",
+  "staticDir": "../dist",
+  "dataDir": "../data",
+  "maxPlayers": 8,
+  "allowDevIdentity": false,
+  "roundEndSeconds": 4
+}

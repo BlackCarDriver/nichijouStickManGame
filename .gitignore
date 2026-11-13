@@ -2,3 +2,12 @@ node_modules/
 dist/
 .DS_Store
 *.local
+
+# 联机服务（server/）：密钥与本机部署配置不入库，模板见 config/*.example.json
+server/config/integration.json
+server/config/plugin_config.json
+server/config/plugin_jwt.pub.pem
+server/stickman-server
+server/shell/*.pid
+server/shell/*.log
+server/config/plugin_config.dev-*.json

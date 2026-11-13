@@ -13,7 +13,7 @@
     "armor": {
       "name": "防弹衣",
       "kind": "shield",
-      "shield": 100,
+      "shield": 50,
       "maintain": 1,
       "pickupRadius": 52,
       "color": "#9aa5b1",

@@ -159,6 +159,31 @@ export function validateMap(map: unknown, ctx: ValidateContext): Issue[] {
     if (spawns.length < 2) {
       issues.push(warn('spawnPoints', '双人对战建议至少 2 个出生点'));
     }
+    if (spawns.length < 4) {
+      issues.push(warn('spawnPoints', '多人乱斗建议至少 4 个出生点（人数超过时会被循环复用）'));
+    }
+    // 出生点不能落在实体物体内部（否则角色出生就被卡住，联机时表现为"按方向键不动"）
+    const allObjects = Array.isArray(m.objects) ? (m.objects as MapObject[]) : [];
+    const solids = allObjects.filter((o) => (o.layer ?? 'solid') === 'solid');
+    spawns.forEach((sp, i) => {
+      if (!isFiniteNumber(sp?.x) || !isFiniteNumber(sp?.y)) return;
+      for (const o of solids) {
+        const box = objectBounds(o);
+        if (!box) continue;
+        const pad = 4;
+        if (
+          sp.x > box.x - pad &&
+          sp.x < box.x + box.w + pad &&
+          sp.y > box.y - pad &&
+          sp.y < box.y + box.h + pad
+        ) {
+          issues.push(
+            err(`spawnPoints[${i}]`, `出生点落在物体 ${o.id ?? '(无 id)'}（${o.material}）内部，角色会被卡住`),
+          );
+          break;
+        }
+      }
+    });
   }
 
   // ---- 物体 ----
@@ -490,4 +515,31 @@ export function asMapData(map: unknown): MapData {
 
 export function asMapObjects(map: MapData): MapObject[] {
   return map.objects ?? [];
+}
+
+/** 物体的包围盒（世界坐标）；多边形用顶点极值近似。用于出生点/摆放合法性检查 */
+function objectBounds(o: MapObject): { x: number; y: number; w: number; h: number } | null {
+  if (o.type === 'rect') return { x: o.x, y: o.y, w: o.w, h: o.h };
+  if (o.type === 'circle') return { x: o.x - o.radius, y: o.y - o.radius, w: o.radius * 2, h: o.radius * 2 };
+  if (o.type === 'polygon') {
+    const verts = o.vertices ?? [];
+    if (verts.length > 0) {
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const v of verts) {
+        minX = Math.min(minX, v.x);
+        minY = Math.min(minY, v.y);
+        maxX = Math.max(maxX, v.x);
+        maxY = Math.max(maxY, v.y);
+      }
+      // 多边形顶点是相对中心的局部坐标
+      return { x: o.x + minX, y: o.y + minY, w: maxX - minX, h: maxY - minY };
+    }
+    if (o.radius) {
+      return { x: o.x - o.radius, y: o.y - o.radius, w: o.radius * 2, h: o.radius * 2 };
+    }
+  }
+  return null;
 }
