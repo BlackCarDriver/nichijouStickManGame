@@ -33,6 +33,7 @@ type posMsg struct {
 	Y  float64 `json:"y"`
 	VX float64 `json:"vx"`
 	VY float64 `json:"vy"`
+	G  bool    `json:"g,omitempty"`
 }
 
 type swapPayload struct {
@@ -130,12 +131,14 @@ type snapDrop struct {
 }
 
 type snapMsg struct {
-	T   string       `json:"t"`
-	Seq int64        `json:"seq"`
-	Key bool         `json:"key"` // true = 全量关键帧（新加入者可直接使用）
-	P   []snapPlayer `json:"p"`
-	O   []snapObj    `json:"o,omitempty"`
-	D   []snapDrop   `json:"d,omitempty"`
+	T   string `json:"t"`
+	Seq int64  `json:"seq"`
+	Key bool   `json:"key"` // true = 全量关键帧（新加入者可直接使用）
+	// H 服务端认定的世界权威座位号（不信任房主自报）
+	H int          `json:"h"`
+	P []snapPlayer `json:"p"`
+	O []snapObj    `json:"o,omitempty"`
+	D []snapDrop   `json:"d,omitempty"`
 }
 
 // hostMsg 世界权威（房主）变更。
@@ -155,8 +158,9 @@ type spectateMsg struct {
 }
 
 type pingMsg struct {
-	T  string `json:"t"`
-	TS int64  `json:"ts"`
+	T   string `json:"t"`
+	TS  int64  `json:"ts"`
+	Tag string `json:"tag,omitempty"`
 }
 
 // 输入边沿掩码（与客户端一致）
@@ -277,9 +281,11 @@ type inputSnapshot struct {
 }
 
 type inputBatchMsg struct {
-	T    string          `json:"t"`
-	Tick uint32          `json:"tick"`
-	P    []inputSnapshot `json:"p"`
+	T    string `json:"t"`
+	Tick uint32 `json:"tick"`
+	// H 世界权威座位号（客户端据此自愈角色；避免漏收 host 事件后永久失配）
+	H int             `json:"h"`
+	P []inputSnapshot `json:"p"`
 }
 
 type posSnapshot struct {
@@ -288,6 +294,7 @@ type posSnapshot struct {
 	Y  float64 `json:"y"`
 	VX float64 `json:"vx"`
 	VY float64 `json:"vy"`
+	G  bool    `json:"g,omitempty"`
 }
 
 type posBatchMsg struct {
@@ -376,8 +383,9 @@ type errorMsg struct {
 }
 
 type pongMsg struct {
-	T  string `json:"t"`
-	TS int64  `json:"ts"`
+	T   string `json:"t"`
+	TS  int64  `json:"ts"`
+	Tag string `json:"tag,omitempty"`
 }
 
 type roomClosedMsg struct {

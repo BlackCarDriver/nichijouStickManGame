@@ -320,7 +320,8 @@ func (s *server) handleClientMessage(c *client, data []byte) {
 	case "ping":
 		var m pingMsg
 		if json.Unmarshal(data, &m) == nil {
-			c.push(&pongMsg{T: "pong", TS: m.TS})
+			// 原样回传 tag：UI 与网络层各用各的时钟，不能互相污染
+			c.push(&pongMsg{T: "pong", TS: m.TS, Tag: m.Tag})
 		}
 	}
 }

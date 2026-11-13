@@ -14,11 +14,11 @@ import {
   type MatchContext,
   type MatchPlayer,
   type PlayerStat,
+  type PosSnapshot,
   type ServerMsg,
   type SnapDrop,
   type SnapMsg,
   type SnapObj,
-  type SnapPlayer,
 } from './protocol';
 
 export interface OnlineMatchDeps {
@@ -56,55 +56,60 @@ interface RemoteInput {
   pending: number;
 }
 
-/** 房主广播权威快照的频率 */
-const SNAP_INTERVAL = 1000 / 20;
-/** 全量关键帧间隔（其它客户端据此兜底恢复，掉包/新加入也不怕） */
-const KEYFRAME_INTERVAL = 1000;
-/** 远端玩家渲染延迟：用这段时间的缓冲做插值，换取"永不瞬移" */
-const INTERP_DELAY = 100;
-/** 快照中断时最多向前外推多久 */
-const MAX_EXTRAPOLATE = 220;
-/** 快照缓冲保留时长 */
-const SAMPLE_KEEP = 1500;
+/** 位置上报间隔（ms）：20Hz 足够做 100ms 插值 */
+const POS_INTERVAL = 50;
+/** 远端玩家渲染延迟：用这段时间的缓冲做插值，换取平滑（永不瞬移） */
+const POS_DELAY = 100;
+/** 位置中断时最多向前外推多久 */
+const POS_EXTRAPOLATE = 200;
+/** 位置缓冲保留时长 */
+const POS_KEEP = 1500;
 /** Matter 的 1 秒 = 60 步（速度单位是 px/step） */
 const STEPS_PER_SEC = 60;
 
-/** 本地玩家纠偏：误差小于它就不管（避免和预测对着干） */
-const LOCAL_DEADBAND = 10;
-/** 本地玩家纠偏：每帧最多修正多少像素（平滑，不产生硬瞬移） */
-const LOCAL_MAX_STEP = 9;
-/** 本地玩家纠偏：超过它说明真的脱同步了，直接对齐 */
-const LOCAL_HARD_SNAP = 240;
-/** 动态物体的变化阈值（低于它不重复发送） */
+/** 房主广播世界（动态刚体/掉落物）的频率 */
+const SNAP_INTERVAL = 1000 / 20;
+/** 全量关键帧间隔 */
+const KEYFRAME_INTERVAL = 1000;
+/** 快照缓冲保留时长 */
+const SAMPLE_KEEP = 1500;
+/** 动态物体的变化阈值 */
 const OBJ_EPS_POS = 0.6;
 const OBJ_EPS_ANG = 0.02;
 /** 掉落物的变化阈值 */
 const DROP_EPS = 1;
-/** 掉落物位置上报间隔（掉落物只有几个，独立节流即可） */
+/** 掉落物位置上报间隔 */
 const DROP_INTERVAL = 100;
 
-interface SnapSample {
-  /** 本地接收时间（ms） */
+interface PosSample {
   at: number;
-  players: Map<number, SnapPlayer>;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  g: boolean;
+}
+
+interface SnapSample {
+  at: number;
   objects: Map<string, SnapObj>;
   drops: Map<number, SnapDrop>;
 }
 
 /**
- * 一局联机对战的客户端同步层（v2：房主权威 + 本地预测 + 远端插值）。
+ * 一局联机对战的客户端同步层（v3：位置自权威 + 世界房主权威）。
  *
- * 为什么改成这样：
- * 旧版是"各端全量模拟 + 100ms 过期坐标 + 140px 硬阈值"，物理不是跨端确定性的，
- * 两端位置必然漂移；一旦漂移超过阈值就硬拉，于是出现"跳上二楼又闪回一楼"，
- * 以及"我看 5 个箱子、你看 4 个箱子"。
- *
- * 新版把世界权威收敛到**一台客户端（房主）**：
- * - 房主模拟所有人 + 整张地图，20Hz 广播 `snap`（玩家变换 / 动态刚体 / 掉落物坐标）；
- * - 非房主客户端：自己的角色本地预测（零输入延迟），远端玩家与箱子按 100ms 缓冲插值回放；
- * - 自己的角色收到房主快照后做**平滑纠偏**（小误差慢慢收，大误差才硬对齐）；
- * - 破坏、拾取、伤害、投掷掉落全部由房主结算，服务端只做记录与广播；
- * - 房主掉线时服务端顺延给下一位玩家，新宿主从当前世界状态接管。
+ * 权威划分（这是"体验优先"的取舍，作弊不做防御）：
+ * - **玩家位置**：每个客户端权威自己。服务端 20Hz 中继，其它端 100ms 缓冲插值。
+ *   这样本地操作零延迟、不会被"权威回拉"，彻底没有橡皮筋；房主把收到的位置
+ *   套到自己那份副本上，用于命中/拾取/摔落判定（判据就是"真实的你"）。
+ * - **世界（动态刚体 / 掉落物落点 / 耐久 / 摧毁）**：房主唯一权威，
+ *   20Hz 广播 `snap`；其它端插值 + `obj` 事件对齐。
+ * - **伤害**：谁打的谁上报（自己的攻击），服务端宽松校验后广播 `hp`；
+ *   摔落伤害由自己检测上报（`kind=env`，服务端只接受"自己伤自己"）。
+ * - **拾取**：谁捡谁请求（带着自己真实的落点），服务端先到先得。
+ * - **房主（世界权威）**：只负责世界物体；座位号由服务端在 30Hz 的 `in`
+ *   广播里持续下发，客户端据此自愈（漏收一次 `host` 事件不会再永久失配）。
  */
 export class OnlineMatch {
   readonly localNetId: number;
@@ -112,13 +117,13 @@ export class OnlineMatch {
   private readonly remote = new Map<number, RemoteInput>();
   private readonly unsubscribe: () => void;
   private readonly entityToNet = new Map<number, number>();
-  /** 动态地图物体：id → runtime（只有非静态刚体需要同步） */
+  /** 动态地图物体：id → runtime */
   private readonly objectById = new Map<string, MapObjectRuntime>();
   private dynamicObjects: MapObjectRuntime[] = [];
 
   /** 世界权威座位号（-1 = 暂无） */
   private hostSeat: number;
-  /** 本端角色 */
+  /** 本端角色（决定谁广播世界） */
   private role: 'authority' | 'client';
 
   private localCmd: InputCommand = emptyInput();
@@ -129,52 +134,60 @@ export class OnlineMatch {
   private lastShieldSent = 0;
   private disposed = false;
 
-  // ---- 房主侧：快照发送 ----
+  // ---- 房主侧：世界快照 ----
   private snapAccum = 0;
   private keyAccum = KEYFRAME_INTERVAL;
   private snapSeq = 0;
   private dropAccum = 0;
-  /** 越界清理计时（房主） */
   private cleanAccum = 0;
   private readonly lastObjSent = new Map<string, { x: number; y: number; a: number }>();
   private readonly lastDropSent = new Map<number, { x: number; y: number; f: boolean }>();
 
-  // ---- 客户端侧：快照缓冲 ----
-  private samples: SnapSample[] = [];
-  /** 本地玩家最近一次权威样本（用于纠偏） */
-  private latestOwn: SnapPlayer | null = null;
-  private ownSampleAt = 0;
+  // ---- 客户端：远端玩家位置缓冲 ----
+  private readonly posBuffers = new Map<number, PosSample[]>();
+  private readonly lastRemoteAt = new Map<number, { x: number; y: number }>();
 
-  // ---- 延迟估计（用于把"过期样本"外推到"现在"） ----
+  // ---- 世界快照插值缓冲 ----
+  private samples: SnapSample[] = [];
+
+  // ---- 延迟估计 / 诊断 ----
   private pingTimer = 0;
   private pingSentAt = 0;
-  private oneWay = 45;
+  private rtt = 0;
+  private posSent = 0;
+  private posRecv = 0;
+  private snapRecv = 0;
+  private rateTimer = 0;
+  private lastSnapSeq = 0;
+  private snapGaps = 0;
 
   /**
    * 运行时可观测指标（调试面板 / E2E 断言用）。
-   * 这些数字就是"瞬移有没有被消掉"的直接证据：
-   * - hardSnaps：本地角色被硬对齐的次数（正常应为 0）
    * - remoteMaxStep：远端玩家单帧最大位移（跳跃极限约 20px/帧；瞬移会是 100+）
+   * - snapGaps：世界快照序号跳变次数（服务端拥塞丢帧的迹象）
    */
   readonly stats = {
     role: 'client' as 'authority' | 'client',
-    hardSnaps: 0,
-    lastSnapSeq: 0,
-    samples: 0,
-    oneWay: 45,
+    hostSeat: -1,
+    localNetId: -1,
+    rtt: 0,
+    oneWay: 0,
+    posHz: 0,
+    snapHz: 0,
+    snapGaps: 0,
     remoteMaxStep: 0,
     snapshotsSent: 0,
-    /** 本地预测与房主权威状态的位置误差（px，越小说明预测越准） */
-    localErr: 0,
+    drops: 0,
+    players: 0,
+    fps: 0,
   };
-  /** 上一帧远端玩家的位置（统计单帧位移用） */
-  private readonly lastRemoteAt = new Map<number, { x: number; y: number }>();
 
   constructor(deps: OnlineMatchDeps) {
     this.deps = deps;
     this.localNetId = deps.ctx.you;
     this.hostSeat = deps.ctx.host ?? -1;
     this.role = this.hostSeat === this.localNetId ? 'authority' : 'client';
+    this.stats.localNetId = this.localNetId;
 
     for (const [netId, player] of deps.players) {
       this.entityToNet.set(player.id, netId);
@@ -205,7 +218,7 @@ export class OnlineMatch {
     for (const id of deps.ctx.destroyed) deps.destruction.forceDestroyById(id);
 
     this.applyRole();
-    // 中途加入/重连：用服务端缓存的全量快照把动态世界还原到"此刻"
+    // 中途加入/重连：用服务端缓存的全量世界快照还原动态物体与掉落物
     if (deps.ctx.world) this.ingestSnapshot(deps.ctx.world, true);
 
     this.unsubscribe = deps.ctx.link.subscribe((msg) => this.handleMessage(msg));
@@ -221,7 +234,7 @@ export class OnlineMatch {
     return this.role === 'authority';
   }
 
-  /** 联机：把投掷后插不进去的武器交给服务端生成掉落物 */
+  /** 联机：把投掷后插不进去的武器交给服务端生成掉落物（世界权威统一播发） */
   requestDrop(weaponId: string, ammo: number, x: number, y: number): void {
     if (this.role !== 'authority') return;
     this.send({ t: 'drop', weaponId, ammo, x: round2(x), y: round2(y) });
@@ -231,16 +244,37 @@ export class OnlineMatch {
     return this.entityToNet.get(player.id) ?? -1;
   }
 
-  /** 实体 id → Player（伤害归因用） */
-  private playerByEntityId(entityId: number): Player | undefined {
-    for (const player of this.deps.players.values()) {
-      if (player.id === entityId) return player;
-    }
-    return undefined;
-  }
-
   playerOf(netId: number): Player | undefined {
     return this.deps.players.get(netId);
+  }
+
+  /** 诊断快照（`window.__netDiag()` 用） */
+  diag(): Record<string, unknown> {
+    const local = this.localPlayer;
+    return {
+      role: this.stats.role,
+      hostSeat: this.stats.hostSeat,
+      netId: this.localNetId,
+      rtt: this.stats.rtt,
+      oneWay: this.stats.oneWay,
+      posHz: this.stats.posHz,
+      snapHz: this.stats.snapHz,
+      snapGaps: this.stats.snapGaps,
+      remoteMaxStep: this.stats.remoteMaxStep,
+      drops: this.deps.pickups.netSpawns().length,
+      players: this.deps.players.size,
+      fps: this.stats.fps,
+      local: local
+        ? {
+            x: Math.round(local.container.x),
+            y: Math.round(local.container.y),
+            hp: local.health.hp,
+            shield: local.health.shield,
+            dead: local.health.isDead,
+            weapon: local.heldWeapon?.id ?? '',
+          }
+        : null,
+    };
   }
 
   dispose(): void {
@@ -319,15 +353,61 @@ export class OnlineMatch {
     return true;
   }
 
-  /** 每帧收尾：房主发快照 / 客户端做插值与纠偏。 */
+  /** 每帧收尾：远端插值 + 本地上报 + 房主快照。 */
   update(dtMs: number): void {
     if (this.disposed) return;
+    this.tickPing(dtMs);
+    this.driveRemotePlayers();
+    if (this.role === 'client') this.driveRemoteObjects();
+    this.sendLocalState(dtMs);
+    this.updateRates(dtMs);
     if (this.role === 'authority') this.authorityTick(dtMs);
-    else this.clientTick(dtMs);
-    this.sendPosAndShield(dtMs);
   }
 
-  // ---------- 房主：权威快照 ----------
+  // ---------- 远端玩家：位置插值 ----------
+
+  /**
+   * 用对端上报的位置驱动远端玩家（房主同样走这条路）。
+   *
+   * 为什么房主也走：房主要用"真实的对手位置"做命中/拾取判定，
+   * 而不是自己那份会滞后一个来回的物理副本。
+   */
+  private driveRemotePlayers(): void {
+    if (this.posBuffers.size === 0) return;
+    const now = performance.now();
+    const renderAt = now - POS_DELAY;
+    for (const [netId, buffer] of this.posBuffers) {
+      if (netId === this.localNetId) continue;
+      const player = this.deps.players.get(netId);
+      if (!player) continue;
+      const s = samplePos(buffer, renderAt);
+      if (!s) continue;
+      const prev = this.lastRemoteAt.get(netId);
+      if (prev) {
+        const step = Math.hypot(s.x - prev.x, s.y - prev.y);
+        if (step > this.stats.remoteMaxStep) this.stats.remoteMaxStep = step;
+      }
+      this.lastRemoteAt.set(netId, { x: s.x, y: s.y });
+      player.driveRemoteState(s.x, s.y, s.vx, s.vy, s.g);
+    }
+  }
+
+  private ingestPos(list: PosSnapshot[]): void {
+    const at = performance.now();
+    for (const s of list) {
+      if (s.id === this.localNetId) continue;
+      let buffer = this.posBuffers.get(s.id);
+      if (!buffer) {
+        buffer = [];
+        this.posBuffers.set(s.id, buffer);
+      }
+      buffer.push({ at, x: s.x, y: s.y, vx: s.vx, vy: s.vy, g: s.g === true });
+      if (buffer.length > 4 && at - buffer[0].at > POS_KEEP) buffer.shift();
+      this.posRecv++;
+    }
+  }
+
+  // ---------- 房主：世界快照（动态刚体 + 掉落物） ----------
 
   private authorityTick(dtMs: number): void {
     this.snapAccum += dtMs;
@@ -344,7 +424,6 @@ export class OnlineMatch {
     this.snapAccum = 0;
     if (key) this.keyAccum = 0;
 
-    // 掉落物坐标：变化时才带（房主是唯一知道落点的人，也是服务端保存进快照的来源）
     const withDrops = key || this.dropAccum >= DROP_INTERVAL;
     if (withDrops) this.dropAccum = 0;
 
@@ -353,9 +432,7 @@ export class OnlineMatch {
 
   /**
    * 房主：清理掉出地图的刚体与掉落物。
-   *
-   * 不清理的后果：一个掉出世界的箱子会永远自由落体（y 涨到几万），
-   * 既浪费物理计算，又会污染快照（其它端要为它插值/同步）。
+   * 不清理的话，一个掉出世界的箱子会永远自由落体（y 涨到几万），白烧物理还污染快照。
    */
   private cleanOutOfWorld(): void {
     const limit = this.deps.worldSize.height + 400;
@@ -379,19 +456,6 @@ export class OnlineMatch {
   }
 
   private buildSnapshot(key: boolean, withDrops: boolean): ClientMsg {
-    const players: SnapPlayer[] = [];
-    for (const [netId, player] of this.deps.players) {
-      const body = player.body;
-      players.push({
-        id: netId,
-        x: round2(body.position.x),
-        y: round2(body.position.y),
-        vx: round2(body.velocity.x),
-        vy: round2(body.velocity.y),
-        g: player.isGrounded,
-      });
-    }
-
     const objects: SnapObj[] = [];
     for (const runtime of this.dynamicObjects) {
       const body = runtime.body;
@@ -438,7 +502,6 @@ export class OnlineMatch {
       t: 'snap',
       seq: ++this.snapSeq,
       key,
-      p: players,
       o: objects.length > 0 ? objects : undefined,
       d: drops,
     };
@@ -455,66 +518,66 @@ export class OnlineMatch {
     }
   }
 
-  // ---------- 客户端：插值回放 + 本地纠偏 ----------
+  // ---------- 世界快照：插值回放 ----------
 
-  private clientTick(dtMs: number): void {
-    this.tickPing(dtMs);
+  private ingestSnapshot(msg: SnapMsg, immediate = false): void {
+    const at = performance.now();
+    const prev = this.samples[this.samples.length - 1];
+    const objects = prev ? new Map(prev.objects) : new Map<string, SnapObj>();
+    const drops = prev ? new Map(prev.drops) : new Map<number, SnapDrop>();
 
-    const now = performance.now();
-    const renderAt = now - INTERP_DELAY;
-    const view = this.sampleAt(renderAt);
-    if (view) {
-      for (const [id, s] of view.players) {
-        if (id === this.localNetId) continue;
-        const player = this.deps.players.get(id);
-        if (!player) continue;
-        const prev = this.lastRemoteAt.get(id);
-        if (prev) {
-          const step = Math.hypot(s.x - prev.x, s.y - prev.y);
-          if (step > this.stats.remoteMaxStep) this.stats.remoteMaxStep = step;
-        }
-        this.lastRemoteAt.set(id, { x: s.x, y: s.y });
-        player.driveRemoteState(s.x, s.y, s.vx, s.vy, s.g);
-      }
-      for (const [id, o] of view.objects) {
+    for (const o of msg.o ?? []) objects.set(o.id, o);
+    for (const d of msg.d ?? []) drops.set(d.id, d);
+
+    this.samples.push({ at, objects, drops });
+    while (this.samples.length > 2 && at - this.samples[0].at > SAMPLE_KEEP) this.samples.shift();
+
+    this.snapRecv++;
+    if (msg.seq > this.lastSnapSeq + 1) this.snapGaps += msg.seq - this.lastSnapSeq - 1;
+    this.lastSnapSeq = Math.max(this.lastSnapSeq, msg.seq);
+
+    // 掉落物坐标是权威的，直接落到本地表现上
+    for (const d of msg.d ?? []) this.deps.pickups.applyNetPosition(d.id, d.x, d.y, d.f);
+
+    if (immediate) {
+      for (const [id, o] of objects) {
         const runtime = this.objectById.get(id);
         if (runtime?.body) this.driveObject(runtime.body, o.x, o.y, o.a);
       }
     }
-
-    // 自己的角色：房主的权威状态才是真的，本地只是预测 → 平滑纠偏
-    const local = this.localPlayer;
-    if (local) this.reconcileLocal(local);
   }
 
-  private reconcileLocal(local: Player): void {
-    const s = this.latestOwn;
-    if (!s || local.health.isDead) return;
-
-    // 样本年龄 = 收到后过去的时间 + 单程延迟（样本描述的是"房主当时"的状态）
-    const ageMs = Math.min(600, performance.now() - this.ownSampleAt + this.oneWay);
-    const steps = (ageMs / 1000) * STEPS_PER_SEC;
-    const targetX = s.x + s.vx * steps;
-    const targetY = s.y + s.vy * steps;
-    const dx = targetX - local.container.x;
-    const dy = targetY - local.container.y;
-    const dist = Math.hypot(dx, dy);
-    this.stats.localErr = Math.round(dist * 10) / 10;
-    if (dist <= LOCAL_DEADBAND) return;
-
-    if (dist > LOCAL_HARD_SNAP) {
-      // 真脱同步（掉包/长时间卡顿）：直接对齐，否则会一直漂移
-      this.stats.hardSnaps++;
-      local.container.setPosition(targetX, targetY);
-      local.container.setVelocity(s.vx, s.vy);
-      return;
+  /** 非房主：把动态刚体钉到插值目标上（视觉/碰撞都跟着走） */
+  private driveRemoteObjects(): void {
+    const view = this.sampleObjects(performance.now() - POS_DELAY);
+    if (!view) return;
+    for (const [id, o] of view) {
+      const runtime = this.objectById.get(id);
+      if (runtime?.body) this.driveObject(runtime.body, o.x, o.y, o.a);
     }
+  }
 
-    const k = Math.min(0.5, LOCAL_MAX_STEP / dist);
-    local.container.setPosition(
-      local.container.x + dx * k,
-      local.container.y + dy * k,
-    );
+  /** 按渲染时间取样（两帧之间线性插值；过期则保持最后位置） */
+  private sampleObjects(renderAt: number): Map<string, SnapObj> | null {
+    const list = this.samples;
+    if (list.length === 0) return null;
+    if (list.length === 1 || renderAt <= list[0].at) return list[0].objects;
+    const last = list[list.length - 1];
+    if (renderAt >= last.at) return last.objects;
+    for (let i = list.length - 2; i >= 0; i--) {
+      const a = list[i];
+      const b = list[i + 1];
+      if (renderAt < a.at || renderAt > b.at) continue;
+      const span = b.at - a.at;
+      const t = span > 0 ? (renderAt - a.at) / span : 0;
+      const out = new Map<string, SnapObj>();
+      for (const [id, ob] of b.objects) {
+        const oa = a.objects.get(id) ?? ob;
+        out.set(id, { id, x: lerp(oa.x, ob.x, t), y: lerp(oa.y, ob.y, t), a: lerpAngle(oa.a, ob.a, t) });
+      }
+      return out;
+    }
+    return last.objects;
   }
 
   private driveObject(body: MatterJS.BodyType, x: number, y: number, a: number): void {
@@ -525,228 +588,30 @@ export class OnlineMatch {
     matter.body.setAngularVelocity(body, 0);
   }
 
-  /** 把快照合并进缓冲（累积式：省略的字段沿用上一帧） */
-  private ingestSnapshot(msg: SnapMsg, immediate = false): void {
-    const at = performance.now();
-    const prev = this.samples[this.samples.length - 1];
-    const players = prev ? new Map(prev.players) : new Map<number, SnapPlayer>();
-    const objects = prev ? new Map(prev.objects) : new Map<string, SnapObj>();
-    const drops = prev ? new Map(prev.drops) : new Map<number, SnapDrop>();
-
-    for (const s of msg.p) {
-      players.set(s.id, s);
-      if (s.id === this.localNetId) {
-        this.latestOwn = s;
-        this.ownSampleAt = at;
-      }
-    }
-    for (const o of msg.o ?? []) objects.set(o.id, o);
-    for (const d of msg.d ?? []) drops.set(d.id, d);
-
-    this.samples.push({ at, players, objects, drops });
-    this.stats.lastSnapSeq = msg.seq;
-    this.stats.samples = this.samples.length;
-    // 只保留 1.5s
-    while (this.samples.length > 2 && at - this.samples[0].at > SAMPLE_KEEP) this.samples.shift();
-
-    // 掉落物坐标是权威的，直接落到本地表现上
-    for (const d of msg.d ?? []) this.deps.pickups.applyNetPosition(d.id, d.x, d.y, d.f);
-
-    if (immediate) {
-      for (const [id, s] of players) {
-        if (id === this.localNetId) continue;
-        this.deps.players.get(id)?.driveRemoteState(s.x, s.y, s.vx, s.vy, s.g);
-      }
-      for (const [id, o] of objects) {
-        const runtime = this.objectById.get(id);
-        if (runtime?.body) this.driveObject(runtime.body, o.x, o.y, o.a);
-      }
-    }
-  }
-
-  /** 按渲染时间取样（两帧之间线性插值；过期则用速度外推） */
-  private sampleAt(renderAt: number): SnapSample | null {
-    const list = this.samples;
-    if (list.length === 0) return null;
-    if (list.length === 1 || renderAt <= list[0].at) return list[0];
-
-    const last = list[list.length - 1];
-    if (renderAt >= last.at) {
-      const dt = Math.min(MAX_EXTRAPOLATE, renderAt - last.at) / 1000;
-      const players = new Map<number, SnapPlayer>();
-      for (const [id, s] of last.players) {
-        players.set(id, {
-          ...s,
-          x: s.x + s.vx * dt * STEPS_PER_SEC,
-          y: s.y + s.vy * dt * STEPS_PER_SEC,
-        });
-      }
-      return { at: last.at, players, objects: last.objects, drops: last.drops };
-    }
-
-    for (let i = list.length - 2; i >= 0; i--) {
-      const a = list[i];
-      const b = list[i + 1];
-      if (renderAt < a.at || renderAt > b.at) continue;
-      const span = b.at - a.at;
-      const t = span > 0 ? (renderAt - a.at) / span : 0;
-
-      const players = new Map<number, SnapPlayer>();
-      for (const [id, sb] of b.players) {
-        const sa = a.players.get(id) ?? sb;
-        players.set(id, {
-          id,
-          x: lerp(sa.x, sb.x, t),
-          y: lerp(sa.y, sb.y, t),
-          vx: lerp(sa.vx, sb.vx, t),
-          vy: lerp(sa.vy, sb.vy, t),
-          g: sb.g,
-        });
-      }
-      const objects = new Map<string, SnapObj>();
-      for (const [id, ob] of b.objects) {
-        const oa = a.objects.get(id) ?? ob;
-        objects.set(id, {
-          id,
-          x: lerp(oa.x, ob.x, t),
-          y: lerp(oa.y, ob.y, t),
-          a: lerpAngle(oa.a, ob.a, t),
-        });
-      }
-      return { at: renderAt, players, objects, drops: b.drops };
-    }
-    return last;
-  }
-
-  private tickPing(dtMs: number): void {
-    this.pingTimer += dtMs;
-    if (this.pingTimer < 1000) return;
-    // 上一个 ping 还没回（掉包）→ 丢弃重发，避免一直等
-    if (this.pingSentAt !== 0 && performance.now() - this.pingSentAt < 2500) return;
-    this.pingTimer = 0;
-    this.pingSentAt = performance.now();
-    this.send({ t: 'ping', ts: Math.round(this.pingSentAt) });
-  }
-
-  // ---------- 上行 ----------
-
-  private send(msg: ClientMsg): void {
-    this.deps.ctx.link.send(msg);
-  }
-
-  /** 10Hz 上报自身位置（服务端只用于抢拾距离粗校验，不再广播） + 本地护盾增量 */
-  private sendPosAndShield(dtMs: number): void {
-    const local = this.localPlayer;
-    if (!local || dtMs <= 0) return;
-
-    this.lastPosAt += dtMs;
-    if (this.lastPosAt >= 100) {
-      this.lastPosAt = 0;
-      this.send({
-        t: 'pos',
-        x: round2(local.container.x),
-        y: round2(local.container.y),
-        vx: round2(local.body.velocity.x),
-        vy: round2(local.body.velocity.y),
-      });
-    }
-
-    // 超级战士等本地增益带来的护盾：本地变化后补报给服务端
-    const shield = local.health.shield;
-    if (shield > this.lastShieldSent) {
-      this.send({ t: 'shield', amount: shield - this.lastShieldSent });
-      this.lastShieldSent = shield;
-    } else if (shield < this.lastShieldSent) {
-      this.lastShieldSent = shield;
-    }
-  }
-
-  /** 联机：摔落等环境伤害由房主统一检测后上报 */
-  reportEnvDamage(amount: number, player?: Player): void {
-    if (this.role !== 'authority' || amount <= 0) return;
-    const target = player ?? this.localPlayer;
-    if (!target) return;
-    const targetNet = this.netIdOf(target);
-    if (targetNet < 0) return;
-    this.send({
-      t: 'dmg',
-      target: targetNet,
-      src: -1,
-      amount,
-      kind: 'env',
-      crit: false,
-      attack: 0,
-      ignoreInvuln: true,
-    });
-  }
-
-  private reportDamage(target: Player, info: DamageInfo): void {
-    if (this.role !== 'authority') return;
-    const targetNet = this.netIdOf(target);
-    if (targetNet < 0) return;
-    // 攻击者：用实体 id 反查座位号；拿不到就当作环境伤害
-    const srcNet = info.sourceId !== undefined ? (this.entityToNet.get(info.sourceId) ?? -1) : -1;
-    // 武器：优先伤害来源自带的 id（投掷物/光束/近战各自准确），
-    // 否则退回攻击者当前手持武器（爆炸/连招这类没有显式武器的场景）
-    const shooter = info.sourceId !== undefined ? this.playerByEntityId(info.sourceId) : undefined;
-    const weapon = info.weaponId ?? shooter?.heldWeapon?.id;
-    this.send({
-      t: 'dmg',
-      target: targetNet,
-      src: srcNet,
-      weapon,
-      amount: info.amount,
-      kind: info.kind,
-      crit: info.critical === true,
-      point: info.point ? { x: round2(info.point.x), y: round2(info.point.y) } : undefined,
-      kb: info.knockback ? { x: round2(info.knockback.x), y: round2(info.knockback.y) } : undefined,
-      attack: info.attackId ?? 0,
-      ignoreInvuln: info.ignoreInvuln === true,
-    });
-  }
-
-  private requestPickup(
-    item: { netId?: number; kind: 'weapon' | 'item'; weaponId?: string; itemId?: string; ammo?: number; x: number; y: number },
-    player: Player,
-    swap: boolean,
-  ): void {
-    if (this.role !== 'authority') return;
-    if (item.netId === undefined) return;
-    const by = this.netIdOf(player);
-    if (by < 0) return;
-    let swapPayload: { weaponId: string; ammo: number; x: number; y: number } | undefined;
-    if (swap && player.heldWeapon) {
-      swapPayload = {
-        weaponId: player.heldWeapon.id,
-        ammo: player.heldWeapon.ammo,
-        x: round2(player.container.x),
-        y: round2(player.container.y),
-      };
-    }
-    this.send({ t: 'pick', id: item.netId, by, swap: swapPayload });
-  }
-
   // ---------- 角色 ----------
 
   private applyRole(): void {
     const authority = this.role === 'authority';
     this.stats.role = this.role;
+    this.stats.hostSeat = this.hostSeat;
     this.deps.destruction.setAuthority(authority);
     this.deps.pickups.setNet(
       { request: (item, player, swap) => this.requestPickup(item, player, swap) },
-      authority ? null : this.localPlayer,
-      authority ? 'authority' : 'client',
+      this.localPlayer,
+      'online',
     );
+    this.deps.pickups.setDropAuthority(authority);
     this.deps.damage.setNetSink({
       playerDamage: (target, info) => this.reportDamage(target, info),
       objectDestroyed: (id) => {
         if (this.role === 'authority') this.send({ t: 'obj', id });
       },
     });
+    // 摔落伤害：**只有自己**检测自己（房主不再替别人算，避免用滞后副本判定）
+    const local = this.localPlayer;
     for (const player of this.deps.players.values()) {
-      player.envDamageReporter = (amount, p) => this.reportEnvDamage(amount, p ?? player);
+      player.envDamageReporter = player === local ? (amount) => this.reportEnvDamage(amount) : undefined;
     }
-    // 切到房主：清掉发送缓存，下一帧发全量
     if (authority) {
       this.lastObjSent.clear();
       this.lastDropSent.clear();
@@ -755,21 +620,14 @@ export class OnlineMatch {
   }
 
   private onHostChanged(seat: number): void {
-    const previous = this.role;
+    if (seat === this.hostSeat) return;
     this.hostSeat = seat;
-    this.role = seat === this.localNetId ? 'authority' : 'client';
-    const next = this.role;
-    if (previous === next) return;
-
-    if (next === 'authority') {
-      // 接管世界：远端玩家从现在开始由本端物理模拟（停止用快照驱动）
-      this.samples = [];
-      this.latestOwn = null;
-      this.lastRemoteAt.clear();
-      for (const player of this.deps.players.values()) player.clearRemoteDrive();
-    } else {
-      this.snapSeq = 0;
+    const next = seat === this.localNetId ? 'authority' : 'client';
+    if (next === this.role) {
+      this.stats.hostSeat = seat;
+      return;
     }
+    this.role = next;
     this.applyRole();
   }
 
@@ -779,25 +637,31 @@ export class OnlineMatch {
     switch (msg.t) {
       case 'in':
         this.applyInputs(msg.p);
+        // 服务端每 33ms 下发一次权威座位号：漏收 host 事件也能在这一帧自愈
+        if (typeof msg.h === 'number' && msg.h !== this.hostSeat) this.onHostChanged(msg.h);
+        break;
+      case 'pos':
+        this.ingestPos(msg.p);
         break;
       case 'snap':
-        if (this.role === 'client') this.ingestSnapshot(msg);
+        if (typeof msg.h === 'number' && msg.h !== this.hostSeat) this.onHostChanged(msg.h);
+        this.ingestSnapshot(msg);
         break;
       case 'host':
         this.onHostChanged(msg.id);
         break;
-      case 'drop_remove':
-        this.deps.pickups.removeByNetId(msg.id);
-        this.lastDropSent.delete(msg.id);
-        break;
       case 'pong':
-        this.onPong(msg.ts);
+        this.onPong(msg.ts, msg.tag);
         break;
       case 'hp':
         this.applyHp(msg);
         break;
       case 'drop_add':
         this.spawnDrop(msg.item);
+        break;
+      case 'drop_remove':
+        this.deps.pickups.removeByNetId(msg.id);
+        this.lastDropSent.delete(msg.id);
         break;
       case 'pick':
         this.deps.pickups.applyGrant(msg.id, this.deps.players.get(msg.by) ?? null, msg.grant);
@@ -821,15 +685,15 @@ export class OnlineMatch {
     }
   }
 
-  private onPong(ts: number): void {
-    if (this.pingSentAt === 0) return;
+  private onPong(ts: number, tag?: string): void {
+    // 只认自己发的 ping（UI 用 Date.now()，网络层用 performance.now()）
+    if (tag !== 'net' || this.pingSentAt === 0) return;
     const rtt = performance.now() - ts;
     this.pingSentAt = 0;
-    if (rtt <= 0 || rtt > 3000) return;
-    // 单向延迟取平滑最小值的一半（估计"房主状态传播到本端"的时间）
-    const half = rtt / 2;
-    this.oneWay = this.oneWay * 0.7 + half * 0.3;
-    this.stats.oneWay = Math.round(this.oneWay);
+    if (rtt <= 0 || rtt > 8000) return;
+    this.rtt = this.rtt === 0 ? rtt : this.rtt * 0.7 + rtt * 0.3;
+    this.stats.rtt = Math.round(this.rtt);
+    this.stats.oneWay = Math.round(this.rtt / 2);
   }
 
   private applyInputs(list: InputSnapshot[]): void {
@@ -852,10 +716,8 @@ export class OnlineMatch {
   private applyHp(msg: ServerMsg & { t: 'hp' }): void {
     const p = this.deps.players.get(msg.id);
     if (!p) return;
-    // hp.src 是"座位号"，这里统一换算成实体 id：
-    // 单机与联机都用实体 id 做击杀归属/死亡镜头，调用方不需要区分两套 id 体系。
+    // hp.src 是"座位号"，统一换算成实体 id（单机/联机共用同一套击杀归属逻辑）
     const killer = msg.src >= 0 ? this.deps.players.get(msg.src) : undefined;
-    // 本地玩家同样以服务端为准
     p.applyNetDamage({
       hp: msg.hp,
       shield: msg.shield,
@@ -881,6 +743,134 @@ export class OnlineMatch {
     this.lastDropSent.delete(drop.id);
   }
 
+  // ---------- 上行 ----------
+
+  private send(msg: ClientMsg): void {
+    this.deps.ctx.link.send(msg);
+  }
+
+  private tickPing(dtMs: number): void {
+    this.pingTimer += dtMs;
+    if (this.pingTimer < 1000) return;
+    if (this.pingSentAt !== 0 && performance.now() - this.pingSentAt < 2500) return;
+    this.pingTimer = 0;
+    this.pingSentAt = performance.now();
+    this.send({ t: 'ping', ts: Math.round(this.pingSentAt), tag: 'net' });
+  }
+
+  private updateRates(dtMs: number): void {
+    this.rateTimer += dtMs;
+    if (this.rateTimer < 1000) {
+      this.stats.fps = Math.round(this.deps.scene.game.loop.actualFps);
+      this.stats.players = this.deps.players.size;
+      return;
+    }
+    const secs = this.rateTimer / 1000;
+    this.stats.posHz = Math.round(this.posRecv / secs);
+    this.stats.snapHz = Math.round(this.snapRecv / secs);
+    this.stats.snapGaps = this.snapGaps;
+    this.stats.drops = this.deps.pickups.netSpawns().length;
+    this.stats.fps = Math.round(this.deps.scene.game.loop.actualFps);
+    this.stats.players = this.deps.players.size;
+    this.posRecv = 0;
+    this.snapRecv = 0;
+    this.rateTimer = 0;
+  }
+
+  /** 20Hz 上报自身位置（权威）+ 本地护盾增量 */
+  private sendLocalState(dtMs: number): void {
+    const local = this.localPlayer;
+    if (!local || dtMs <= 0) return;
+
+    this.lastPosAt += dtMs;
+    if (this.lastPosAt >= POS_INTERVAL) {
+      this.lastPosAt = 0;
+      this.send({
+        t: 'pos',
+        x: round2(local.container.x),
+        y: round2(local.container.y),
+        vx: round2(local.body.velocity.x),
+        vy: round2(local.body.velocity.y),
+        g: local.isGrounded,
+      });
+      this.posSent++;
+    }
+
+    // 超级战士等本地增益带来的护盾：本地变化后补报给服务端
+    const shield = local.health.shield;
+    if (shield > this.lastShieldSent) {
+      this.send({ t: 'shield', amount: shield - this.lastShieldSent });
+      this.lastShieldSent = shield;
+    } else if (shield < this.lastShieldSent) {
+      this.lastShieldSent = shield;
+    }
+  }
+
+  /** 摔落等环境伤害：只有自己检测自己（服务端校验"自己伤自己"） */
+  reportEnvDamage(amount: number): void {
+    if (amount <= 0 || this.localNetId < 0) return;
+    this.send({
+      t: 'dmg',
+      target: this.localNetId,
+      src: -1,
+      amount,
+      kind: 'env',
+      crit: false,
+      attack: 0,
+      ignoreInvuln: true,
+    });
+  }
+
+  /**
+   * 伤害上报：**谁打的上报谁**（和 v1 一致）。
+   *
+   * 为什么不再由房主代报：房主看到的是"你 + 一个来回延迟"，命中判定必然错位
+   * （实测 300ms 时平均偏差 83px）。改成射击者上报后，命中与玩家看到的完全一致。
+   * 作弊不设防（纯休闲房），服务端仍保留频率/单次上限的宽松校验。
+   */
+  private reportDamage(target: Player, info: DamageInfo): void {
+    const local = this.localPlayer;
+    if (!local || this.localNetId < 0) return;
+    if (info.sourceId !== local.id) return;
+    const targetNet = this.netIdOf(target);
+    if (targetNet < 0) return;
+    // 武器：优先伤害来源自带的 id，否则退回当前手持武器
+    const weapon = info.weaponId ?? local.heldWeapon?.id;
+    this.send({
+      t: 'dmg',
+      target: targetNet,
+      src: this.localNetId,
+      weapon,
+      amount: info.amount,
+      kind: info.kind,
+      crit: info.critical === true,
+      point: info.point ? { x: round2(info.point.x), y: round2(info.point.y) } : undefined,
+      kb: info.knockback ? { x: round2(info.knockback.x), y: round2(info.knockback.y) } : undefined,
+      attack: info.attackId ?? 0,
+      ignoreInvuln: info.ignoreInvuln === true,
+    });
+  }
+
+  /** 拾取请求：只请求自己的拾取（带着自己真实的落点），服务端先到先得 */
+  private requestPickup(
+    item: { netId?: number; kind: 'weapon' | 'item'; weaponId?: string; itemId?: string; ammo?: number; x: number; y: number },
+    player: Player,
+    swap: boolean,
+  ): void {
+    if (this.localNetId < 0 || player !== this.localPlayer) return;
+    if (item.netId === undefined) return;
+    let swapPayload: { weaponId: string; ammo: number; x: number; y: number } | undefined;
+    if (swap && player.heldWeapon) {
+      swapPayload = {
+        weaponId: player.heldWeapon.id,
+        ammo: player.heldWeapon.ammo,
+        x: round2(player.container.x),
+        y: round2(player.container.y),
+      };
+    }
+    this.send({ t: 'pick', id: item.netId, swap: swapPayload });
+  }
+
   /** 对局中途加入的新玩家：GameScene 负责建 Player，这里补登记 */
   private addPlayer(entry: MatchPlayer, stat: PlayerStat): void {
     if (this.deps.players.has(entry.netId)) return;
@@ -893,7 +883,7 @@ export class OnlineMatch {
     });
     this.deps.kills.set(player.id, stat.kills ?? 0);
     player.applyNetSnapshot({ hp: stat.hp, shield: stat.shield, dead: stat.dead });
-    player.envDamageReporter = (amount, p) => this.reportEnvDamage(amount, p ?? player);
+    player.envDamageReporter = undefined;
     this.deps.onRosterChanged();
   }
 
@@ -902,11 +892,10 @@ export class OnlineMatch {
     if (!player) return;
     this.deps.players.delete(netId);
     this.remote.delete(netId);
+    this.posBuffers.delete(netId);
+    this.lastRemoteAt.delete(netId);
     this.entityToNet.delete(player.id);
     this.deps.kills.delete(player.id);
-    if (netId === this.localNetId) {
-      this.latestOwn = null;
-    }
     player.destroy();
     this.deps.onRosterChanged();
   }
@@ -930,4 +919,38 @@ function lerpAngle(a: number, b: number, t: number): number {
   while (d > Math.PI) d -= Math.PI * 2;
   while (d < -Math.PI) d += Math.PI * 2;
   return a + d * t;
+}
+
+/** 按渲染时间取样远端玩家位置（两帧之间插值；过期则用速度外推一小段） */
+function samplePos(buffer: PosSample[], renderAt: number): PosSample | null {
+  if (buffer.length === 0) return null;
+  if (buffer.length === 1 || renderAt <= buffer[0].at) return buffer[0];
+  const last = buffer[buffer.length - 1];
+  if (renderAt >= last.at) {
+    const dt = Math.min(POS_EXTRAPOLATE, renderAt - last.at) / 1000;
+    return {
+      at: last.at,
+      x: last.x + last.vx * dt * STEPS_PER_SEC,
+      y: last.y + last.vy * dt * STEPS_PER_SEC,
+      vx: last.vx,
+      vy: last.vy,
+      g: last.g,
+    };
+  }
+  for (let i = buffer.length - 2; i >= 0; i--) {
+    const a = buffer[i];
+    const b = buffer[i + 1];
+    if (renderAt < a.at || renderAt > b.at) continue;
+    const span = b.at - a.at;
+    const t = span > 0 ? (renderAt - a.at) / span : 0;
+    return {
+      at: renderAt,
+      x: lerp(a.x, b.x, t),
+      y: lerp(a.y, b.y, t),
+      vx: lerp(a.vx, b.vx, t),
+      vy: lerp(a.vy, b.vy, t),
+      g: b.g,
+    };
+  }
+  return last;
 }

@@ -376,8 +376,8 @@ async function main() {
   check('输入经服务端中继后对端玩家移动', relayOk, relayDetail);
 
   // ---- 跳跃高度固定（取消"按得越久跳得越高"）----
-  const hostCdp0 = async () => ((await a.cdp.eval(`window.__game.scene.getScene('GameScene').online.isAuthority`)) ? a.cdp : b.cdp);
-  const jumpTest = await hostCdp0().then(async (cdp) => {
+  const hostCdpOf = async () => ((await a.cdp.eval(`window.__game.scene.getScene('GameScene').online.isAuthority`)) ? a.cdp : b.cdp);
+  const jumpTest = await hostCdpOf().then(async (cdp) => {
     const measure = async (hold) => {
       const r = await cdp.eval(`(async () => {
         const s = window.__game.scene.getScene('GameScene');
@@ -419,24 +419,25 @@ async function main() {
   );
 
   // ---- 屏幕外对手箭头 ----
-  // v2 下玩家位置由"世界权威（房主）"决定：改位置必须改在房主的世界上，
-  // 其它客户端会通过快照收到并跟随（这也是本次重构的核心行为）。
-  const hostCdp = (await a.cdp.eval(`window.__game.scene.getScene('GameScene').online.isAuthority`)) ? a.cdp : b.cdp;
-  // 用出生点传送（出生点一定是安全地面），避免丢进虚空摔死导致提前结算
-  const bMove = await hostCdp.eval(`(() => {
+  // v3：位置由**各自客户端权威**，本端改自己的位置会经服务端中继给对端（插值 ~100ms）。
+  const bMove = await b.cdp.eval(`(() => {
     const s = window.__game.scene.getScene('GameScene');
+    const me = s.online.localPlayer;
     const sp = s.mapData.spawnPoints;
     let far = sp[0];
     for (const p of sp) if (Math.abs(p.x - sp[0].x) > Math.abs(far.x - sp[0].x)) far = p;
+    const before = Math.round(me.container.x);
+    me.container.setPosition(far.x, far.y - 60);
+    me.container.setVelocity(0, 0);
+    return { before, target: Math.round(far.x), matchId: s.onlineData.matchId };
+  })()`);
+  await a.cdp.eval(`(() => {
+    const s = window.__game.scene.getScene('GameScene');
     const me = s.online.localPlayer;
-    const other = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
-    const bp = s.online.playerOf(other);
-    const before = Math.round(bp.container.x);
+    const sp = s.mapData.spawnPoints;
     me.container.setPosition(sp[0].x, sp[0].y - 60);
     me.container.setVelocity(0, 0);
-    bp.container.setPosition(far.x, far.y - 60);
-    bp.container.setVelocity(0, 0);
-    return { before, target: Math.round(far.x), mine: Math.round(sp[0].x), matchId: s.onlineData.matchId };
+    return true;
   })()`);
   await sleep(1600);
   const arrow = await a.cdp.eval(`(() => {
@@ -460,19 +461,18 @@ async function main() {
     arrow.count >= 1 && arrow.labels.some((l) => l.visible),
     JSON.stringify({ bMove, arrow }),
   );
-  // 房主改了对手位置后，非房主端应当通过权威快照跟随（而不是各端各算各的）
-  const follower = await b.cdp.eval(`(() => {
+  // 对端的位置通过 pos 中继同步过来（误差 = 单程延迟 × 速度，本机很小）
+  const follower = await a.cdp.eval(`(() => {
     const s = window.__game.scene.getScene('GameScene');
     const other = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
     const p = s.online.playerOf(other);
-    return { x: Math.round(p.container.x), authoritative: s.online.isAuthority };
+    return { x: Math.round(p.container.x) };
   })()`);
   check(
-    '房主位置通过权威快照同步到非房主端',
-    follower.authoritative === true || Math.abs(follower.x - bMove.mine) < 160,
+    '玩家位置通过 pos 中继同步到对端',
+    Math.abs(follower.x - bMove.target) < 160,
     JSON.stringify({ follower, bMove }),
   );
-  await a.cdp.shot('/tmp/stickman-shots/offscreen-arrow.png');
 
   // ---- 伤害仲裁 ----
   const dmg = await a.cdp.eval(`(() => {
@@ -482,7 +482,8 @@ async function main() {
     const target = s.online.playerOf(other);
     s.damageSystem.damagePlayer(target, {
       amount: 25, kind: 'bullet', sourceId: me.id,
-      point: { x: target.container.x, y: target.container.y - 30 },
+      // 用身体中心（头部带会触发暴击 ×2，干扰断言）
+      point: { x: target.container.x, y: target.container.y },
       normal: { x: -1, y: 0 }, knockback: { x: -3, y: -1 }, attackId: 99,
     });
     return true;
@@ -497,7 +498,13 @@ async function main() {
   })()`);
   const hpB = await b.cdp.eval(`(() => {
     const s = window.__game.scene.getScene('GameScene');
-    return { hp: s.online.localPlayer.health.hp, dead: s.online.localPlayer.health.isDead, matchId: s.onlineData.matchId };
+    return {
+      hp: s.online.localPlayer.health.hp,
+      dead: s.online.localPlayer.health.isDead,
+      matchId: s.onlineData.matchId,
+      diag: window.__netDiag ? window.__netDiag() : null,
+      sink: !!s.damageSystem.netSink,
+    };
   })()`);
   check(
     '服务端权威血量：双方一致',
@@ -513,12 +520,10 @@ async function main() {
       const drop = s.pickups.list.find((i) => i.kind === 'weapon' && i.weaponId !== 'grenade');
       if (!drop) return { ok: false, reason: '没有武器掉落物' };
       const me = s.online.localPlayer;
-      // 真正把角色挪到掉落物旁边：服务端按玩家最近上报的位置做距离校验
+      // 真正把角色挪到掉落物旁边：拾取由"自己"请求（服务端按上报位置校验距离）
       me.container.setPosition(drop.x, drop.y);
       me.container.setVelocity(0, 0);
-      await new Promise((r) => setTimeout(r, 350));
-      s.online.deps.ctx.link.send({ t: 'pick', id: drop.netId });
-      await new Promise((r) => setTimeout(r, 700));
+      await new Promise((r) => setTimeout(r, 900));
       return {
         ok: true,
         netId: drop.netId ?? null,
@@ -537,15 +542,16 @@ async function main() {
   check('掉落物在两端同步', aDrops === bDrops, `A=${aDrops} B=${bDrops}`);
 
   // ---- 核心回归 1：远端玩家走"100ms 缓冲插值"，不再出现瞬移 ----
-  const watcherCdp = hostCdp === a.cdp ? b.cdp : a.cdp;
+  // v3：位置由各自客户端权威，A 自己的跳跃会经 pos 中继到 B（B 只是观察者）
+  const moverCdp = a.cdp;
+  const watcherCdp = b.cdp;
   await watcherCdp.eval(`(() => {
     const s = window.__game.scene.getScene('GameScene');
     s.online.stats.remoteMaxStep = 0;
-    s.online.stats.hardSnaps = 0;
     return true;
   })()`);
   for (let i = 0; i < 4; i++) {
-    await hostCdp.eval(`(() => {
+    await moverCdp.eval(`(() => {
       const s = window.__game.scene.getScene('GameScene');
       s.online.localPlayer.container.setVelocityY(-17);
       return true;
@@ -556,58 +562,44 @@ async function main() {
   const teleport = await watcherCdp.eval(`(() => {
     const s = window.__game.scene.getScene('GameScene');
     const st = s.online.stats;
-    return {
-      role: st.role,
-      maxStep: Math.round(st.remoteMaxStep * 10) / 10,
-      hardSnaps: st.hardSnaps,
-      samples: st.samples,
-      oneWay: st.oneWay,
-      snapSeq: st.lastSnapSeq,
-    };
+    return { role: st.role, maxStep: Math.round(st.remoteMaxStep * 10) / 10, posHz: st.posHz, oneWay: st.oneWay, fps: st.fps };
   })()`);
   check(
-    '远端玩家按缓冲插值回放：单帧位移不出现瞬移、无需硬纠偏',
-    teleport.samples > 0 && teleport.maxStep <= 45 && teleport.hardSnaps === 0,
+    '远端玩家按缓冲插值回放：单帧位移不出现瞬移',
+    teleport.posHz > 0 && teleport.maxStep > 0 && teleport.maxStep <= 45,
     JSON.stringify(teleport),
   );
 
-  // ---- 核心回归 1b：非房主自己的角色"本地预测 + 平滑纠偏"，不产生橡皮筋 ----
-  await b.cdp.eval(`(() => {
+  // ---- 核心回归 1b：本地位置不会被权威回拉（无橡皮筋）----
+  // v3 下位置由本人权威，所以"挪一段就停在那儿"；v2 会被房主硬拽回去。
+  const noPull = await b.cdp.eval(`(async () => {
     const s = window.__game.scene.getScene('GameScene');
-    s.online.stats.hardSnaps = 0;
-    s.online.stats.localErr = 0;
-    const orig = s.inputManager.readP1.bind(s.inputManager);
-    window.__origReadB = orig;
-    let n = 0;
-    s.inputManager.readP1 = () => {
-      const c = orig();
-      c.moveX = n++ % 60 < 40 ? 1 : -1;
-      c.jump = n % 20 === 0;
-      c.jumpHeld = n % 20 < 6;
-      return c;
-    };
-    return true;
-  })()`);
-  await sleep(2200);
-  await b.cdp.eval(`(() => {
-    const s = window.__game.scene.getScene('GameScene');
-    if (window.__origReadB) s.inputManager.readP1 = window.__origReadB;
-    return true;
-  })()`);
-  await sleep(500);
-  const predict = await b.cdp.eval(`(() => {
-    const s = window.__game.scene.getScene('GameScene');
-    const st = s.online.stats;
-    return { role: st.role, hardSnaps: st.hardSnaps, localErr: st.localErr, oneWay: st.oneWay };
+    const me = s.online.localPlayer;
+    // 先回到第一个出生点（保证右侧是空地，避免被墙挡住误判）
+    const sp = s.mapData.spawnPoints[0];
+    me.container.setPosition(sp.x, sp.y - 20);
+    me.container.setVelocity(0, 0);
+    await new Promise((r) => setTimeout(r, 500));
+    const x0 = me.container.x;
+    const target = Math.round(x0 + 90);
+    me.container.setPosition(x0 + 90, me.container.y);
+    me.container.setVelocity(0, 0);
+    const trail = [];
+    for (let i = 0; i < 8; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      trail.push(Math.round(me.container.x));
+    }
+    return { target, trail };
   })()`);
   check(
-    '非房主客户端：本地预测误差小、无硬纠偏（操作不掉手感）',
-    predict.role === 'client' && predict.hardSnaps === 0 && predict.localErr <= 60,
-    JSON.stringify(predict),
+    '本地位置不会被拉回（无橡皮筋）',
+    noPull.trail.every((x) => Math.abs(x - noPull.target) <= 6),
+    JSON.stringify(noPull),
   );
 
   // ---- 核心回归 2：动态刚体（纸箱/箱子）位置与朝向两端一致 ----
-  const crateId = await hostCdp.eval(`(() => {
+  const worldHostCdp = await hostCdpOf();
+  const crateId = await worldHostCdp.eval(`(() => {
     const s = window.__game.scene.getScene('GameScene');
     const o = s.mapObjects.find((m) => m.body && !m.body.isStatic);
     if (!o) return '';
@@ -650,11 +642,10 @@ async function main() {
       const s = window.__game.scene.getScene('GameScene');
       return {
         role: s.online.stats.role,
-        snapSeq: s.online.stats.lastSnapSeq,
-        samples: s.online.stats.samples,
+        snapGaps: s.online.stats.snapGaps,
+        snapHz: s.online.stats.snapHz,
         dyn: s.online.dynamicObjects?.length ?? -1,
         ids: s.online.objectById?.size ?? -1,
-        sample: s.online.samples?.length ?? -1,
       };
     })()`);
     console.log(`  ℹ️ 物体差异样本: ${JSON.stringify(diffs.slice(0, 4))}`);
@@ -834,6 +825,17 @@ async function main() {
     spec.you === -1 && spec.hasLocal === false && /观战/.test(spec.hud) && spec.startVisible === false,
     JSON.stringify(spec),
   );
+
+  // ---- 网络诊断（真实部署排查用）----
+  const diag = await a.cdp.eval(`window.__netDiag ? window.__netDiag() : null`);
+  check(
+    'window.__netDiag() 可导出关键指标',
+    !!diag && typeof diag.role === 'string' && typeof diag.snapHz === 'number' && diag.players >= 1,
+    JSON.stringify(diag),
+  );
+  const pingText = await b.cdp.eval(`[...document.querySelectorAll('.mp-topbar .mp-sub')].map((e) => e.textContent)`);
+  const pingMs = Number((pingText.find((t) => /ms$/.test(t)) ?? '').replace('ms', ''));
+  check('延迟显示是正常量级（不会出现十几位数）', Number.isFinite(pingMs) && pingMs >= 0 && pingMs < 10000, JSON.stringify(pingText));
 
   // ---- 运行时异常 ----
   const exceptions = [...a.cdp.exceptions, ...b.cdp.exceptions];

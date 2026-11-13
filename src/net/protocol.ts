@@ -125,6 +125,8 @@ export interface InputSnapshot {
 export interface InputBatchMsg {
   t: 'in';
   tick: number;
+  /** 服务端认定的世界权威（房主）座位号：客户端每帧据此自愈角色 */
+  h: number;
   p: InputSnapshot[];
 }
 
@@ -134,12 +136,20 @@ export interface PosSnapshot {
   y: number;
   vx: number;
   vy: number;
+  /** 着地（远端姿态用） */
+  g?: boolean;
 }
 
 export interface PosBatchMsg {
   t: 'pos';
   p: PosSnapshot[];
 }
+
+/**
+ * 位置消息的语义（v3）：**每个客户端权威自己的位置**。
+ * 服务端只做 20Hz 中继，其它端按 100ms 缓冲插值；房主把收到的位置
+ * 套到自己那份副本上，用于命中/拾取判定。
+ */
 
 // ---------- 世界状态同步（房主 → 服务端 → 其它客户端）----------
 
@@ -181,7 +191,10 @@ export interface SnapMsg {
   t: 'snap';
   seq: number;
   key: boolean;
-  p: SnapPlayer[];
+  /** 服务端认定的世界权威座位号（不信任房主自报） */
+  h?: number;
+  /** 已废弃：玩家位置改走 pos 中继（保留字段兼容旧报文） */
+  p?: SnapPlayer[];
   o?: SnapObj[];
   d?: SnapDrop[];
 }
@@ -276,6 +289,8 @@ export interface ErrorMsg {
 export interface PongMsg {
   t: 'pong';
   ts: number;
+  /** 与 ping 的 tag 对应：UI 与网络层各用各的时钟 */
+  tag?: string;
 }
 
 export interface RoomClosedMsg {
@@ -321,7 +336,7 @@ export type ClientMsg =
       aim: number;
       e: number;
     }
-  | { t: 'pos'; x: number; y: number; vx: number; vy: number }
+  | { t: 'pos'; x: number; y: number; vx: number; vy: number; g?: boolean }
   | {
       t: 'pick';
       id: number;
@@ -347,9 +362,9 @@ export type ClientMsg =
   | { t: 'shield'; amount: number }
   | { t: 'drop'; weaponId: string; ammo: number; x: number; y: number }
   | { t: 'obj'; id: string }
-  | { t: 'snap'; seq: number; key: boolean; p: SnapPlayer[]; o?: SnapObj[]; d?: SnapDrop[] }
+  | { t: 'snap'; seq: number; key: boolean; o?: SnapObj[]; d?: SnapDrop[] }
   | { t: 'drop_remove'; id: number }
-  | { t: 'ping'; ts: number };
+  | { t: 'ping'; ts: number; tag?: string };
 
 /** 对局启动数据（GameScene 通过 scene.start 的数据传入） */
 export interface MatchContext {

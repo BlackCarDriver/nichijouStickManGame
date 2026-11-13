@@ -143,6 +143,7 @@ async function main() {
   const snap = inB.p.find((p) => p.id === seatA);
   check('输入中继到对端', snap.mx === 1 && snap.jh === true && snap.ah === true);
   check('输入边沿被转发一次', (snap.e & 3) === 3, `e=${snap.e}`);
+  check('输入广播带房主座位号（客户端自愈用）', inB.h === seatA, `h=${inB.h} seatA=${seatA}`);
 
   await sleep(80);
   b.clear();
@@ -174,7 +175,8 @@ async function main() {
     d: [{ id: 999999, x: 640, y: 900, f: false }],
   });
   const snapB = await b.wait('snap', (m) => m.seq === 1);
-  check('房主快照被转发给其它客户端', snapB.key === true && snapB.p?.[0]?.x === 500);
+  check('房主快照被转发给其它客户端', snapB.key === true && snapB.o?.[0]?.x === 720);
+  check('快照带服务端认定的房主座位号', snapB.h === seatA, `h=${snapB.h} seatA=${seatA}`);
   check('快照携带动态物体', snapB.o?.[0]?.id === 'crate_a#0');
   check('快照携带掉落物落点', snapB.d?.[0]?.y === 900);
 
@@ -191,6 +193,12 @@ async function main() {
   late.close();
   await sleep(150);
 
+  // ---- 位置中继（每个客户端权威自己的位置）----
+  b.clear();
+  a.send({ t: 'pos', x: 500, y: 1000, vx: 10, vy: 0, g: true });
+  const posB = await b.wait('pos', (m) => m.p?.some((p) => p.id === seatA));
+  check('位置中继到对端（带速度与着地）', posB.p[0].x === 500 && posB.p[0].y === 1000 && posB.p[0].g === true);
+
   // ---- 拾取仲裁 ----
   const drop = startB1.drops.find((d) => d.kind === 'weapon');
   check('存在武器掉落物', !!drop);
@@ -199,13 +207,18 @@ async function main() {
     await sleep(60);
     a.clear();
     b.clear();
-    a.send({ t: 'pick', id: drop.id });
-    const pick = await a.wait('pick');
-    check('拾取被服务端授予', pick.by === seatA && pick.grant?.weaponId === drop.weaponId, JSON.stringify(pick.grant));
-    check('B 也收到拾取广播', (await b.wait('pick')).id === drop.id);
-    a.send({ t: 'pick', id: drop.id });
+    // 非房主也能为自己请求拾取（行动者最清楚自己站在哪）
+    b.send({ t: 'pos', x: drop.x, y: drop.y, vx: 0, vy: 0, g: true });
+    await sleep(60);
+    b.clear();
+    a.clear();
+    b.send({ t: 'pick', id: drop.id });
+    const pick = await b.wait('pick');
+    check('拾取由非房主请求也能授予', pick.by === seatB && pick.grant?.weaponId === drop.weaponId, JSON.stringify(pick.grant));
+    check('A 也收到拾取广播', (await a.wait('pick')).id === drop.id);
+    b.send({ t: 'pick', id: drop.id });
     await sleep(200);
-    check('重复拾取同一件不生效', a.msgs.filter((m) => m.t === 'pick' && m.id === drop.id).length === 1);
+    check('重复拾取同一件不生效', b.msgs.filter((m) => m.t === 'pick' && m.id === drop.id).length === 1);
   }
 
   // ---- 物体销毁 / 聊天 / 延迟 ----
@@ -231,11 +244,17 @@ async function main() {
   check('双方血量广播一致', (await b.wait('hp', (m) => m.id === seatB)).hp === 70);
 
   await sleep(200);
-  // 非房主上报伤害必须被丢弃（避免 N 端重复结算）
-  b.clear();
+  // 伤害改为"谁打的上报谁"：非房主上报自己的攻击是正常路径
+  a.clear();
   b.send({ t: 'dmg', target: seatA, src: seatB, amount: 30, kind: 'bullet', crit: false, attack: 77, ignoreInvuln: true });
-  await sleep(200);
-  check('非房主上报的伤害被拒绝', !a.msgs.some((m) => m.t === 'hp' && m.id === seatA && m.hp === 70));
+  const hpFromClient = await a.wait('hp', (m) => m.id === seatA);
+  check('非房主上报自己的攻击被结算', hpFromClient.hp === 70, `hp=${hpFromClient.hp}`);
+
+  // 环境伤害只允许"自己伤自己"
+  a.clear();
+  b.send({ t: 'dmg', target: seatA, src: -1, amount: 30, kind: 'env', crit: false, attack: 0, ignoreInvuln: true });
+  await sleep(250);
+  check('别人不能代报环境伤害', !a.msgs.some((m) => m.t === 'hp' && m.id === seatA && m.hp === 40));
 
   a.send({ t: 'dmg', target: seatB, src: seatA, amount: 200, kind: 'bullet', crit: false, attack: 2, ignoreInvuln: true });
   const end = await a.wait('match_end', undefined, 4000);

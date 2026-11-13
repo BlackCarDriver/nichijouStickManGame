@@ -341,3 +341,23 @@
 
 .mp-waiting-sub { max-width: 84vw; }
 }
+
+/* ---------- 网络诊断面板（?netdebug=1） ---------- */
+
+.mp-netdebug {
+  position: absolute;
+  right: 8px;
+  top: 64px;
+  z-index: 30;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(8, 11, 18, 0.82);
+  border: 1px solid rgba(120, 200, 255, 0.25);
+  pointer-events: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #9fd4ff;
+  white-space: pre;
+}
+.mp-netdebug pre { margin: 0; }

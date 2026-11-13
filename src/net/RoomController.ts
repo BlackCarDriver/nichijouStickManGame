@@ -5,6 +5,7 @@ import type { MatchContext, MatchEndMsg, MatchStartMsg, RoomSnapshot, ServerMsg 
 import { Overlay, type OverlayAction } from '../ui/Overlay';
 import { inputBlock } from './inputBlock';
 import { startGate } from './startGate';
+import { NetDebug } from '../ui/NetDebug';
 
 interface DevMode {
   enabled: boolean;
@@ -27,6 +28,7 @@ export class RoomController {
   readonly shell = new ShellBridge();
   readonly overlay: Overlay;
   private readonly net: NetClient;
+  private netDebug: NetDebug | null = null;
   private readonly dev: DevMode;
 
   private inMatch = false;
@@ -50,10 +52,13 @@ export class RoomController {
     if (!this.net.isOpen) void this.net.connect();
   };
 
+  private readonly root: HTMLElement;
+
   constructor(
     private readonly game: Phaser.Game,
     root: HTMLElement,
   ) {
+    this.root = root;
     const params = new URLSearchParams(window.location.search);
     const devNick = params.get('nick') ?? '';
     this.dev = {
@@ -108,6 +113,24 @@ export class RoomController {
       this.shell.start();
     }
 
+    // 网络诊断面板：?netdebug=1 打开；同时暴露 window.__netDiag() 便于一键导出
+    if (new URLSearchParams(window.location.search).get('netdebug') === '1') {
+      this.netDebug = new NetDebug(this.root);
+      window.setInterval(() => {
+        const scene = this.game.scene.getScene('GameScene') as unknown as
+          | { online?: { diag?: () => Record<string, unknown> } }
+          | null;
+        this.netDebug?.update(scene?.online?.diag?.() ?? null);
+      }, 500);
+    }
+    const diagHook = (): Record<string, unknown> | null => {
+      const scene = this.game.scene.getScene('GameScene') as unknown as
+        | { online?: { diag?: () => Record<string, unknown> } }
+        | null;
+      return scene?.online?.diag?.() ?? null;
+    };
+    (window as unknown as Record<string, unknown>).__netDiag = diagHook;
+
     window.addEventListener('keydown', this.onKeyDown);
     window.setInterval(() => this.ping(), 3000);
     document.addEventListener('visibilitychange', this.onVisibility);
@@ -147,9 +170,15 @@ export class RoomController {
     this.net.send({ t: 'enter' });
   }
 
+  /**
+   * UI 延迟测量（`tag: 'ui'`）。
+   *
+   * 必须带 tag：网络层（OnlineMatch）也在 ping，用的是 `performance.now()`；
+   * 两边共用同一个 pong 回声会让 UI 用 Date.now() 减出 1.7e12 这种十几位数。
+   */
   private ping(): void {
     if (!this.net.isOpen) return;
-    this.net.send({ t: 'ping', ts: Date.now() });
+    this.net.send({ t: 'ping', ts: Date.now(), tag: 'ui' });
   }
 
   // ---------- 上行操作 ----------
@@ -219,7 +248,7 @@ export class RoomController {
         this.overlay.addChat(msg.nick, msg.text, msg.room === true);
         break;
       case 'pong':
-        this.overlay.setPing(Date.now() - msg.ts);
+        if (msg.tag === 'ui') this.overlay.setPing(Date.now() - msg.ts);
         break;
       case 'room_closed':
         this.overlay.showFatal('房间已关闭', '管理员关闭了该插件房，可以关闭页面了。');

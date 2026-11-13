@@ -445,7 +445,9 @@ export class GameScene extends Phaser.Scene {
     const player = new Player(this, spawn.x, spawn.y, playerColor(entry.color), this.actionClips);
     player.netControlled = true;
     player.autoRespawn = false;
-    player.envDamageReporter = (amount, p) => this.online?.reportEnvDamage(amount, p);
+    // 摔落伤害由"自己"检测（房主不再替别人算）
+    player.envDamageReporter =
+      entry.netId === this.onlineData?.you ? (amount) => this.online?.reportEnvDamage(amount) : undefined;
     this.players.push(player);
     this.onlinePlayers.set(entry.netId, player);
     this.onlineNicks.set(entry.netId, entry.nick);

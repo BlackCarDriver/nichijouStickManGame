@@ -66,6 +66,8 @@ type client struct {
 
 	chatTimes []time.Time
 	joinedAt  time.Time
+	// 下行严重拥塞、丢过必达消息：下一个节拍补一次全量状态
+	needResync bool
 }
 
 func (c *client) push(payload any) {
@@ -76,7 +78,28 @@ func (c *client) push(payload any) {
 	select {
 	case c.send <- data:
 	default:
-		// 客户端消费不过来：丢弃这一帧，避免阻塞整个房间
+		// 连必达消息都塞不下：说明这个客户端已经严重掉队。
+		// 丢掉它（而不是阻塞整个房间），并标记需要重同步。
+		c.needResync = true
+	}
+}
+
+// pushDroppable 发送"可丢"的周期性状态（世界快照 / 输入广播）。
+//
+// 为什么单独区分：这两类消息是**状态**而不是事件，丢一帧下帧就补上，
+// 但它们占了 95% 的流量。绝不能让它们把 hp / pick / obj / host 挤掉。
+func (c *client) pushDroppable(payload any) {
+	if len(c.send) > cap(c.send)*3/4 {
+		// 队列快满了：跳过这一帧快照/输入，客户端靠下一帧/插值兜底
+		return
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	select {
+	case c.send <- data:
+	default:
 	}
 }
 
@@ -144,6 +167,8 @@ type match struct {
 	itemTimer     time.Duration
 	autoDropTimer time.Duration
 	spawnCursor   int
+	// 最近一次收到房主快照的时间（看门狗用：房主卡死/失联时自动顺延）
+	lastSnapAt time.Time
 }
 
 // Hub 管理房间、座位、对局与所有实时同步。
@@ -322,15 +347,16 @@ func (h *Hub) startRoundLocked() {
 
 	h.matchSeq++
 	m := &match{
-		ID:        h.matchSeq,
-		MapName:   mapName,
-		Map:       mf,
-		StartedAt: time.Now(),
-		Seats:     []string{},
-		Players:   map[int]*playerState{},
-		Drops:     map[int64]*dropState{},
-		destroyed: map[string]bool{},
-		Host:      -1,
+		ID:         h.matchSeq,
+		MapName:    mapName,
+		Map:        mf,
+		StartedAt:  time.Now(),
+		Seats:      []string{},
+		Players:    map[int]*playerState{},
+		Drops:      map[int64]*dropState{},
+		destroyed:  map[string]bool{},
+		Host:       -1,
+		lastSnapAt: time.Now(),
 	}
 	h.m = m
 	// 新一局：上一局的世界快照作废
@@ -923,10 +949,13 @@ func (h *Hub) handlePick(c *client, msg pickMsg) {
 	if p == nil || p.Dead {
 		return
 	}
-	// 房主可以代其它玩家发起拾取（拾取仲裁统一在房主端完成）
+	// 谁捡谁上报（拾取是"行动者最清楚"的操作，房主代判会因为延迟漏捡）
 	by := c.seat
-	if c.seat == m.Host && msg.By >= 0 && msg.By < len(m.Seats) && m.Players[msg.By] != nil {
-		by = msg.By
+	if msg.By >= 0 && msg.By < len(m.Seats) && msg.By != c.seat && m.Players[msg.By] != nil {
+		// 兼容旧字段：仅房主可以代报（正常流程不再使用）
+		if c.seat == m.Host {
+			by = msg.By
+		}
 	}
 	p = m.Players[by]
 	p = m.Players[by]
@@ -997,9 +1026,6 @@ func (h *Hub) handleDamage(c *client, msg damageMsg) {
 	if p == nil || p.Dead {
 		return
 	}
-	if c.seat != m.Host {
-		return
-	}
 	target := m.Players[msg.Target]
 	if target == nil || target.Dead {
 		return
@@ -1008,6 +1034,10 @@ func (h *Hub) handleDamage(c *client, msg damageMsg) {
 	src := msg.Src
 	if src < 0 || m.Players[src] == nil {
 		src = -1
+	}
+	// 环境伤害（摔落等）只允许"自己上报自己"，避免拿它给别人刷伤害
+	if msg.Kind == "env" && msg.Target != c.seat {
+		return
 	}
 	// 允许自伤（摔落 / 贴脸爆炸），但不给击杀计数
 	now := time.Now()
@@ -1151,7 +1181,10 @@ func (h *Hub) broadcastInputsLocked() {
 		list = append(list, snap)
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
-	h.broadcastLocked(&inputBatchMsg{T: "in", Tick: uint32(time.Now().UnixMilli()), P: list})
+	msg := &inputBatchMsg{T: "in", Tick: uint32(time.Now().UnixMilli()), H: m.Host, P: list}
+	for _, c := range h.clients {
+		c.pushDroppable(msg)
+	}
 }
 
 func (h *Hub) clientBySeatLocked(seat int) *client {
@@ -1168,8 +1201,19 @@ func (h *Hub) clientBySeatLocked(seat int) *client {
 func (h *Hub) handlePos(c *client, msg posMsg) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	// 位置不再广播：玩家位置以"房主快照"为准（snap），这里只保留给服务端做抢拾距离的粗校验。
 	c.lastX, c.lastY, c.hasPos = msg.X, msg.Y, true
+	m := h.m
+	if m == nil || m.Over || c.seat < 0 {
+		return
+	}
+	// 位置权威在**玩家自己的客户端**（延迟最低、不会有橡皮筋）。
+	// 服务端只做中继：其它端拿去插值；房主拿去套到自己那份副本上做命中/拾取判定。
+	out := &posBatchMsg{T: "pos", P: []posSnapshot{{ID: c.seat, X: msg.X, Y: msg.Y, VX: msg.VX, VY: msg.VY, G: msg.G}}}
+	for _, other := range h.clients {
+		if other != c {
+			other.pushDroppable(out)
+		}
+	}
 }
 
 // ---------- 世界状态同步（房主权威）----------
@@ -1185,9 +1229,11 @@ func (h *Hub) handleSnap(c *client, msg snapMsg) {
 	if len(msg.P) > 32 || len(msg.O) > 512 || len(msg.D) > 128 {
 		return
 	}
+	m.lastSnapAt = time.Now()
+	msg.T = "snap"
+	msg.H = m.Host
 	if msg.Key {
 		clone := msg
-		clone.T = "snap"
 		h.lastSnap = &clone
 		h.lastSnapMatch = m.ID
 	}
@@ -1198,10 +1244,9 @@ func (h *Hub) handleSnap(c *client, msg snapMsg) {
 			st.X, st.Y, st.Falling = d.X, d.Y, d.F
 		}
 	}
-	msg.T = "snap"
 	for _, other := range h.clients {
 		if other != c {
-			other.push(&msg)
+			other.pushDroppable(&msg)
 		}
 	}
 }
@@ -1337,6 +1382,9 @@ func (h *Hub) tickLocked(dt time.Duration) {
 		return
 	}
 
+	h.hostWatchdogLocked(m, now)
+	h.resyncLaggingLocked()
+
 	if m.Over {
 		// 结算展示中：到点换图重开
 		if !m.NextRoundAt.IsZero() && now.After(m.NextRoundAt) {
@@ -1347,6 +1395,58 @@ func (h *Hub) tickLocked(dt time.Duration) {
 
 	h.tickDropsLocked(m, dt)
 	h.checkRoundEndLocked()
+}
+
+// hostWatchdogLocked 房主看门狗：世界权威超过 2 秒没有任何快照，就顺延给下一位。
+//
+// 为什么必须有：客户端之间的角色一旦和"服务端认定的房主"失配，
+// 服务端会静默丢弃 snap/dmg/pick/obj —— 没有伤害就没有死亡、本局永远不结束，
+// 房间会永久停在"房主自己流畅、其他人全废"的状态。看门狗把这个死状态拽回来。
+func (h *Hub) hostWatchdogLocked(m *match, now time.Time) {
+	if m.Over || m.Host < 0 {
+		return
+	}
+	// 只有一名玩家时不需要看门狗（他自己就是权威）
+	if len(m.Players) <= 1 {
+		return
+	}
+	if now.Sub(m.lastSnapAt) < 2*time.Second {
+		return
+	}
+	current := m.Host
+	m.Host = -1
+	for seat, nick := range m.Seats {
+		if seat == current || nick == "" || m.Players[seat] == nil {
+			continue
+		}
+		c := h.clients[nick]
+		if c == nil || c.seat != seat || c.spectate || !c.joined {
+			continue
+		}
+		m.Host = seat
+		m.lastSnapAt = now
+		log.Printf("[hub] 房主看门狗：座位 %d 超时未发快照，权威顺延给座位 %d", current, seat)
+		h.broadcastLocked(&hostMsg{T: "host", ID: seat})
+		return
+	}
+	// 没有别的玩家可接管：还给他自己，避免 Host=-1 让所有上报被丢弃
+	m.Host = current
+	m.lastSnapAt = now
+}
+
+// resyncLaggingLocked 给"丢过必达消息"的客户端补一次全量状态（血量/掉落/已毁/房主）。
+func (h *Hub) resyncLaggingLocked() {
+	m := h.m
+	if m == nil {
+		return
+	}
+	for _, c := range h.clients {
+		if !c.needResync {
+			continue
+		}
+		c.needResync = false
+		h.sendToLocked(c, h.matchStartLocked(c))
+	}
 }
 
 // ---------- 房间快照 / 桥接状态 ----------
