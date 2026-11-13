@@ -129,8 +129,11 @@ type match struct {
 	// 下一局地图（结束后提前选好并展示）
 	NextMap string
 
-	Seats    []string // 下标 = netID（座位号）
-	Players  map[int]*playerState
+	Seats   []string // 下标 = netID（座位号）
+	Players map[int]*playerState
+	// Host = 世界权威（房主）座位号：由该客户端模拟整张地图并广播 snap 快照。
+	// 规则：本局座位里编号最小、且连接仍在的玩家；房主掉线时顺延给下一位。
+	Host     int
 	Drops    map[int64]*dropState
 	nextDrop int64
 	points   []*weaponPoint
@@ -161,6 +164,9 @@ type Hub struct {
 	statesSnap atomic.Value // map[string]nichijou.State
 	m          *match
 	matchSeq   int64
+	// 最近一帧全量世界快照（房主上报），给中途加入的客户端还原动态世界
+	lastSnap      *snapMsg
+	lastSnapMatch int64
 	// 上一局（或最后一位玩家离开前）用过的地图：重置后开新局时避开它
 	lastMap string
 	closed  bool
@@ -193,6 +199,41 @@ func seatOfMatch(m *match, nick string) int {
 		}
 	}
 	return -1
+}
+
+// pickHostLocked 重新选出世界权威座位（编号最小、在线且在当前对局里的玩家）。
+// 为什么需要：所有物理/破坏/拾取都以"房主客户端"为准，房主掉线必须立刻顺延。
+func (h *Hub) pickHostLocked(m *match) int {
+	if m == nil || m.Over {
+		return -1
+	}
+	for seat, nick := range m.Seats {
+		if nick == "" || m.Players[seat] == nil {
+			continue
+		}
+		c := h.clients[nick]
+		if c == nil || c.seat != seat || c.spectate || !c.joined {
+			continue
+		}
+		return seat
+	}
+	return -1
+}
+
+// syncHostLocked 重新计算房主；变化时广播 host 消息。
+func (h *Hub) syncHostLocked() bool {
+	m := h.m
+	if m == nil {
+		return false
+	}
+	next := h.pickHostLocked(m)
+	if next == m.Host {
+		return false
+	}
+	m.Host = next
+	h.broadcastLocked(&hostMsg{T: "host", ID: next})
+	log.Printf("[hub] 世界权威变更为座位 %d", next)
+	return true
 }
 
 // pickMapLocked 随机挑一张地图，尽量和当前这局不同。
@@ -241,6 +282,8 @@ func (h *Hub) addSeatLocked(m *match, c *client) int {
 	m.Players[seat] = p
 	c.seat = seat
 	c.joined = true
+	// 新玩家如果是当前最小座位（比如房主刚离开），立刻把权威交给他
+	h.syncHostLocked()
 
 	join := &playerJoinMsg{
 		T: "player_join",
@@ -286,8 +329,12 @@ func (h *Hub) startRoundLocked() {
 		Players:   map[int]*playerState{},
 		Drops:     map[int64]*dropState{},
 		destroyed: map[string]bool{},
+		Host:      -1,
 	}
 	h.m = m
+	// 新一局：上一局的世界快照作废
+	h.lastSnap = nil
+	h.lastSnapMatch = m.ID
 
 	for _, nick := range h.order {
 		if len(m.Seats) >= h.cfg.MaxPlayers {
@@ -311,6 +358,7 @@ func (h *Hub) startRoundLocked() {
 			c.seat = -1 // 旁观
 		}
 	}
+	m.Host = h.pickHostLocked(m)
 
 	h.initDropsLocked(m)
 	log.Printf("[hub] 第 %d 局开始：地图=%s 玩家=%d 掉落=%d", m.ID, m.MapName, len(m.Players), len(m.Drops))
@@ -363,8 +411,16 @@ func (h *Hub) matchStartLocked(c *client) *matchStartMsg {
 	}
 	return &matchStartMsg{
 		T: "match_start", MatchID: m.ID, Map: m.MapName, Players: players, Stats: stats,
-		You: you, Drops: drops, Destroyed: destroyed,
+		You: you, Host: m.Host, Drops: drops, Destroyed: destroyed, World: h.worldForKeyLocked(m),
 	}
+}
+
+// worldForKeyLocked 取一帧可用的全量世界快照（只给当前对局用）。
+func (h *Hub) worldForKeyLocked(m *match) *snapMsg {
+	if h.lastSnap == nil || h.lastSnapMatch != m.ID {
+		return nil
+	}
+	return h.lastSnap
 }
 
 func (h *Hub) dropMatchPlayerLocked(m *match, seat int) {
@@ -385,6 +441,8 @@ func (h *Hub) dropMatchPlayerExLocked(m *match, seat int, countDeath bool) {
 	if seat >= 0 && seat < len(m.Seats) {
 		m.Seats[seat] = "" // 释放座位：重新进入按新座位加入
 	}
+	// 走掉的如果是房主，把世界权威顺延给下一位在线玩家
+	h.syncHostLocked()
 	h.broadcastLocked(&playerLeftMsg{T: "player_left", ID: seat, Nick: nick})
 	h.checkRoundEndLocked()
 }
@@ -859,12 +917,23 @@ func (h *Hub) handlePick(c *client, msg pickMsg) {
 	if p == nil || p.Dead {
 		return
 	}
+	// 房主可以代其它玩家发起拾取（拾取仲裁统一在房主端完成）
+	by := c.seat
+	if c.seat == m.Host && msg.By >= 0 && msg.By < len(m.Seats) && m.Players[msg.By] != nil {
+		by = msg.By
+	}
+	p = m.Players[by]
+	p = m.Players[by]
+	if p == nil || p.Dead {
+		return
+	}
 	d, ok := m.Drops[msg.ID]
 	if !ok {
 		return
 	}
-	// 轻量越界校验：只比较水平距离（垂直方向受落地高度影响，服务端不模拟）
-	if c.hasPos && abs(d.X-c.lastX) > 260 {
+	// 轻量越界校验：只对"普通客户端给自己拾取"生效。
+	// 房主代其它玩家拾取时，c.lastX 是房主自己的位置，拿来校验是错误的。
+	if by == c.seat && c.seat != m.Host && c.hasPos && abs(d.X-c.lastX) > 260 {
 		return
 	}
 
@@ -888,7 +957,7 @@ func (h *Hub) handlePick(c *client, msg pickMsg) {
 	}
 
 	h.broadcastLocked(&pickMsgOut{
-		T: "pick", ID: d.ID, By: c.seat, Grant: grant,
+		T: "pick", ID: d.ID, By: by, Grant: grant,
 		HP: p.HP, Shield: p.Shield, Dead: p.Dead,
 	})
 }
@@ -918,10 +987,21 @@ func (h *Hub) handleDamage(c *client, msg damageMsg) {
 	if m == nil || m.Over {
 		return
 	}
-	src := c.seat
+	p := m.Players[c.seat]
+	if p == nil || p.Dead {
+		return
+	}
+	if c.seat != m.Host {
+		return
+	}
 	target := m.Players[msg.Target]
 	if target == nil || target.Dead {
 		return
+	}
+	// 攻击者：房主代报时必须显式携带（-1 = 位置/环境伤害）
+	src := msg.Src
+	if src < 0 || m.Players[src] == nil {
+		src = -1
 	}
 	// 允许自伤（摔落 / 贴脸爆炸），但不给击杀计数
 	now := time.Now()
@@ -975,7 +1055,6 @@ func (h *Hub) handleDamage(c *client, msg damageMsg) {
 			killer.Kills++
 		}
 	}
-
 	// 展示用的伤害值是"本次攻击的伤害"，不被剩余血量截断
 	h.broadcastHPFullLocked(target, int(amount), msg.Kind, msg.Crit, msg.Point, msg.KB, src)
 	if killed {
@@ -1081,14 +1160,40 @@ func (h *Hub) clientBySeatLocked(seat int) *client {
 func (h *Hub) handlePos(c *client, msg posMsg) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	// 位置不再广播：玩家位置以"房主快照"为准（snap），这里只保留给服务端做抢拾距离的粗校验。
 	c.lastX, c.lastY, c.hasPos = msg.X, msg.Y, true
-	if h.m == nil || h.m.Over || c.seat < 0 {
+}
+
+// ---------- 世界状态同步（房主权威）----------
+
+// handleSnap 转发房主的权威世界快照；服务端缓存全量帧供中途加入者还原。
+func (h *Hub) handleSnap(c *client, msg snapMsg) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	m := h.m
+	if m == nil || m.Over || c.seat < 0 || c.seat != m.Host {
 		return
 	}
-	out := &posBatchMsg{T: "pos", P: []posSnapshot{{ID: c.seat, X: msg.X, Y: msg.Y, VX: msg.VX, VY: msg.VY}}}
+	if len(msg.P) > 32 || len(msg.O) > 512 || len(msg.D) > 128 {
+		return
+	}
+	if msg.Key {
+		clone := msg
+		clone.T = "snap"
+		h.lastSnap = &clone
+		h.lastSnapMatch = m.ID
+	}
+	// 掉落物落点由房主模拟，服务端只需记录最新值：
+	// 这样中途加入的玩家拿到的 match_start.drops 才是"已经落地"的坐标，而不是出生点。
+	for _, d := range msg.D {
+		if st, ok := m.Drops[d.ID]; ok {
+			st.X, st.Y, st.Falling = d.X, d.Y, d.F
+		}
+	}
+	msg.T = "snap"
 	for _, other := range h.clients {
 		if other != c {
-			other.push(out)
+			other.push(&msg)
 		}
 	}
 }
@@ -1105,6 +1210,10 @@ func (h *Hub) handleDropRequest(c *client, msg dropReqMsg) {
 	if !h.data.hasWeapon(msg.WeaponID) || msg.Ammo < -1 || msg.Ammo > 999 {
 		return
 	}
+	// 投掷武器落地：只接受房主上报（各端都会本地模拟投掷动作，否则会重复生成多把）
+	if c.seat != m.Host {
+		return
+	}
 	if !finite(msg.X) || !finite(msg.Y) || msg.X < -200 || msg.X > m.Map.Width+200 || msg.Y < -500 || msg.Y > m.Map.Height+500 {
 		return
 	}
@@ -1118,6 +1227,23 @@ func finite(v float64) bool {
 	return v == v && v < 1e9 && v > -1e9
 }
 
+// ---------- 掉落物移除 ----------
+
+// handleDropRemove 房主请求移除一件掉落物（掉出地图/被销毁），服务端删记录并广播。
+func (h *Hub) handleDropRemove(c *client, id int64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	m := h.m
+	if m == nil || m.Over || c.seat < 0 || c.seat != m.Host {
+		return
+	}
+	if _, ok := m.Drops[id]; !ok {
+		return
+	}
+	delete(m.Drops, id)
+	h.broadcastLocked(&dropRemoveOut{T: "drop_remove", ID: id})
+}
+
 // ---------- 物体销毁 ----------
 
 func (h *Hub) handleObjectDestroyed(c *client, id string) {
@@ -1125,6 +1251,10 @@ func (h *Hub) handleObjectDestroyed(c *client, id string) {
 	defer h.mu.Unlock()
 	m := h.m
 	if m == nil || m.Over || id == "" || len(id) > 80 {
+		return
+	}
+	// 物体破坏由房主统一结算；其它客户端只是接收者
+	if c.seat != m.Host {
 		return
 	}
 	if m.destroyed[id] {

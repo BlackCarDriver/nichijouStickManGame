@@ -246,7 +246,7 @@ func (s *server) readPump(c *client) {
 		log.Printf("[ws] %s 断开: %v", c.nick, readErr)
 	}()
 
-	c.conn.SetReadLimit(32 * 1024)
+	c.conn.SetReadLimit(128 * 1024)
 	for {
 		_, data, err := c.conn.ReadMessage()
 		if err != nil {
@@ -278,6 +278,11 @@ func (s *server) handleClientMessage(c *client, data []byte) {
 		if json.Unmarshal(data, &m) == nil {
 			s.hub.handlePos(c, m)
 		}
+	case "snap":
+		var m snapMsg
+		if json.Unmarshal(data, &m) == nil {
+			s.hub.handleSnap(c, m)
+		}
 	case "pick":
 		var m pickMsg
 		if json.Unmarshal(data, &m) == nil {
@@ -302,6 +307,11 @@ func (s *server) handleClientMessage(c *client, data []byte) {
 		var m objMsg
 		if json.Unmarshal(data, &m) == nil {
 			s.hub.handleObjectDestroyed(c, m.ID)
+		}
+	case "drop_remove":
+		var m dropRemoveMsg
+		if json.Unmarshal(data, &m) == nil {
+			s.hub.handleDropRemove(c, m.ID)
 		}
 	case "enter":
 		s.hub.handleEnter(c)

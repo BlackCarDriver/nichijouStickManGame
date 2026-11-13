@@ -237,9 +237,15 @@ export class Overlay {
     this.hudText = hudText;
   }
 
-  /** 真正开始：收起加载面板，只保留顶栏信息条 */
+  /**
+   * 真正开始：收起加载面板，只保留顶栏信息条。
+   *
+   * 注意：这里**不能** hideResults()。
+   * 极端时序下（本局刚结束、下一局 match_start 与 match_end 几乎同时到达），
+   * 新场景就绪会把刚弹出的结算面板立刻收掉 —— 玩家什么都看不到。
+   * 结算面板的关闭交给下一次 showLoading()（即真正进入下一局时）。
+   */
   beginHud(): void {
-    this.hideResults();
     this.waiting.classList.remove('show');
     this.statActionsHide();
     this.hudbar.textContent = this.hudText;

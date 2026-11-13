@@ -46,6 +46,14 @@ export interface ItemGroundPickup extends GroundPickupBase {
 
 export type GroundPickup = WeaponGroundPickup | ItemGroundPickup;
 
+/**
+ * 拾取仲裁模式：
+ * - single：单机，本地直接生效
+ * - authority：联机房主，替**所有玩家**判定拾取，再交给服务端授予
+ * - client：联机非房主，只做“是否会拾取”的本地预判（用于抑制踢/投掷），不实际生效
+ */
+export type PickupMode = 'single' | 'authority' | 'client';
+
 /** 兼容旧名字（武器掉落物） */
 export type WeaponPickup = WeaponGroundPickup;
 
@@ -79,6 +87,7 @@ export class PickupSystem {
 
   // ---- 联机 ----
   private net: PickupNetBridge | null = null;
+  private mode: PickupMode = 'single';
   private localPlayer: Player | null = null;
   /** 请求节流：同一件掉落物 250ms 内只上报一次 */
   private readonly requestAt = new WeakMap<GroundPickup, number>();
@@ -172,6 +181,13 @@ export class PickupSystem {
   update(deltaMs: number): void {
     const dt = deltaMs / 1000;
     for (const item of this.items) {
+      // 联机（非房主）：掉落物坐标完全以房主快照为准，不做本地物理/支撑检测，
+      // 否则同一件掉落物会在两端落到不同高度（“物品位置不一样”的直接原因）。
+      if (this.mode === 'client' && item.netId !== undefined) {
+        item.bob += dt * 2.2;
+        this.redraw(item);
+        continue;
+      }
       if (item.falling) {
         const prevY = item.y;
         item.vy += PickupSystem.FALL_GRAVITY * dt;
@@ -230,7 +246,8 @@ export class PickupSystem {
    * @returns 本帧真正完成了拾取/替换的玩家 id 集合（未完成的才去做踢/投掷）
    */
   tryPickup(swapRequested: ReadonlySet<number>): Set<number> {
-    if (this.net) return this.tryPickupNet(swapRequested);
+    if (this.mode === 'authority') return this.tryPickupAuthority(swapRequested);
+    if (this.mode === 'client') return this.previewPickup(swapRequested);
     const consumed = new Set<number>();
     for (const player of this.bodyToPlayer.values()) {
       if (player.health.isDead) continue;
@@ -289,44 +306,102 @@ export class PickupSystem {
     return consumed;
   }
 
-  /** 联机模式：只处理本地玩家的拾取，并交给服务端仲裁 */
-  private tryPickupNet(swapRequested: ReadonlySet<number>): Set<number> {
+  /**
+   * 联机（房主）：替所有玩家判定拾取。
+   *
+   * 为什么由房主统一判定：拾取/换枪会改变世界状态（地面武器、掉落物），
+   * 各端各自判会出现"两个人都捡到同一把枪"；由房主判、服务端授予，
+   * 才能保证单一事实来源，也不依赖客户端上报的距离。
+   */
+  private tryPickupAuthority(swapRequested: ReadonlySet<number>): Set<number> {
     const consumed = new Set<number>();
-    const player = this.localPlayer;
-    if (!player || player.health.isDead || !this.net) return consumed;
-
+    const net = this.net;
+    if (!net) return consumed;
     const now = performance.now();
-    const request = (item: GroundPickup, swap: boolean): void => {
+    const request = (item: GroundPickup, player: Player, swap: boolean): void => {
       const last = this.requestAt.get(item) ?? -Infinity;
       if (now - last < PickupSystem.REQUEST_INTERVAL) return;
       this.requestAt.set(item, now);
-      this.net!.request(item, player, swap);
+      net.request(item, player, swap);
     };
 
-    for (const item of [...this.items]) {
-      const dist = Phaser.Math.Distance.Between(player.container.x, player.container.y, item.x, item.y);
+    for (const player of this.bodyToPlayer.values()) {
+      if (player.health.isDead) continue;
+      const holding = player.heldWeapon;
 
-      if (item.kind === 'item') {
-        if (this.itemWanted(player, item, dist)) request(item, false);
-        continue;
+      for (const item of [...this.items]) {
+        const dist = Phaser.Math.Distance.Between(player.container.x, player.container.y, item.x, item.y);
+
+        if (item.kind === 'item') {
+          if (this.canPickItem(player, item, dist)) {
+            request(item, player, false);
+            consumed.add(player.id);
+            break;
+          }
+          continue;
+        }
+
+        // 手榴弹：进背包，不占武器槽
+        if (item.weaponId === 'grenade') {
+          if (dist <= PickupSystem.AUTO_RADIUS * 1.4 && player.grenadeCount < GRENADE_MAX) {
+            request(item, player, false);
+            consumed.add(player.id);
+            break;
+          }
+          continue;
+        }
+
+        if (!holding && dist <= PickupSystem.AUTO_RADIUS) {
+          request(item, player, false);
+          consumed.add(player.id);
+          break;
+        }
+        if (
+          holding &&
+          swapRequested.has(player.id) &&
+          !player.weaponLocked &&
+          dist <= PickupSystem.SWAP_RADIUS
+        ) {
+          request(item, player, true);
+          consumed.add(player.id);
+          break;
+        }
       }
+    }
+    return consumed;
+  }
 
-      // 手榴弹：进背包，不占武器槽
-      if (item.weaponId === 'grenade') {
-        if (dist <= PickupSystem.AUTO_RADIUS * 1.4 && player.grenadeCount < GRENADE_MAX) {
-          request(item, false);
+  /**
+   * 联机（非房主）：只预判"本地玩家此刻会不会拾取"。
+   * 用于抑制替换武器时的踢/投掷动作（真正的拾取由房主判定）。
+   */
+  private previewPickup(swapRequested: ReadonlySet<number>): Set<number> {
+    const consumed = new Set<number>();
+    const player = this.localPlayer;
+    if (!player || player.health.isDead) return consumed;
+
+    for (const item of this.items) {
+      const dist = Phaser.Math.Distance.Between(player.container.x, player.container.y, item.x, item.y);
+      if (item.kind === 'item') {
+        if (this.canPickItem(player, item, dist)) {
+          consumed.add(player.id);
+          break;
         }
         continue;
       }
-
+      if (item.weaponId === 'grenade') {
+        if (dist <= PickupSystem.AUTO_RADIUS * 1.4 && player.grenadeCount < GRENADE_MAX) {
+          consumed.add(player.id);
+          break;
+        }
+        continue;
+      }
       const holding = player.heldWeapon;
       if (!holding && dist <= PickupSystem.AUTO_RADIUS) {
-        request(item, false);
         consumed.add(player.id);
         break;
       }
       if (holding && swapRequested.has(player.id) && !player.weaponLocked && dist <= PickupSystem.SWAP_RADIUS) {
-        request(item, true);
         consumed.add(player.id);
         break;
       }
@@ -334,18 +409,46 @@ export class PickupSystem {
     return consumed;
   }
 
-  /** 联机：判断这件补给此刻是否值得请求（条件判断与单机一致，但不本地生效） */
-  private itemWanted(player: Player, item: ItemGroundPickup, dist: number): boolean {
-    const def = getItem(item.itemId);
-    if (!def || dist > itemPickupRadius(def)) return false;
-    if (def.kind === 'heal') return player.health.hp < player.health.maxHp;
-    return player.health.shield < player.health.maxShield;
-  }
-
-  /** 挂接联机桥（single = 本地玩家）；传 null 恢复单机行为 */
-  setNet(net: PickupNetBridge | null, localPlayer: Player | null): void {
+  /** 挂接联机桥：带仲裁能力的一方（房主）用 authority，其余用 client */
+  setNet(net: PickupNetBridge | null, localPlayer: Player | null, mode: PickupMode = 'client'): void {
     this.net = net;
     this.localPlayer = localPlayer;
+    this.mode = net ? mode : 'single';
+  }
+
+  /** 联机：当前所有带服务端 id 的地面物品（房主用它生成快照） */
+  netSpawns(): Array<{ id: number; x: number; y: number; falling: boolean }> {
+    const out: Array<{ id: number; x: number; y: number; falling: boolean }> = [];
+    for (const item of this.items) {
+      if (item.netId === undefined) continue;
+      out.push({ id: item.netId, x: item.x, y: item.y, falling: item.falling });
+    }
+    return out;
+  }
+
+  /** 联机：按服务端 id 移除一件掉落物（越界清理 / 服务端删除） */
+  removeByNetId(netId: number): void {
+    const item = this.items.find((it) => it.netId === netId);
+    if (item) this.remove(item);
+  }
+
+  /** 联机：套用房主下发的掉落物坐标（非房主端不再自行模拟下落） */
+  applyNetPosition(netId: number, x: number, y: number, falling: boolean): void {
+    const item = this.items.find((it) => it.netId === netId);
+    if (!item) return;
+    item.x = x;
+    item.y = y;
+    item.vy = 0;
+    item.falling = falling;
+  }
+
+  /** 这件补给此刻是否值得捡（单机 / 房主判定 / 非房主预判共用同一套条件） */
+  private canPickItem(player: Player, item: ItemGroundPickup, dist: number): boolean {
+    const def = getItem(item.itemId);
+    if (!def) return true;
+    if (dist > itemPickupRadius(def)) return false;
+    if (def.kind === 'heal') return player.health.hp < player.health.maxHp;
+    return player.health.shield < player.health.maxShield;
   }
 
   /** 联机：按服务端下发的掉落物创建地面物品 */
@@ -406,7 +509,7 @@ export class PickupSystem {
   private tryPickItem(player: Player, item: ItemGroundPickup, dist: number): boolean {
     const def = getItem(item.itemId);
     if (!def) return true; // 未知道具：直接清掉，避免残留
-    if (dist > itemPickupRadius(def)) return false;
+    if (!this.canPickItem(player, item, dist)) return false;
 
     if (def.kind === 'heal') {
       // 满血不捡（留在地上给缺血的人）

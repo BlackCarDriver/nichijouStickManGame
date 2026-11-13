@@ -354,6 +354,8 @@ export class GameScene extends Phaser.Scene {
         pickups: this.pickups,
         destruction: this.destruction,
         damage: this.damageSystem,
+        mapObjects: this.mapObjects,
+        worldSize: { width: this.mapData.width, height: this.mapData.height },
         kills: this.kills,
         onRosterChanged: () => this.onRosterChanged(),
         spawnPlayer: (entry, stat) => this.spawnNetPlayer(entry, stat),
@@ -366,10 +368,9 @@ export class GameScene extends Phaser.Scene {
       for (const [netId, player] of this.onlinePlayers) this.applyIdentity(netId, player);
       this.loadAvatars();
       startGate.setProgress(0.92, '准备战场…');
-      if (!this.avatarLoading) {
-        // 没有头像要加载：下一帧算就绪（先让首帧渲染完，再弹"点击 W 开始"）
-        this.time.delayedCall(0, () => startGate.markReady());
-      }
+      // 头像来自聊天室 CDN，可能很慢甚至挂住：**绝不能**让它挡住开局闸门。
+      // 先把"可以开始"放出来，头像晚到时会由 finishAvatars() 再补一次身份展示。
+      this.time.delayedCall(0, () => startGate.markReady());
     }
 
     this.bindEvents();
@@ -406,12 +407,18 @@ export class GameScene extends Phaser.Scene {
       this.finishAvatars();
       return;
     }
+    if (this.avatarLoading) return;
     this.avatarLoading = true;
+    // 加载完成 → 应用头像（晚到的头像也会在这里补上，不影响开局）
     this.load.once(Phaser.Loader.Events.COMPLETE, () => this.finishAvatars());
     this.load.start();
+    // 兜底：CDN 卡住时先解除"加载中"标记（头像真到了仍会由 COMPLETE 补上）
+    this.time.delayedCall(3000, () => {
+      this.avatarLoading = false;
+    });
   }
 
-  /** 头像加载完成：做成圆形贴图 → 应用到玩家头顶 + HUD */
+  /** 头像加载完成：做成圆形贴图 → 应用到玩家头顶 + HUD。可重复调用（只应用已就绪的）。 */
   private finishAvatars(): void {
     for (const [netId, rawKey] of this.avatarUrls) {
       if (!this.textures.exists(rawKey)) continue;
@@ -433,7 +440,7 @@ export class GameScene extends Phaser.Scene {
     const player = new Player(this, spawn.x, spawn.y, playerColor(entry.color), this.actionClips);
     player.netControlled = true;
     player.autoRespawn = false;
-    player.envDamageReporter = (amount) => this.online?.reportEnvDamage(amount);
+    player.envDamageReporter = (amount, p) => this.online?.reportEnvDamage(amount, p);
     this.players.push(player);
     this.onlinePlayers.set(entry.netId, player);
     this.onlineNicks.set(entry.netId, entry.nick);
@@ -699,9 +706,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number): void {
-    // ---- 命中顿帧：冻结世界（含物理步进）极短时间 ----
+    // ---- 命中顿帧：单机冻结世界（含物理步进）极短时间 ----
+    // 联机绝对不能暂停物理：房主与各客户端一旦冻结时刻不同，
+    // 同一个玩家的轨迹就会分叉（“跳上二楼又闪回一楼”的主要来源之一）。
+    // 联机时把顿帧降级为纯表现（镜头/音效），物理与世界模拟照常推进。
     this.hitStop.update(delta);
-    if (this.hitStop.active) {
+    if (this.hitStop.active && !this.online) {
       if (!this.physicsFrozen) {
         this.matter.world.pause();
         this.physicsFrozen = true;

@@ -165,8 +165,8 @@ export class Player extends Entity {
   netControlled = false;
   /** 是否本地倒计时自动复活（联机时由服务端下发 respawn 事件） */
   autoRespawn = true;
-  /** 环境伤害（摔落）上报钩子：联机模式下交给网络层 */
-  envDamageReporter?: (amount: number) => void;
+  /** 环境伤害（摔落）上报钩子：联机模式下交给网络层（房主为所有玩家开启） */
+  envDamageReporter?: (amount: number, player?: Player) => void;
 
   // ---- 联机展示：聊天室头像（圆形贴图）/ 昵称 / 聊天气泡 ----
   /** HUD 用的圆形头像贴图 key */
@@ -263,6 +263,8 @@ export class Player extends Entity {
   // ---- 着地状态 ----
   /** 脚下射线检测结果 */
   private rayGrounded = false;
+  /** 联机：房主下发的着地状态（非 null 时优先于本地射线） */
+  private remoteGroundedHint: boolean | null = null;
   /** 是否站在单向平台上（由场景每帧设置） */
   private standingOnOneWay = false;
   /** 地面法线（由碰撞事件更新）：用于斜面时左右脚的高度差 */
@@ -354,7 +356,28 @@ export class Player extends Entity {
   }
 
   get isGrounded(): boolean {
+    // 联机：被快照驱动的远端玩家以房主下发的着地状态为准
+    // （本地射线基于插值位置，跨端不一致时会导致 jump/fall 姿态乱跳）
+    if (this.remoteGroundedHint !== null) return this.remoteGroundedHint;
     return this.rayGrounded || this.standingOnOneWay;
+  }
+
+  /**
+   * 联机（非房主）：用房主的权威状态直接驱动该玩家。
+   *
+   * 远端玩家不再靠本地物理"猜"，而是按 100ms 缓冲插值回放；
+   * 因此每帧会把刚体位置/速度写成权威值（Matter 是 Verlet 积分，
+   * 必须用 setPosition/setVelocity 才会同步 positionPrev，避免产生巨大隐含速度）。
+   */
+  driveRemoteState(x: number, y: number, vx: number, vy: number, grounded: boolean): void {
+    this.remoteGroundedHint = grounded;
+    this.container.setPosition(x, y);
+    this.container.setVelocity(vx, vy);
+  }
+
+  /** 切回"本地模拟"（房主变更时用）：清掉快照带来的着地提示 */
+  clearRemoteDrive(): void {
+    this.remoteGroundedHint = null;
   }
 
   /** 玩家脚底 y（世界）：直接取碰撞盒实际底部，自动适应趴下时的压缩体 */
@@ -1224,7 +1247,7 @@ export class Player extends Entity {
       if (impactSpeed > PLAYER_CONFIG.fallSafeSpeed) {
         const fallDamage = (impactSpeed - PLAYER_CONFIG.fallSafeSpeed) * PLAYER_CONFIG.fallDamagePerSpeed;
         if (this.netControlled) {
-          this.envDamageReporter?.(fallDamage);
+          this.envDamageReporter?.(fallDamage, this);
         } else {
           this.applyDamage({ amount: fallDamage, kind: 'env', knockback: { x: 0, y: 0 } });
         }

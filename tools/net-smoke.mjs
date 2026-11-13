@@ -8,10 +8,12 @@
  * 需要服务端以 --dev 启动（允许 ?dev=1&nick=xxx 假身份）：
  *   cd server && go run . --dev
  *
- * 覆盖：大厅/准备/开局、输入中继、位置中继、伤害与击杀、重生、拾取仲裁、
- *       物体销毁广播、聊天、延迟测量、掉线广播。
+ * 覆盖：开局、房主选举、输入中继、权威世界快照（snap）、伤害与击杀、
+ *       拾取仲裁、物体销毁广播、聊天、延迟测量、掉线/观战/重开。
  */
 const base = process.argv[2] ?? 'ws://127.0.0.1:8095/ws';
+/** healthz 地址由 ws 地址推导，方便在任意端口跑冒烟 */
+const healthUrl = base.replace(/^ws/, 'http').replace(/\/ws.*$/, '/healthz');
 
 let failures = 0;
 function check(name, cond, extra = '') {
@@ -89,7 +91,7 @@ async function main() {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 2500);
     try {
-      const res = await fetch('http://127.0.0.1:8095/healthz', { signal: ctrl.signal });
+      const res = await fetch(healthUrl, { signal: ctrl.signal });
       return res.ok;
     } catch {
       return false;
@@ -116,6 +118,7 @@ async function main() {
   const startA1 = await a.wait('match_start', (m) => m.you >= 0, 5000);
   check('按开始后进入对局', startA1.you >= 0 && startA1.players.length === 1, JSON.stringify({ you: startA1.you, n: startA1.players.length }));
   check('对局下发随机地图', typeof startA1.map === 'string' && startA1.map.length > 0, startA1.map);
+  check('服务端选出世界权威（单人时就是自己）', startA1.host === startA1.you, `host=${startA1.host} you=${startA1.you}`);
   check('服务端下发了掉落物', Array.isArray(startA1.drops) && startA1.drops.length > 0, `drops=${startA1.drops?.length}`);
 
   // ---- B 进房：加入同一局，A 收到 player_join ----
@@ -160,11 +163,33 @@ async function main() {
   s1.close();
   await sleep(200);
 
-  // ---- 位置中继 ----
+  // ---- 权威世界快照（房主 → 服务端 → 其它客户端）----
   b.clear();
-  a.send({ t: 'pos', x: 500, y: 1000, vx: 10, vy: 0 });
-  const posB = await b.wait('pos', (m) => m.p?.some((p) => p.id === seatA));
-  check('位置中继到对端', posB.p[0].x === 500 && posB.p[0].y === 1000);
+  a.send({
+    t: 'snap',
+    seq: 1,
+    key: true,
+    p: [{ id: seatA, x: 500, y: 1000, vx: 0, vy: 0, g: true }],
+    o: [{ id: 'crate_a#0', x: 720, y: 1380, a: 0.1 }],
+    d: [{ id: 999999, x: 640, y: 900, f: false }],
+  });
+  const snapB = await b.wait('snap', (m) => m.seq === 1);
+  check('房主快照被转发给其它客户端', snapB.key === true && snapB.p?.[0]?.x === 500);
+  check('快照携带动态物体', snapB.o?.[0]?.id === 'crate_a#0');
+  check('快照携带掉落物落点', snapB.d?.[0]?.y === 900);
+
+  // 非房主伪造快照必须被丢弃
+  b.clear();
+  b.send({ t: 'snap', seq: 2, key: true, p: [{ id: seatB, x: 1, y: 1, vx: 0, vy: 0, g: true }] });
+  await sleep(250);
+  check('非房主上报的快照被拒绝', !a.msgs.some((m) => m.t === 'snap' && m.seq === 2));
+
+  // 中途加入者能拿到缓存的world快照
+  const late = await new Player(`smokeL_${tag}`).connect();
+  const lateStart = await late.wait('match_start');
+  check('中途加入的 match_start 带世界快照', !!lateStart.world && Array.isArray(lateStart.world.p), JSON.stringify(lateStart.world?.p?.length ?? null));
+  late.close();
+  await sleep(150);
 
   // ---- 拾取仲裁 ----
   const drop = startB1.drops.find((d) => d.kind === 'weapon');
@@ -200,13 +225,19 @@ async function main() {
   // ---- 伤害 → 最后一人胜出 → 自动换图重开 ----
   a.clear();
   b.clear();
-  a.send({ t: 'dmg', target: seatB, amount: 30, kind: 'bullet', crit: false, attack: 1, ignoreInvuln: false });
+  a.send({ t: 'dmg', target: seatB, src: seatA, amount: 30, kind: 'bullet', crit: false, attack: 1, ignoreInvuln: false });
   const hp = await a.wait('hp', (m) => m.id === seatB);
   check('伤害结算：100 → 70', hp.hp === 70, `hp=${hp.hp}`);
   check('双方血量广播一致', (await b.wait('hp', (m) => m.id === seatB)).hp === 70);
 
   await sleep(200);
-  a.send({ t: 'dmg', target: seatB, amount: 200, kind: 'bullet', crit: false, attack: 2, ignoreInvuln: true });
+  // 非房主上报伤害必须被丢弃（避免 N 端重复结算）
+  b.clear();
+  b.send({ t: 'dmg', target: seatA, src: seatB, amount: 30, kind: 'bullet', crit: false, attack: 77, ignoreInvuln: true });
+  await sleep(200);
+  check('非房主上报的伤害被拒绝', !a.msgs.some((m) => m.t === 'hp' && m.id === seatA && m.hp === 70));
+
+  a.send({ t: 'dmg', target: seatB, src: seatA, amount: 200, kind: 'bullet', crit: false, attack: 2, ignoreInvuln: true });
   const end = await a.wait('match_end', undefined, 4000);
   check('最后一死触发本局结束', end.winner === `smokeA_${tag}`, JSON.stringify({ winner: end.winner, results: end.results }));
   check('结算带下一张地图与倒计时', typeof end.nextMap === 'string' && end.restartInMs > 0, JSON.stringify({ nextMap: end.nextMap, ms: end.restartInMs }));
@@ -223,7 +254,7 @@ async function main() {
   // 先把 A 打掉 30 血（用于验证"重进不保留血量"）
   a.clear();
   b.clear();
-  b.send({ t: 'dmg', target: seatA2, amount: 30, kind: 'bullet', crit: false, attack: 11, ignoreInvuln: true });
+  a.send({ t: 'dmg', target: seatA2, src: seatB, amount: 30, kind: 'bullet', crit: false, attack: 11, ignoreInvuln: true });
   await b.wait('hp', (m) => m.id === seatA2 && m.hp === 70, 4000);
   check('离开前 A 已受伤（70 血）', true);
 

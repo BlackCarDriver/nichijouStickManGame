@@ -96,6 +96,16 @@ export function buildMap(
     });
   });
 
+  // 1.5) 物体 id 唯一性检查：联机的"销毁/同步"全靠 id 对齐。
+  // 重复 id 会让一个销毁事件作用到别的物体上（表现为两端箱子数量不一致）。
+  const seenIds = new Set<string>([...runtime.map((r) => r.id)]);
+  for (const { id } of pending) {
+    if (seenIds.has(id)) {
+      console.warn(`[MapLoader] 物体 id 重复: ${id} —— 联机同步会串到别的物体上，请检查地图/预制件`);
+    }
+    seenIds.add(id);
+  }
+
   // 2) 逐个创建物理体 + 视觉
   for (const { obj, id } of pending) {
     const mat = getMaterial(obj.material);

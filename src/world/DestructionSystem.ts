@@ -27,11 +27,24 @@ export class DestructionSystem {
   private readonly scene: Phaser.Scene;
   private readonly registry: WorldRegistry;
   private readonly fx: FxSystem;
+  /**
+   * 是否拥有破坏权威。
+   *
+   * 联机时只有"房主"有：其它客户端只播受击表现（火花/闪白），
+   * 耐久与摧毁结果一律以房主广播的 `obj` 为准。
+   * 否则各端各自扣耐久 → 每端何时打爆箱子都不一样，画面必然不同步。
+   */
+  private authority = true;
 
   constructor(scene: Phaser.Scene, registry: WorldRegistry, fx: FxSystem) {
     this.scene = scene;
     this.registry = registry;
     this.fx = fx;
+  }
+
+  /** 联机：设置本端是否拥有破坏权威（房主 = true，其它 = false） */
+  setAuthority(authority: boolean): void {
+    this.authority = authority;
   }
 
   /**
@@ -42,6 +55,15 @@ export class DestructionSystem {
     // decor 图层 / 不可破坏材质：耐久为 -1
     if (!runtime.body || runtime.durability < 0) {
       return { applied: 0, destroyed: false, remaining: -1 };
+    }
+
+    // 非权威端：只做受击表现，不动耐久、不摧毁（结果等房主广播）
+    if (!this.authority) {
+      this.fx.flashShape(runtime.body.vertices, 0xffffff);
+      if (info.point) {
+        this.fx.hitSpark(info.point, info.normal, MATERIALS[runtime.material]?.color ?? 0xffffff);
+      }
+      return { applied: 0, destroyed: false, remaining: runtime.durability };
     }
 
     const material = MATERIALS[runtime.material];

@@ -43,8 +43,10 @@ type swapPayload struct {
 }
 
 type pickMsg struct {
-	T    string       `json:"t"`
-	ID   int64        `json:"id"`
+	T  string `json:"t"`
+	ID int64  `json:"id"`
+	// By 由"世界权威"（房主客户端）指定拾取者；普通客户端留空（= 自己）
+	By   int          `json:"by,omitempty"`
 	Swap *swapPayload `json:"swap"`
 }
 
@@ -54,8 +56,10 @@ type vec2 struct {
 }
 
 type damageMsg struct {
-	T            string  `json:"t"`
-	Target       int     `json:"target"`
+	T      string `json:"t"`
+	Target int    `json:"target"`
+	// Src 攻击者座位号（房主代报他人伤害时使用；0 也是合法座位，所以用 -1 表示未填）
+	Src          int     `json:"src"`
 	Amount       float64 `json:"amount"`
 	Kind         string  `json:"kind"`
 	Crit         bool    `json:"crit"`
@@ -81,6 +85,61 @@ type dropReqMsg struct {
 type objMsg struct {
 	T  string `json:"t"`
 	ID string `json:"id"`
+}
+
+// dropRemoveMsg 客户端（房主）请求移除一件掉落物（掉出地图等）。
+type dropRemoveMsg struct {
+	T  string `json:"t"`
+	ID int64  `json:"id"`
+}
+
+// dropRemoveOut 服务端广播掉落物移除。
+type dropRemoveOut struct {
+	T  string `json:"t"`
+	ID int64  `json:"id"`
+}
+
+// ---------- 世界状态同步（房主 → 服务端 → 其它客户端）----------
+
+// snapPlayer 房主视角的玩家权威变换（客户端只用来插值/纠偏）。
+type snapPlayer struct {
+	ID int     `json:"id"`
+	X  float64 `json:"x"`
+	Y  float64 `json:"y"`
+	VX float64 `json:"vx"`
+	VY float64 `json:"vy"`
+	G  bool    `json:"g"` // 着地
+}
+
+// snapObj 动态地图物体（会动的箱子/铁球/跷跷板等）的权威变换。
+type snapObj struct {
+	ID string  `json:"id"`
+	X  float64 `json:"x"`
+	Y  float64 `json:"y"`
+	A  float64 `json:"a"` // 旋转角（弧度）
+}
+
+// snapDrop 掉落物的权威坐标（含是否仍在空中）。
+type snapDrop struct {
+	ID int64   `json:"id"`
+	X  float64 `json:"x"`
+	Y  float64 `json:"y"`
+	F  bool    `json:"f"`
+}
+
+type snapMsg struct {
+	T   string       `json:"t"`
+	Seq int64        `json:"seq"`
+	Key bool         `json:"key"` // true = 全量关键帧（新加入者可直接使用）
+	P   []snapPlayer `json:"p"`
+	O   []snapObj    `json:"o,omitempty"`
+	D   []snapDrop   `json:"d,omitempty"`
+}
+
+// hostMsg 世界权威（房主）变更。
+type hostMsg struct {
+	T  string `json:"t"`
+	ID int    `json:"id"`
 }
 
 // enterMsg 客户端"点击 W 开始"后才真正加入对局（此前只是旁观/加载）。
@@ -175,14 +234,18 @@ type playerStatWire struct {
 }
 
 type matchStartMsg struct {
-	T         string           `json:"t"`
-	MatchID   int64            `json:"matchId"`
-	Map       string           `json:"map"`
-	Players   []matchPlayer    `json:"players"`
-	Stats     []playerStatWire `json:"stats"`
-	You       int              `json:"you"`
-	Drops     []dropItem       `json:"drops"`
-	Destroyed []string         `json:"destroyed"`
+	T       string           `json:"t"`
+	MatchID int64            `json:"matchId"`
+	Map     string           `json:"map"`
+	Players []matchPlayer    `json:"players"`
+	Stats   []playerStatWire `json:"stats"`
+	You     int              `json:"you"`
+	// Host = 当前世界权威座位号（-1 = 还没有权威，客户端先只做表现）
+	Host      int        `json:"host"`
+	Drops     []dropItem `json:"drops"`
+	Destroyed []string   `json:"destroyed"`
+	// World = 最近一帧全量世界快照（中途加入者用它还原动态物体/掉落物/玩家位置）
+	World *snapMsg `json:"world,omitempty"`
 }
 
 // playerJoinMsg 对局中途加入的新玩家（其它客户端需要动态创建火柴人）。

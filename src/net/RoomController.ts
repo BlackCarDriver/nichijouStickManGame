@@ -117,7 +117,10 @@ export class RoomController {
 
   private buildUrl(token: string): string {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const base = `${proto}//${window.location.host}/ws`;
+    // 按构建 BASE_URL 解析，子路径部署（/stickmanGame/）时自动连到 /stickmanGame/ws
+    const url = new URL(`${import.meta.env.BASE_URL}ws`, window.location.href);
+    url.protocol = proto;
+    const base = url.toString();
     if (this.dev.enabled) {
       const avatar = this.dev.avatar ? `&avatar=${encodeURIComponent(this.dev.avatar)}` : '';
       return `${base}?dev=1&nick=${encodeURIComponent(this.dev.nick)}${avatar}`;
@@ -247,10 +250,12 @@ export class RoomController {
       matchId: msg.matchId,
       map: msg.map,
       you: msg.you,
+      host: msg.host ?? -1,
       players: msg.players,
       stats: msg.stats ?? [],
       drops: msg.drops,
       destroyed: msg.destroyed,
+      world: msg.world,
       link: this.net,
     };
 

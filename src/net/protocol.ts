@@ -88,8 +88,12 @@ export interface MatchStartMsg {
   players: MatchPlayer[];
   stats: PlayerStat[];
   you: number;
+  /** 世界权威（房主）座位号；-1 = 暂无权威 */
+  host: number;
   drops: DropWire[];
   destroyed: string[];
+  /** 最近一帧全量世界快照（中途加入者用它还原动态物体/掉落物/玩家位置） */
+  world?: SnapMsg;
 }
 
 /** 对局中途加入的新玩家 */
@@ -135,6 +139,63 @@ export interface PosSnapshot {
 export interface PosBatchMsg {
   t: 'pos';
   p: PosSnapshot[];
+}
+
+// ---------- 世界状态同步（房主 → 服务端 → 其它客户端）----------
+
+/** 房主视角的玩家权威变换 */
+export interface SnapPlayer {
+  id: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  /** 着地 */
+  g: boolean;
+}
+
+/** 动态地图物体（箱子/铁球/跷跷板…）的权威变换 */
+export interface SnapObj {
+  id: string;
+  x: number;
+  y: number;
+  /** 旋转角（弧度） */
+  a: number;
+}
+
+/** 掉落物权威坐标 */
+export interface SnapDrop {
+  id: number;
+  x: number;
+  y: number;
+  f: boolean;
+}
+
+/**
+ * 权威世界快照。
+ *
+ * `key=true` 是全量关键帧（所有动态物体 + 所有掉落物），新加入者可直接拿它还原世界；
+ * 普通帧只带玩家 + 变化过的物体/掉落物。
+ */
+export interface SnapMsg {
+  t: 'snap';
+  seq: number;
+  key: boolean;
+  p: SnapPlayer[];
+  o?: SnapObj[];
+  d?: SnapDrop[];
+}
+
+/** 掉落物被移除（越界清理等；房主 → 服务端 → 所有人） */
+export interface DropRemoveMsg {
+  t: 'drop_remove';
+  id: number;
+}
+
+/** 世界权威变更（房主掉线时顺延） */
+export interface HostMsg {
+  t: 'host';
+  id: number;
 }
 
 export interface HpMsg {
@@ -225,6 +286,9 @@ export type ServerMsg =
   | WaitingMsg
   | InputBatchMsg
   | PosBatchMsg
+  | SnapMsg
+  | DropRemoveMsg
+  | HostMsg
   | HpMsg
   | DropAddMsg
   | PickMsg
@@ -257,11 +321,15 @@ export type ClientMsg =
   | {
       t: 'pick';
       id: number;
+      /** 房主代他人发起拾取时填对方座位号 */
+      by?: number;
       swap?: { weaponId: string; ammo: number; x: number; y: number };
     }
   | {
       t: 'dmg';
       target: number;
+      /** 攻击者座位号（-1 = 环境/未知）；房主代报时必须填 */
+      src: number;
       amount: number;
       kind: string;
       crit: boolean;
@@ -273,6 +341,8 @@ export type ClientMsg =
   | { t: 'shield'; amount: number }
   | { t: 'drop'; weaponId: string; ammo: number; x: number; y: number }
   | { t: 'obj'; id: string }
+  | { t: 'snap'; seq: number; key: boolean; p: SnapPlayer[]; o?: SnapObj[]; d?: SnapDrop[] }
+  | { t: 'drop_remove'; id: number }
   | { t: 'ping'; ts: number };
 
 /** 对局启动数据（GameScene 通过 scene.start 的数据传入） */
@@ -280,10 +350,14 @@ export interface MatchContext {
   matchId: number;
   map: string;
   you: number;
+  /** 世界权威（房主）座位号 */
+  host: number;
   players: MatchPlayer[];
   stats: PlayerStat[];
   drops: DropWire[];
   destroyed: string[];
+  /** 初始世界快照（中途加入/重连时用于还原动态世界） */
+  world?: SnapMsg;
   /** 与服务器通信的通道（GameScene 内由 OnlineMatch 使用） */
   link: MatchLink;
 }
