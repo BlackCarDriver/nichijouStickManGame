@@ -485,6 +485,13 @@ async function main() {
   );
 
   // ---- 伤害仲裁 ----
+  // 先记录双方数值（诊断用：伤害可能被护盾吸收，也可能被击杀/无敌帧影响）
+  const dmgBefore = await a.cdp.eval(`(() => {
+    const s = window.__game.scene.getScene('GameScene');
+    const other = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
+    const p = s.online.playerOf(other);
+    return { hp: p.health.hp, shield: p.health.shield, dead: p.health.isDead, net: other };
+  })()`);
   const dmg = await a.cdp.eval(`(() => {
     const s = window.__game.scene.getScene('GameScene');
     const me = s.online.localPlayer;
@@ -520,10 +527,18 @@ async function main() {
   // 伤害先扣护盾再扣血，所以用 "hp + shield" 的总量来判断"确实掉了"
   const totalA = hpA.hp + (hpA.shield ?? 0);
   const totalB = hpB.hp + (hpB.shield ?? 0);
+  if (!(hpA.hp === hpB.hp && totalA < dmgBefore.hp + dmgBefore.shield && totalA < 100)) {
+    console.log(`  ℹ️ 伤害诊断: before=${JSON.stringify(dmgBefore)} afterA=${JSON.stringify(hpA)} afterB=${JSON.stringify(hpB)}`);
+  }
+  // 注意：伤害先扣护盾，所以"总量"的初值可能是 100 + 护盾（防弹衣 50），
+  // 断言只能比较"相对伤害前有没有减少"，不能写死 <100。
   check(
     '服务端权威血量：双方一致且确有扣减',
-    hpA.hp === hpB.hp && (hpA.shield ?? 0) === (hpB.shield ?? 0) && totalA < 100 && hpA.matchId === bMove.matchId,
-    `A端看到B=${JSON.stringify(hpA)} B端自己=${JSON.stringify(hpB)} 总量=${totalA}（开局=${bMove.matchId}）`,
+    hpA.hp === hpB.hp &&
+      (hpA.shield ?? 0) === (hpB.shield ?? 0) &&
+      totalA < dmgBefore.hp + dmgBefore.shield &&
+      hpA.matchId === bMove.matchId,
+    `A端看到B=${JSON.stringify(hpA)} B端自己=${JSON.stringify(hpB)} 总量=${totalA} 伤害前=${JSON.stringify(dmgBefore)}（开局=${bMove.matchId}）`,
   );
 
   // ---- 打击反馈：本地命中立刻出数字/硬直，不等 hp；hp 到达后不重复 ----
@@ -538,7 +553,7 @@ async function main() {
     const other = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
     const target = s.online.playerOf(other);
     const before = s.online.stats.hitPreviews;
-    const hpBefore = target.health.hp;
+    const hpBefore = target.health.hp + target.health.shield;
     // 模拟"我的子弹命中对手"（DamageSystem 会先播即时反馈，再上报）
     s.damageSystem.damagePlayer(target, {
       amount: 20, kind: 'bullet', sourceId: me.id, weaponId: 'pistol',
@@ -548,7 +563,7 @@ async function main() {
     // 同步检查：此刻（同一帧内）应当已经播过反馈，而血量还没变
     return {
       previewsDelta: s.online.stats.hitPreviews - before,
-      hpRightNow: target.health.hp,
+      hpRightNow: target.health.hp + target.health.shield,
       hpBefore,
       previewed: s.previewedHits.has(8801),
     };
