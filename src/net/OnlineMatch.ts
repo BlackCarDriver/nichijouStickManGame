@@ -75,13 +75,14 @@ const POS_INTERVAL = 50;
  * 所以用 RTT 推目标，再用"渲染时刻已经越过最新样本 = 饿死了"作为兜底紧急上调。
  */
 const POS_DELAY_MIN = 60;
-const POS_DELAY_MAX = 140;
-const POS_DELAY_INIT = 100;
-/** 目标延迟 = 单程 × 这个系数 + 余量（覆盖抖动与 50ms 的采样间隔） */
-const POS_DELAY_FACTOR = 1.15;
-const POS_DELAY_MARGIN = 25;
-/** RTT 还没测出来时的保守单程估计 */
-const POS_DELAY_FALLBACK_ONE_WAY = 60;
+/** 初始值就取最小：网络好的人从第一帧起最跟手，差的人靠"饿死检测"迅速追上去 */
+const POS_DELAY_INIT = POS_DELAY_MIN;
+/** 目标延迟 = 对方上行延迟 + 我的下行延迟 + 余量（覆盖抖动与采样间隔） */
+const POS_DELAY_MARGIN = 45;
+/** RTT 还没测出来时的保守下行估计 */
+const POS_DELAY_FALLBACK_DOWN = 30;
+/** 自适应延迟上限：再大就"对手明显延迟"了，宁可少量外推 */
+const POS_DELAY_HARD_MAX = 200;
 /** 位置中断时最多向前外推多久 */
 const POS_EXTRAPOLATE = 200;
 /** 位置缓冲保留时长 */
@@ -116,6 +117,18 @@ interface PosSample {
 interface PosStream {
   samples: PosSample[];
   delay: number;
+  /**
+   * 兜底下限（ms）：只要出现过"缓冲饿死"，就把它抬到当时的延迟之上，
+   * 并**很慢**地衰减。
+   *
+   * 为什么必须有它：插值延迟必须同时盖住"我的下行"和"**对方的上行**"。
+   * 而自己的 RTT 只反映自己这条链路 —— 我 30ms、对方上行 300ms 时，
+   * 按自己 RTT 算出的 60ms 会一直饿死：外推 → 新样本一到就"缩回去"，
+   * 表现就是"对方动作一跳一跳、不连贯"。饿死检测正好能捕捉到这件事。
+   */
+  floor: number;
+  /** 距离上次"饿死"过了多久（ms），用来决定下限可以不可以衰减 */
+  quietMs: number;
 }
 
 interface SnapSample {
@@ -236,6 +249,7 @@ export class OnlineMatch {
       player.netControlled = true;
       player.autoRespawn = false;
     }
+    this.syncRemoteDriven();
 
     this.rebuildDynamicObjects();
 
@@ -309,6 +323,7 @@ export class OnlineMatch {
           return {
             id,
             delay: Math.round(st.delay),
+            floor: Math.round(st.floor),
             samples: st.samples.length,
             sinceLast: newest ? Math.round(performance.now() - newest.at) : null,
           };
@@ -409,8 +424,8 @@ export class OnlineMatch {
   update(dtMs: number): void {
     if (this.disposed) return;
     this.tickPing(dtMs);
-    this.driveRemotePlayers();
-    if (this.role === 'client') this.driveRemoteObjects();
+    this.driveRemotePlayers(dtMs);
+    if (this.role === 'client') this.driveRemoteObjects(dtMs);
     this.sendLocalState(dtMs);
     this.updateRates(dtMs);
     if (this.role === 'authority') this.authorityTick(dtMs);
@@ -424,7 +439,7 @@ export class OnlineMatch {
    * 为什么房主也走：房主要用"真实的对手位置"做命中/拾取判定，
    * 而不是自己那份会滞后一个来回的物理副本。
    */
-  private driveRemotePlayers(): void {
+  private driveRemotePlayers(dtMs = 16): void {
     if (this.posStreams.size === 0) return;
     const now = performance.now();
     let delaySum = 0;
@@ -432,7 +447,7 @@ export class OnlineMatch {
     for (const [netId, stream] of this.posStreams) {
       if (netId === this.localNetId) continue;
       const newest = stream.samples[stream.samples.length - 1];
-      this.tuneDelay(stream, !!newest && now - stream.delay > newest.at);
+      this.tuneDelay(stream, !!newest && now - stream.delay > newest.at, dtMs);
       delaySum += stream.delay;
       delayCount++;
       const player = this.deps.players.get(netId);
@@ -455,22 +470,45 @@ export class OnlineMatch {
    *
    * @param starved 渲染时刻是否已经越过最新样本（说明缓冲不够，正在外推）
    */
-  private tuneDelay(stream: PosStream | SnapStream, starved: boolean): void {
+  private tuneDelay(stream: PosStream | SnapStream, starved: boolean, dtMs = 16): void {
     if (stream.samples.length === 0) return;
+    const down = this.rtt > 0 ? this.rtt / 2 : POS_DELAY_FALLBACK_DOWN;
+    const hasFloor = 'floor' in stream;
+
     if (starved) {
-      // 紧急：正在外推 = 延迟不够，立刻加一档（会带来一点画面变慢，但先稳住）
-      stream.delay = Math.min(POS_DELAY_MAX, stream.delay + 8);
+      // 刚建流的前几帧还没攒到样本，属正常现象，不算"饿死"
+      if (stream.samples.length < 8) return;
+      // 正在外推 = 延迟不够（多半是"对方上行"比我的下行更大）：抬高兜底下限并立刻跟上
+      if (hasFloor) {
+        stream.floor = Math.min(POS_DELAY_HARD_MAX, Math.max(stream.floor, stream.delay + 12));
+        stream.quietMs = 0;
+      }
+      stream.delay = Math.min(
+        POS_DELAY_HARD_MAX,
+        Math.max(stream.delay, hasFloor ? stream.floor : stream.delay + 12),
+      );
       return;
     }
-    const oneWay = this.rtt > 0 ? this.rtt / 2 : POS_DELAY_FALLBACK_ONE_WAY;
+
+    if (hasFloor) stream.quietMs += dtMs;
+
+    // 目标：盖住自己的下行 + 一点余量；若曾饿死过则以补上的下限为准
+    const base = down + POS_DELAY_MARGIN;
     const target = clamp(
-      oneWay * POS_DELAY_FACTOR + POS_DELAY_MARGIN,
+      Math.max(base, hasFloor ? stream.floor : 0),
       POS_DELAY_MIN,
-      POS_DELAY_MAX,
+      POS_DELAY_HARD_MAX,
     );
     if (stream.delay < target) stream.delay = Math.min(target, stream.delay + 4);
-    else if (stream.delay > target) stream.delay = Math.max(target, stream.delay - 2);
+    else if (stream.delay > target) stream.delay = Math.max(target, stream.delay - 15 * (dtMs / 1000));
+
+    // 兜底下限缓慢衰减：连续 8 秒没饿死才开始（约 -1ms/秒），避免"掉下去又饿死"的锯齿
+    if (hasFloor && stream.floor > POS_DELAY_MIN && stream.quietMs > 8000) {
+      stream.floor = Math.max(POS_DELAY_MIN, stream.floor - 1 * (dtMs / 1000));
+    }
   }
+
+
 
   private ingestPos(list: PosSnapshot[]): void {
     const at = performance.now();
@@ -478,7 +516,7 @@ export class OnlineMatch {
       if (s.id === this.localNetId) continue;
       let stream = this.posStreams.get(s.id);
       if (!stream) {
-        stream = { samples: [], delay: POS_DELAY_INIT };
+        stream = { samples: [], delay: POS_DELAY_INIT, floor: 0, quietMs: 0 };
         this.posStreams.set(s.id, stream);
       }
       stream.samples.push({ at, x: s.x, y: s.y, vx: s.vx, vy: s.vy, g: s.g === true });
@@ -486,6 +524,8 @@ export class OnlineMatch {
       this.posRecv++;
     }
   }
+
+
 
 
   // ---------- 房主：世界快照（动态刚体 + 掉落物） ----------
@@ -619,52 +659,71 @@ export class OnlineMatch {
     if (msg.seq > this.lastSnapSeq + 1) this.snapGaps += msg.seq - this.lastSnapSeq - 1;
     this.lastSnapSeq = Math.max(this.lastSnapSeq, msg.seq);
 
-    // 掉落物坐标是权威的，直接落到本地表现上
-    for (const d of msg.d ?? []) this.deps.pickups.applyNetPosition(d.id, d.x, d.y, d.f);
-
     if (immediate) {
+      // 关键帧（首次进入/重连）：没有历史样本可插值，直接套用
       for (const [id, o] of objects) {
         const runtime = this.objectById.get(id);
         if (runtime?.body) this.driveObject(runtime.body, o.x, o.y, o.a);
       }
+      for (const [id, d] of drops) this.deps.pickups.applyNetPosition(id, d.x, d.y, d.f);
     }
+    // 注意：非关键帧**不直接套坐标**。掉落物/刚体一律由 driveRemoteObjects() 按
+    // 插值结果逐帧驱动 —— 直接套 20Hz 的快照会让"掉落物下落"变成每 50ms 跳 45px
+    // （观感就是"一瞬间掉下去"）。
   }
 
   /** 非房主：把动态刚体钉到插值目标上（视觉/碰撞都跟着走） */
-  private driveRemoteObjects(): void {
+  private driveRemoteObjects(dtMs = 16): void {
     const now = performance.now();
     const newest = this.snapStream.samples[this.snapStream.samples.length - 1];
-    this.tuneDelay(this.snapStream, !!newest && now - this.snapStream.delay > newest.at);
-    const view = this.sampleObjects(now - this.snapStream.delay);
+    this.tuneDelay(this.snapStream, !!newest && now - this.snapStream.delay > newest.at, dtMs);
+    const view = this.sampleSnap(now - this.snapStream.delay);
     if (!view) return;
-    for (const [id, o] of view) {
+    for (const [id, o] of view.objects) {
       const runtime = this.objectById.get(id);
       if (runtime?.body) this.driveObject(runtime.body, o.x, o.y, o.a);
     }
+    // 掉落物：按插值坐标逐帧驱动（下落才是连续的，而不是每 50ms 跳一次）
+    for (const [id, d] of view.drops) this.deps.pickups.applyNetPosition(id, d.x, d.y, d.f);
   }
 
-  /** 按渲染时间取样（两帧之间线性插值；过期则保持最后位置） */
-  private sampleObjects(renderAt: number): Map<string, SnapObj> | null {
+  /**
+   * 按渲染时间取样世界快照（物体 + 掉落物，两帧之间线性插值）。
+   * 过期则停在同一位置（不做刚体外推：物体的速度不像玩家那样稳定）。
+   */
+  private sampleSnap(renderAt: number): SnapSample | null {
     const list = this.snapStream.samples;
     if (list.length === 0) return null;
-    if (list.length === 1 || renderAt <= list[0].at) return list[0].objects;
+    if (list.length === 1 || renderAt <= list[0].at) return list[0];
     const last = list[list.length - 1];
-    if (renderAt >= last.at) return last.objects;
+    if (renderAt >= last.at) return last;
     for (let i = list.length - 2; i >= 0; i--) {
       const a = list[i];
       const b = list[i + 1];
       if (renderAt < a.at || renderAt > b.at) continue;
       const span = b.at - a.at;
       const t = span > 0 ? (renderAt - a.at) / span : 0;
-      const out = new Map<string, SnapObj>();
+
+      const objects = new Map<string, SnapObj>();
       for (const [id, ob] of b.objects) {
-        const oa = a.objects.get(id) ?? ob;
-        out.set(id, { id, x: lerp(oa.x, ob.x, t), y: lerp(oa.y, ob.y, t), a: lerpAngle(oa.a, ob.a, t) });
+        const oa = a.objects.get(id);
+        objects.set(
+          id,
+          oa
+            ? { id, x: lerp(oa.x, ob.x, t), y: lerp(oa.y, ob.y, t), a: lerpAngle(oa.a, ob.a, t) }
+            : ob,
+        );
       }
-      return out;
+      const drops = new Map<number, SnapDrop>();
+      for (const [id, db] of b.drops) {
+        const da = a.drops.get(id);
+        drops.set(id, da ? { id, x: lerp(da.x, db.x, t), y: lerp(da.y, db.y, t), f: db.f } : db);
+      }
+      return { at: renderAt, objects, drops };
     }
-    return last.objects;
+    return last;
   }
+
 
   private driveObject(body: MatterJS.BodyType, x: number, y: number, a: number): void {
     const matter = this.deps.scene.matter;
@@ -675,6 +734,20 @@ export class OnlineMatch {
   }
 
   // ---------- 角色 ----------
+
+  /**
+   * 标记"谁由快照驱动"。
+   *
+   * 联机里 **除自己以外** 的玩家都由位置中继驱动（房主也一样）：
+   * 他们不再跑本地物理/移动控制，只推进动画，避免"本地模拟 vs 快照"互相打架。
+   */
+  private syncRemoteDriven(): void {
+    for (const [netId, player] of this.deps.players) {
+      const remote = netId !== this.localNetId;
+      player.remoteDriven = remote;
+      if (!remote) player.clearRemoteDrive();
+    }
+  }
 
   private applyRole(): void {
     const authority = this.role === 'authority';
@@ -982,6 +1055,7 @@ export class OnlineMatch {
     this.deps.kills.set(player.id, stat.kills ?? 0);
     player.applyNetSnapshot({ hp: stat.hp, shield: stat.shield, dead: stat.dead });
     player.envDamageReporter = undefined;
+    this.syncRemoteDriven();
     this.deps.onRosterChanged();
   }
 

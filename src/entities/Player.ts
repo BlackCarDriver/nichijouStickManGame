@@ -268,6 +268,16 @@ export class Player extends Entity {
   private rayGrounded = false;
   /** 联机：房主下发的着地状态（非 null 时优先于本地射线） */
   private remoteGroundedHint: boolean | null = null;
+  /**
+   * 联机：这个玩家由网络快照驱动（不是本端模拟）。
+   *
+   * 为 true 时**跳过本地物理/移动控制**（射线着地、速度控制、跳跃、自动上台阶），
+   * 只推进动画状态机。原因：
+   * - 位置/速度每帧都会被快照覆盖，本地那套控制在跟它"打架"；
+   * - `tryStepUp` 会把角色瞬间抬高最多 34px，紧接着被快照拉回 → 肉眼可见的抖动；
+   * - 用权威速度算姿态，行走/奔跑/跳跃切换才稳定，不会一帧 walk 一帧 idle。
+   */
+  remoteDriven = false;
   /** 是否站在单向平台上（由场景每帧设置） */
   private standingOnOneWay = false;
   /** 地面法线（由碰撞事件更新）：用于斜面时左右脚的高度差 */
@@ -988,6 +998,12 @@ export class Player extends Entity {
       cmd = emptyInput();
     }
 
+    // 联机：远端玩家不做本地物理模拟，只推进动画与绘制
+    if (this.remoteDriven) {
+      this.updateRemote(cmd, deltaMs);
+      return;
+    }
+
     // 持续离地超过 150ms 才把地面法线重置为平地（短暂滑动/抖动不重置，避免闪烁）
     if (this.isGrounded) {
       this.airborneTime = 0;
@@ -1216,6 +1232,47 @@ export class Player extends Entity {
       if (hit) break;
     }
     this.rayGrounded = hit;
+  }
+
+  /**
+   * 远端玩家（快照驱动）的每帧更新：只推进动画、朝向、计时器与绘制。
+   *
+   * 位置与速度已经由 `driveRemoteState()` 用插值结果写好，这里绝不能再改，
+   * 否则会和快照"打架"，表现为人物抖动、动作不连贯。
+   */
+  private updateRemote(cmd: InputCommand, deltaMs: number): void {
+    // 计时器（受击/攻击/落地冲击/起跳预备）：只影响姿态
+    this.landImpact = Math.max(0, this.landImpact - deltaMs);
+    this.jumpAnticipation = Math.max(0, this.jumpAnticipation - deltaMs);
+    if (this.attackTimer > 0) {
+      this.attackTimer = Math.max(0, this.attackTimer - deltaMs);
+      if (this.attackTimer === 0) {
+        this.attackKind = null;
+        this.actionId = null;
+      }
+    }
+    if (this.recoilClimbDeg > 0) {
+      const drop = (this.recoilClimbMaxDeg / this.recoilRecoverMs) * deltaMs;
+      this.recoilClimbDeg = Math.max(0, this.recoilClimbDeg - drop);
+    }
+    if (this.pushTimer > 0) this.pushTimer = Math.max(0, this.pushTimer - deltaMs);
+
+    this.crouching = cmd.crouch;
+
+    // 朝向 / 瞄准：与本端模拟同一套规则
+    if (cmd.aimAngle !== null) {
+      this.facing = Math.cos(cmd.aimAngle) >= 0 ? 1 : -1;
+    } else if (cmd.moveX !== 0) {
+      this.facing = cmd.moveX > 0 ? 1 : -1;
+    }
+    this.moveDir = cmd.moveX;
+    this.backward = cmd.moveX !== 0 && Math.sign(cmd.moveX) !== this.facing;
+    this.aimAngle = cmd.aimAngle ?? (this.facing > 0 ? 0 : Math.PI);
+
+    // 姿态：速度/着地都取权威值（driveRemoteState 写入），所以不会来回跳
+    this.updatePose(deltaMs, this.remoteGroundedHint === true);
+    this.visual.scaleX = this.facing;
+    this.draw();
   }
 
   /** 动画状态机：物理状态（着地/速度/受击）→ 姿势 */

@@ -222,6 +222,81 @@ async function main() {
     JSON.stringify({ hostSees: lagSample, expect: move.target }),
   );
 
+  // ---- 2.5 掉落物下落必须连续（不是每 50ms 跳一大步）----
+  // 被判定的量：非房主端上，某个正在下落的掉落物"单帧 y 位移"。
+  // 直接用快照坐标会看到 45px+ 的台阶（900px/s × 50ms），插值后应该在 15px 量级。
+  const dropSmooth = await b.eval(`(async () => {
+    const s = window.__game.scene.getScene('GameScene');
+    const frames = [];
+    for (let i = 0; i < 150; i++) {
+      const falling = s.pickups.list.filter((it) => it.netId !== undefined && it.falling);
+      frames.push(falling.map((it) => [it.netId, it.y]));
+      await new Promise((r) => setTimeout(r, 16));
+    }
+    const before = new Map();
+    let maxStep = 0;
+    let samples = 0;
+    for (const frame of frames) {
+      for (const [id, y] of frame) {
+        const prev = before.get(id);
+        if (prev !== undefined) {
+          const d = Math.abs(y - prev);
+          if (d > maxStep) maxStep = d;
+          samples++;
+        }
+        before.set(id, y);
+      }
+    }
+    return { maxStep: Math.round(maxStep * 10) / 10, samples };
+  })()`);
+  check(
+    '掉落物下落是连续的（单帧位移远小于快照台阶）',
+    dropSmooth.samples === 0 || dropSmooth.maxStep <= 40,
+    JSON.stringify(dropSmooth),
+  );
+
+  // ---- 2.6 远端玩家的动作要连贯（不抖、不来回切姿态）----
+  await a.eval(`(() => {
+    const s = window.__game.scene.getScene('GameScene');
+    const orig = s.inputManager.readP1.bind(s.inputManager);
+    window.__origWalk = orig;
+    let n = 0;
+    s.inputManager.readP1 = () => { const c = orig(); c.moveX = n++ < 90 ? 1 : 0; return c; };
+    return true;
+  })()`);
+  const anim = await b.eval(`(async () => {
+    const s = window.__game.scene.getScene('GameScene');
+    const other = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
+    const p = s.online.playerOf(other);
+    const poses = [];
+    let maxStep = 0;
+    let prevX = p.container.x;
+    for (let i = 0; i < 70; i++) {
+      await new Promise((r) => setTimeout(r, 25));
+      poses.push(p.pose);
+      const dx = Math.abs(p.container.x - prevX);
+      if (dx > maxStep) maxStep = dx;
+      prevX = p.container.x;
+    }
+    // 统计"走 → 停 → 走"的抖动次数（只数移动过程中不该出现的 idle/fall 回切）
+    let flickers = 0;
+    for (let i = 2; i < poses.length; i++) {
+      if (poses[i] === poses[i - 2] && poses[i] !== poses[i - 1]) flickers++;
+    }
+    return { poses: [...new Set(poses)], flickers, maxStep: Math.round(maxStep * 10) / 10, remoteDriven: p.remoteDriven };
+  })()`);
+  await a.eval(`(() => { const s = window.__game.scene.getScene('GameScene'); s.inputManager.readP1 = window.__origWalk; return true; })()`);
+  check(
+    '远端玩家由快照驱动（remoteDriven）且位置无跳跃',
+    anim.remoteDriven === true && anim.maxStep <= 30,
+    JSON.stringify({ remoteDriven: anim.remoteDriven, maxStep: anim.maxStep, poses: anim.poses }),
+  );
+  check(
+    '远端玩家姿态不抖动（不会一帧走一帧停）',
+    anim.flickers <= 2,
+    JSON.stringify({ flickers: anim.flickers, poses: anim.poses }),
+  );
+
   // ---- 3. 摔落伤害（自己检测自己）----
   const fallBefore = await b.eval(`window.__game.scene.getScene('GameScene').online.localPlayer.health.hp`);
   // 从"出生点正上方"落下：出生点一定站在实地上，所以一定会落回实地（与地图几何无关，不会偶然卡在平台/墙里）
@@ -273,10 +348,12 @@ async function main() {
 
   // ---- 5.5 自适应插值 + 即时打击反馈（真实时延下）----
   const adapt = await b.eval(`window.__netDiag ? window.__netDiag() : null`);
+  // 上限放开到 200：单程 150ms 时，要"不靠外推地平滑渲染对手"就必须盖住
+  // 对方上行 + 我的下行（≈300ms 的一半以上），硬卡 140 反而会造成动作不连贯。
   check(
-    '真实时延下插值延迟自适应上调（60~140ms）',
-    !!adapt && adapt.interpDelay >= 60 && adapt.interpDelay <= 140,
-    JSON.stringify({ interpDelay: adapt?.interpDelay, rtt: adapt?.rtt }),
+    '真实时延下插值延迟自适应（60~200ms，且随 RTT 上升）',
+    !!adapt && adapt.interpDelay >= 60 && adapt.interpDelay <= 200 && adapt.interpDelay >= Math.min(200, ONE_WAY + 20),
+    JSON.stringify({ interpDelay: adapt?.interpDelay, rtt: adapt?.rtt, oneWay: ONE_WAY }),
   );
   const preview = await b.eval(`(async () => {
     const s = window.__game.scene.getScene('GameScene');

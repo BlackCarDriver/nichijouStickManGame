@@ -22,6 +22,12 @@ const (
 	inputTick = 33 * time.Millisecond
 	// 补帧/掉落/重生等逻辑的节拍
 	simTick = 33 * time.Millisecond
+	// 位置合并广播的节拍。
+	// 为什么要单独一个更快的小节拍：客户端 20Hz（50ms）上报，如果按 33ms 合并，
+	// 有的玩家会"两帧合成一条、下一帧空着"，到达间隔在 0~83ms 之间跳，
+	// 接收端的插值缓冲就会周期性"饿死"（外推 → 新样本一到又缩回，表现为动作不连贯）。
+	// 16ms 把量化误差压到 ≤16ms，间隔稳定在 50±16ms，60ms 的插值延迟就够用了。
+	posFlushTick = 16 * time.Millisecond
 	// 重生等待（与 Player.PLAYER_CONFIG.respawnDelayMs 一致）
 	respawnDelay = 2800 * time.Millisecond
 	// 单次伤害上限与每秒伤害预算（宽松的防刷保护，不做严格反作弊）
@@ -1377,6 +1383,7 @@ func (h *Hub) onBridgeChat(nick, text string, ts int64) {
 func (h *Hub) RunTickers() {
 	inputTicker := time.NewTicker(inputTick)
 	simTicker := time.NewTicker(simTick)
+	posTicker := time.NewTicker(posFlushTick)
 	go func() {
 		for range inputTicker.C {
 			h.mu.Lock()
@@ -1388,6 +1395,13 @@ func (h *Hub) RunTickers() {
 		for range simTicker.C {
 			h.mu.Lock()
 			h.tickLocked(simTick)
+			h.mu.Unlock()
+		}
+	}()
+	go func() {
+		for range posTicker.C {
+			h.mu.Lock()
+			h.flushPosLocked()
 			h.mu.Unlock()
 		}
 	}()
@@ -1407,7 +1421,6 @@ func (h *Hub) tickLocked(dt time.Duration) {
 
 	h.hostWatchdogLocked(m, now)
 	h.resyncLaggingLocked()
-	h.flushPosLocked()
 
 	if m.Over {
 		// 结算展示中：到点换图重开
