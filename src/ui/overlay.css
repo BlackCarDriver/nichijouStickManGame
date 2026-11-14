@@ -102,7 +102,7 @@
   position: absolute;
   inset: 0;
   display: none;
-  /* 覆盖层整体是 pointer-events:none，这里必须显式打开，否则"开始/观战"点不动 */
+  /* 覆盖层整体是 pointer-events:none，这里必须显式打开，否则"观战"点不动 */
   pointer-events: auto;
   flex-direction: column;
   align-items: center;
@@ -161,7 +161,18 @@
 }
 .mp-start-actions.show { display: flex; }
 
-.mp-start-btn { font-size: clamp(14px, 1.8vmin, 19px); padding: 9px 20px; }
+.mp-start-hint {
+  font-size: clamp(14px, 1.8vmin, 19px);
+  padding: 9px 20px;
+  border: 1px dashed rgba(255, 255, 255, 0.28);
+  border-radius: 9px;
+  color: #cbd6e6;
+  background: rgba(18, 22, 34, 0.5);
+  letter-spacing: 0.02em;
+  /* 纯提示：只按 W 开始，不响应鼠标点击 */
+  pointer-events: none;
+  user-select: none;
+}
 
 .mp-spectate-btn { font-size: clamp(12px, 1.4vmin, 15px); padding: 8px 16px; }
 
@@ -288,58 +299,7 @@
 
 @media (max-aspect-ratio: 4/5) {
   .mp-chat { width: min(320px, 72vw); }
-  .mp-progress {
-  display: none;
-  align-items: center;
-  gap: 10px;
-  width: min(460px, 72vw);
-  margin: 2px 0 6px;
-}
-.mp-progress.show { display: flex; }
-
-.mp-progress-track {
-  flex: 1;
-  height: 10px;
-  border-radius: 99px;
-  background: rgba(255, 255, 255, 0.12);
-  overflow: hidden;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
-}
-
-.mp-progress-bar {
-  height: 100%;
-  width: 0%;
-  border-radius: 99px;
-  background: linear-gradient(90deg, #3b82f6, #22c55e);
-  transition: width 0.18s ease;
-}
-
-.mp-progress-text {
-  min-width: 34px;
-  text-align: right;
-  font-size: 12px;
-  color: #9aa8bd;
-  font-variant-numeric: tabular-nums;
-}
-
-.mp-start-actions {
-  display: none;
-  gap: 10px;
-  margin-top: 6px;
-  align-items: center;
-}
-.mp-start-actions.show { display: flex; }
-
-.mp-start-btn { font-size: clamp(14px, 1.8vmin, 19px); padding: 9px 20px; }
-
-.mp-spectate-btn { font-size: clamp(12px, 1.4vmin, 15px); padding: 8px 16px; }
-
-.mp-spectate-btn.primary {
-  background: linear-gradient(180deg, #3b82f6, #2563eb);
-  border-color: #60a5fa;
-}
-
-.mp-waiting-sub { max-width: 84vw; }
+  .mp-waiting-sub { max-width: 84vw; }
 }
 
 /* ---------- 网络诊断面板（?netdebug=1） ---------- */

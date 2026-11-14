@@ -199,6 +199,14 @@ async function main() {
   const posB = await b.wait('pos', (m) => m.p?.some((p) => p.id === seatA));
   check('位置中继到对端（带速度与着地）', posB.p[0].x === 500 && posB.p[0].y === 1000 && posB.p[0].g === true);
 
+  // 位置合并：两人同一拍上报 → 一条报文里带两个座位（8 人房下行报文数从 160/s 降到 30/s）
+  a.clear();
+  b.clear();
+  a.send({ t: 'pos', x: 600, y: 1000, vx: 0, vy: 0, g: true });
+  b.send({ t: 'pos', x: 700, y: 1000, vx: 0, vy: 0, g: true });
+  const merged = await a.wait('pos', (m) => (m.p?.length ?? 0) >= 2, 2000);
+  check('同一拍的位置被合并成一条报文', merged.p.length >= 2, JSON.stringify(merged.p));
+
   // ---- 拾取仲裁 ----
   const drop = startB1.drops.find((d) => d.kind === 'weapon');
   check('存在武器掉落物', !!drop);
@@ -241,6 +249,7 @@ async function main() {
   a.send({ t: 'dmg', target: seatB, src: seatA, amount: 30, kind: 'bullet', crit: false, attack: 1, ignoreInvuln: false });
   const hp = await a.wait('hp', (m) => m.id === seatB);
   check('伤害结算：100 → 70', hp.hp === 70, `hp=${hp.hp}`);
+  check('hp 带攻击批次 id（打击反馈去重用）', hp.attack === 1, `attack=${hp.attack}`);
   check('双方血量广播一致', (await b.wait('hp', (m) => m.id === seatB)).hp === 70);
 
   await sleep(200);

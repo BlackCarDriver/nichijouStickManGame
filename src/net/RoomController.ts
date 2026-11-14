@@ -101,6 +101,8 @@ export class RoomController {
       if (gate.phase === 'connecting' || gate.phase === 'loading') {
         this.overlay.showLoading(gate.label, gate.progress);
       } else if (gate.phase === 'ready') {
+        // 就绪时抢一次焦点：iframe 内按键才能被 window 的 keydown 收到
+        this.overlay.focusSelf();
         this.overlay.showStartActions(!this.coarsePointer);
       } else {
         this.overlay.beginHud();
@@ -162,7 +164,7 @@ export class RoomController {
     return token || null;
   }
 
-  /** 开始游戏：解除闸门 + 通知服务端入座（按 W 与点按钮共用） */
+  /** 开始游戏：解除闸门 + 通知服务端入座（仅键盘 W 触发，不允许鼠标点） */
   private startGame(): void {
     if (startGate.phase !== 'ready') return;
     startGate.startPlaying();
@@ -185,9 +187,6 @@ export class RoomController {
 
   private handleAction(action: OverlayAction): void {
     switch (action.type) {
-      case 'start':
-        this.startGame();
-        break;
       case 'spectate':
         // 观战：通知服务端不入座（不计死亡），后续开局也不再上场
         this.spectateChosen = true;

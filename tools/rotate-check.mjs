@@ -90,7 +90,7 @@ try {
     const canvas = document.querySelector('#game-container canvas');
     const c = canvas.getBoundingClientRect();
     const overlay = document.querySelector('.mp-overlay');
-    const btn = document.querySelector('.mp-spectate-btn') || document.querySelector('.mp-start-btn');
+    const btn = document.querySelector('.mp-spectate-btn') || document.querySelector('.mp-start-hint');
     const btnRect = btn ? btn.getBoundingClientRect() : null;
     return {
       viewport: [innerWidth, innerHeight],
@@ -98,6 +98,7 @@ try {
       stageStyle: [stage.style.width, stage.style.height, stage.style.transform],
       stageRect: [Math.round(st.width), Math.round(st.height)],
       canvasRect: [Math.round(c.width), Math.round(c.height)],
+      canvasBox: [Math.round(c.x), Math.round(c.y), Math.round(c.width), Math.round(c.height)],
       overlayInStage: !!overlay && !!overlay.closest('#game-stage'),
       startBtn: btn ? [btn.offsetWidth, btn.offsetHeight] : null,
       gate: window.__startGate.phase,
@@ -108,6 +109,14 @@ try {
   const [cw, ch] = info.canvasRect;
   const [sw, sh] = info.stageRect;
   const rotated = info.rotated;
+  // 画布必须完整落在视口内且居中（margin 用旋转后的外接矩形算错过 → 只露出一角）
+  const [bx, by, bw, bh] = info.canvasBox;
+  if (bx < -1 || by < -1 || bx + bw > vw + 1 || by + bh > vh + 1) {
+    errors.push(`canvas 超出可视区: box=${info.canvasBox} viewport=${info.viewport}`);
+  }
+  if (Math.abs(bx + bw / 2 - vw / 2) > 2 || Math.abs(by + bh / 2 - vh / 2) > 2) {
+    errors.push(`canvas 未居中: box=${info.canvasBox} viewport=${info.viewport}`);
+  }
   if (rotated) {
     if (sh !== vh || sw !== vw) errors.push(`stage 未铺满视口: stage=${sw}x${sh} viewport=${vw}x${vh}`);
     // 16:9 在竖屏里旋转后：宽度应≈视口宽，高度≈宽/9*16（受高度上限约束）
@@ -119,20 +128,33 @@ try {
     if (sw !== vw || sh !== vh) errors.push(`非旋转态 stage 未铺满: ${sw}x${sh} vs ${vw}x${vh}`);
     if (!cw || !ch) errors.push('canvas 尺寸为 0');
   }
-  // 运行中改成横屏：应当自动取消旋转并重新铺满
+  // 运行中改成横屏：应当自动取消旋转并重新铺满（?rotate=1 强制旋转时不适用）
+  if (FORCE === '1') {
+    if (cdp.exceptions.length > 0) errors.push(`未捕获异常: ${cdp.exceptions.slice(0, 2).join(' | ')}`);
+    console.log(JSON.stringify(info, null, 1));
+    console.log(errors.length ? `\n❌ 旋转适配失败：\n   - ${errors.join('\n   - ')}` : '\n✅ 旋转适配检查通过（强制旋转：竖屏铺满）');
+    process.exitCode = errors.length ? 1 : 0;
+    throw { needCleanup: true };
+  }
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: H, height: W, deviceScaleFactor: 2, mobile: true });
   await sleep(700);
   const after = await cdp.eval(`(() => {
     const stage = window.__stage;
     const st = stage.getBoundingClientRect();
     const c = document.querySelector('#game-container canvas').getBoundingClientRect();
-    return { viewport: [innerWidth, innerHeight], rotated: stage.style.transform.includes('rotate'), stageRect: [Math.round(st.width), Math.round(st.height)], canvasRect: [Math.round(c.width), Math.round(c.height)] };
+    return { viewport: [innerWidth, innerHeight], rotated: stage.style.transform.includes('rotate'), stageRect: [Math.round(st.width), Math.round(st.height)], canvasRect: [Math.round(c.width), Math.round(c.height)], canvasBox: [Math.round(c.x), Math.round(c.y), Math.round(c.width), Math.round(c.height)] };
   })()`);
   if (after.rotated) errors.push(`改横屏后仍在旋转: ${JSON.stringify(after)}`);
   if (Math.abs(after.stageRect[0] - after.viewport[0]) > 2 || Math.abs(after.stageRect[1] - after.viewport[1]) > 2) {
     errors.push(`改横屏后 stage 未铺满: ${JSON.stringify(after)}`);
   }
   if (after.canvasRect[0] < 100 || after.canvasRect[1] < 60) errors.push(`改横屏后 canvas 尺寸异常: ${JSON.stringify(after)}`);
+  {
+    const [ax, ay, aw, ah] = after.canvasBox;
+    if (ax < -1 || ay < -1 || ax + aw > after.viewport[0] + 1 || ay + ah > after.viewport[1] + 1) {
+      errors.push(`改横屏后 canvas 超出可视区: ${JSON.stringify(after.canvasBox)} viewport=${after.viewport}`);
+    }
+  }
 
   if (cdp.exceptions.length > 0) errors.push(`未捕获异常: ${cdp.exceptions.slice(0, 2).join(' | ')}`);
   console.log(JSON.stringify({ ...info, after }, null, 1));
@@ -143,6 +165,8 @@ try {
   } else {
     console.log('\n✅ 旋转适配检查通过（竖屏铺满 + 横屏自动恢复）');
   }
+} catch (e) {
+  if (!(e && e.needCleanup)) throw e;
 } finally {
   try { proc.kill('SIGKILL'); } catch {}
   try { execSync(`pkill -9 -f "user-data-dir=${profile}"`, { stdio: 'ignore' }); } catch {}

@@ -16,6 +16,20 @@
       width: 100%;
       height: 100%;
     }
+    /*
+     * 旋转态：stage 有 CSS transform 后，canvas.getBoundingClientRect() 返回的是
+     * "旋转后的外接矩形"（宽高对调），Phaser 的 autoCenter 用它算 margin，
+     * 会把画布推错位置（画面只露出一角）。这里改为由 flex 居中，并强制清零 margin。
+     */
+    #game-stage.rotated #game-container {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    #game-stage.rotated #game-container canvas {
+      margin: 0 !important;
+    }
   </style>
 </head>
 <body>

@@ -6,7 +6,7 @@
  */
 
 /** 游戏同步协议版本（与 server/main.go 的 gameProtocolVersion 一致；前后端必须同版本上线） */
-export const GAME_PROTOCOL_VERSION = 3;
+export const GAME_PROTOCOL_VERSION = 4;
 
 /** 输入边沿掩码（与 server/protocol.go 一致） */
 export const EDGE = {
@@ -149,9 +149,12 @@ export interface PosBatchMsg {
 }
 
 /**
- * 位置消息的语义（v3）：**每个客户端权威自己的位置**。
- * 服务端只做 20Hz 中继，其它端按 100ms 缓冲插值；房主把收到的位置
- * 套到自己那份副本上，用于命中/拾取判定。
+ * 位置消息的语义（v3+）：**每个客户端权威自己的位置**。
+ *
+ * - 客户端每 50ms（20Hz）上报一条 `pos`；
+ * - 服务端**不再逐条转发**，而是把每一拍（33ms 的 sim tick）里所有玩家的最新位置
+ *   合并成一条 `pos` 报文广播（`p[]` 里一次带多个座位）；
+ * - 接收端按"自适应插值延迟"（60~140ms）回放，抖动/丢帧都不会瞬移。
  */
 
 // ---------- 世界状态同步（房主 → 服务端 → 其它客户端）----------
@@ -228,6 +231,8 @@ export interface HpMsg {
   src: number;
   /** 造成这次伤害的武器 id（死亡回放用） */
   weapon?: string;
+  /** 攻击批次 id：客户端用它给"打击反馈"去重（提前播过就不再重复播） */
+  attack?: number;
   kills: Record<string, number>;
 }
 

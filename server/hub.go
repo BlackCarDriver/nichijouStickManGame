@@ -169,6 +169,8 @@ type match struct {
 	spawnCursor   int
 	// 最近一次收到房主快照的时间（看门狗用：房主卡死/失联时自动顺延）
 	lastSnapAt time.Time
+	// 本拍内各座位的最新位置（合并成一条报文再广播，省掉每帧一条的开销）
+	posPending map[int]posSnapshot
 }
 
 // Hub 管理房间、座位、对局与所有实时同步。
@@ -1010,7 +1012,7 @@ func (h *Hub) applyItemLocked(p *playerState, def itemDef) {
 			p.Shield = maxShield
 		}
 	}
-	h.broadcastHPFullLocked(p, 0, "", false, nil, nil, -1)
+	h.broadcastHPFullLocked(p, 0, "", false, nil, nil, -1, 0)
 }
 
 // ---------- 伤害仲裁 ----------
@@ -1094,7 +1096,7 @@ func (h *Hub) handleDamage(c *client, msg damageMsg) {
 		}
 	}
 	// 展示用的伤害值是"本次攻击的伤害"，不被剩余血量截断
-	h.broadcastHPFullLocked(target, int(amount), msg.Kind, msg.Crit, msg.Point, msg.KB, src)
+	h.broadcastHPFullLocked(target, int(amount), msg.Kind, msg.Crit, msg.Point, msg.KB, src, msg.Attack)
 	if killed {
 		if h.bridge != nil {
 			if killer := m.Players[src]; killer != nil && src != msg.Target {
@@ -1121,14 +1123,14 @@ func (h *Hub) handleShield(c *client, amount float64) {
 		return
 	}
 	p.Shield = min(maxShield, p.Shield+int(amount))
-	h.broadcastHPFullLocked(p, 0, "shield", false, nil, nil, -1)
+	h.broadcastHPFullLocked(p, 0, "shield", false, nil, nil, -1, 0)
 }
 
-func (h *Hub) broadcastHPFullLocked(p *playerState, amount int, kind string, crit bool, point, kb *vec2, src int) {
+func (h *Hub) broadcastHPFullLocked(p *playerState, amount int, kind string, crit bool, point, kb *vec2, src int, attack int64) {
 	h.broadcastLocked(&hpMsg{
 		T: "hp", ID: p.Seat, HP: p.HP, Shield: p.Shield, Dead: p.Dead,
 		Amount: float64(amount), Kind: kind, Crit: crit, Point: point, KB: kb,
-		Src: src, Weapon: p.lastWeaponID, Kills: h.killsMapLocked(),
+		Src: src, Weapon: p.lastWeaponID, Attack: attack, Kills: h.killsMapLocked(),
 	})
 }
 
@@ -1207,12 +1209,33 @@ func (h *Hub) handlePos(c *client, msg posMsg) {
 		return
 	}
 	// 位置权威在**玩家自己的客户端**（延迟最低、不会有橡皮筋）。
-	// 服务端只做中继：其它端拿去插值；房主拿去套到自己那份副本上做命中/拾取判定。
-	out := &posBatchMsg{T: "pos", P: []posSnapshot{{ID: c.seat, X: msg.X, Y: msg.Y, VX: msg.VX, VY: msg.VY, G: msg.G}}}
-	for _, other := range h.clients {
-		if other != c {
-			other.pushDroppable(out)
-		}
+	// 服务端只做中继，但不再"收到一条转一条"：这里只记录最新值，
+	// 由 flushPosLocked 每拍合并成一条报文广播（8 人房下行报文数从 160/s 降到 30/s）。
+	if m.posPending == nil {
+		m.posPending = map[int]posSnapshot{}
+	}
+	m.posPending[c.seat] = posSnapshot{ID: c.seat, X: msg.X, Y: msg.Y, VX: msg.VX, VY: msg.VY, G: msg.G}
+}
+
+// flushPosLocked 把本拍内所有玩家的最新位置合并成一条 pos 报文广播出去。
+func (h *Hub) flushPosLocked() {
+	m := h.m
+	if m == nil || len(m.posPending) == 0 {
+		return
+	}
+	list := make([]posSnapshot, 0, len(m.posPending))
+	for _, s := range m.posPending {
+		list = append(list, s)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
+	m.posPending = map[int]posSnapshot{}
+	if h.m.Over {
+		return
+	}
+	out := &posBatchMsg{T: "pos", P: list}
+	for _, c := range h.clients {
+		// 客户端会忽略自己 id 的那条，所以统一广播即可
+		c.pushDroppable(out)
 	}
 }
 
@@ -1384,6 +1407,7 @@ func (h *Hub) tickLocked(dt time.Duration) {
 
 	h.hostWatchdogLocked(m, now)
 	h.resyncLaggingLocked()
+	h.flushPosLocked()
 
 	if m.Over {
 		// 结算展示中：到点换图重开

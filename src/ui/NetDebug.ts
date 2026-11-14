@@ -27,8 +27,9 @@ export class NetDebug {
       `role      ${String(data.role)}  (host=${String(data.hostSeat)})`,
       `seat      ${String(data.netId)}`,
       `ping      ${String(data.rtt)}ms  (单程≈${String(data.oneWay)}ms)`,
+      `插值延迟  ${String(data.interpDelay)}ms  (自适应 60~140)`,
       `pos       ${String(data.posHz)}Hz   snap ${String(data.snapHz)}Hz  丢帧 ${String(data.snapGaps)}`,
-      `远端位移  ${String(data.remoteMaxStep)}px/帧`,
+      `远端位移  ${String(data.remoteMaxStep)}px/帧   即时反馈 ${String(data.hitPreviews)} 次`,
       `掉落物    ${String(data.drops)}   玩家 ${String(data.players)}   fps ${String(data.fps)}`,
     ];
     this.pre.textContent = lines.join('\n');

@@ -12,6 +12,7 @@ import type { MapData } from '../map/MapFormat';
 import type { ActionClip } from '../editor/ActionFormat';
 import { buildMap, syncCompoundVisuals } from '../map/MapLoader';
 import type { MapObjectRuntime } from '../map/MapLoader';
+import type { DamageInfo } from '../combat/DamageInfo';
 import { MATERIALS } from '../config/materials';
 import { preloadMaterialTextures } from '../map/TextureLoader';
 import { WorldRegistry } from '../world/WorldRegistry';
@@ -112,6 +113,10 @@ export class GameScene extends Phaser.Scene {
   private deathNotice!: DeathNotice;
   /** 联机：死亡后观战跟随的目标（默认跟随击败自己的人） */
   private spectateTarget: Player | null = null;
+  /** 联机：本地已经提前播过伤害数字的攻击批次（hp 到达时不再重复播） */
+  private previewedHits = new Set<number>();
+  /** 预览批次只保留最近 N 个，避免无限增长 */
+  private previewedHitOrder: number[] = [];
   private audio!: AudioSystem;
   /** 顿帧期间物理是否已被暂停（避免重复 pause/resume） */
   private physicsFrozen = false;
@@ -365,6 +370,7 @@ export class GameScene extends Phaser.Scene {
         onRosterChanged: () => this.onRosterChanged(),
         spawnPlayer: (entry, stat) => this.spawnNetPlayer(entry, stat),
         onChat: (nick, text) => this.showChatBubble(nick, text),
+        onHitPreview: (target, info) => this.showHitPreview(target, info),
       });
       // 昵称先就位；头像贴图异步加载完后再补
       for (const entry of this.onlineData.players) {
@@ -599,18 +605,22 @@ export class GameScene extends Phaser.Scene {
 
     // 受伤 → 顿帧（按伤害量缩放）+ 命中音效
     const onPlayerDamaged = (
-      _player: Player,
+      player: Player,
       amount: number,
       kind: string,
       critical: boolean,
       incoming: number,
+      attackId?: number,
     ): void => {
+      // 联机：这次命中本地已经提前播过数字/音效 → 只补血量，不再重复播
+      const seen = attackId !== undefined && this.previewedHits.has(attackId);
+      if (seen) return;
       if (kind !== 'env') {
         this.hitStop.trigger(HitStop.durationForDamage(amount));
       }
       this.audio.play('hit');
       // 伤害气泡用"本次攻击的伤害值"（incoming），而不是被剩余血量截断后的 amount
-      this.damageNumbers.show(_player, incoming, { crit: critical });
+      this.damageNumbers.show(player, incoming, { crit: critical });
     };
     // 死亡 → 音效 + 击杀计数（记录凶手）+ 死亡回放（被谁/用什么击败 + 观战镜头）
     const onPlayerDied = (victim: Player, killerId?: number): void => {
@@ -793,6 +803,38 @@ export class GameScene extends Phaser.Scene {
     this.damageNumbers.update(delta);
     this.hud.update();
     this.deathNotice.update();
+  }
+
+  /**
+   * 联机：本地看到命中时的即时打击反馈（不等服务端 `hp`）。
+   *
+   * - 攻击方：立刻出伤害数字 + 让对手进受击硬直 + 命中音效 → "我打中了"与画面同帧；
+   * - 受击方：立刻进受击姿态（视觉）+ 屏幕震动 + 音效 → 不会"半天没反应后突然一顿"；
+   * - 血量仍然只由服务端 `hp` 改；数值到达后按攻击批次 id 去重，不重复播。
+   */
+  private showHitPreview(target: Player, info: DamageInfo): void {
+    const attackId = info.attackId;
+    if (attackId !== undefined) this.markPreviewed(attackId);
+
+    // 受击硬直/击退表现（不改血量）：攻击方与受击方都立刻播，反馈与命中同帧
+    target.previewHit(info.knockback, attackId);
+
+    const isVictim = this.online !== null && target === this.online.localPlayer;
+    // 伤害数字立刻出现（第三方的互殴不做预览，见 OnlineMatch 的筛选）
+    this.damageNumbers.show(target, info.amount, { crit: info.critical === true });
+    this.audio.play('hit');
+    if (isVictim) this.gameFeel.addTrauma(0.12);
+  }
+
+  /** 记录"这次命中的数字已经播过"（有界，避免长对局无限增长） */
+  private markPreviewed(attackId: number): void {
+    if (this.previewedHits.has(attackId)) return;
+    this.previewedHits.add(attackId);
+    this.previewedHitOrder.push(attackId);
+    while (this.previewedHitOrder.length > 256) {
+      const old = this.previewedHitOrder.shift();
+      if (old !== undefined) this.previewedHits.delete(old);
+    }
   }
 
   /**

@@ -237,6 +237,8 @@ export class Player extends Entity {
   private lastHitAttackId: number | undefined;
   /** 最近一次伤害的来源实体 id（击杀归属） */
   private lastDamageSourceId: number | undefined;
+  /** 联机：本地已提前播过受击表现（含击退）的攻击批次，hp 到达时不再重复播 */
+  private previewedAttackId: number | undefined;
   /** 最近一次伤害的武器 id 与类型（死亡回放用） */
   private lastHitWeaponId: string | undefined;
   private lastHitKind: string | undefined;
@@ -558,7 +560,7 @@ export class Player extends Entity {
       this.scene.events.emit('player-shielded', this, absorbed, n.kind);
     }
     if (hpApplied > 0) {
-      this.scene.events.emit('player-damaged', this, hpApplied, n.kind, n.crit, n.amount);
+      this.scene.events.emit('player-damaged', this, hpApplied, n.kind, n.crit, n.amount, n.attackId);
     }
 
     if (n.dead) {
@@ -566,9 +568,31 @@ export class Player extends Entity {
       return;
     }
 
-    const kb = n.knockback ?? { x: 0, y: 0 };
-    this.hit(kb.x, kb.y, 190);
+    // 已经本地提前播过受击姿态/击退 → 这里只补数值，避免"晚到的二次打击感"
+    if (!this.hasPreviewedAttack(n.attackId)) {
+      const kb = n.knockback ?? { x: 0, y: 0 };
+      this.hit(kb.x, kb.y, 190);
+    }
     this.health.setInvulnerable(Player.HIT_INVULN_MS);
+  }
+
+  /**
+   * 联机：提前播"被命中"的表现（受击姿态 + 击退），不改血量。
+   *
+   * 触发时机是**本地自己看到那一发打中了**（自己的子弹命中对手，或对手的子弹命中自己），
+   * 因此反馈和画面是同一帧的，不用等 `hp` 一个来回。
+   */
+  previewHit(knockback: { x: number; y: number } | undefined, attackId?: number): void {
+    if (this.health.isDead) return;
+    if (attackId !== undefined && attackId === this.previewedAttackId) return;
+    this.previewedAttackId = attackId;
+    const kb = knockback ?? { x: 0, y: 0 };
+    this.hit(kb.x, kb.y, 150);
+  }
+
+  /** 该攻击批次是否已经提前播过受击表现（`applyNetDamage` 用它去重） */
+  hasPreviewedAttack(attackId?: number): boolean {
+    return attackId !== undefined && attackId === this.previewedAttackId;
   }
 
   /** 联机：首次进入/重连时用服务端快照初始化（不触发伤害表现） */
@@ -1500,4 +1524,6 @@ export interface NetDamageEvent {
   sourceId?: number;
   /** 造成这次伤害的武器 id（死亡回放用） */
   weaponId?: string;
+  /** 攻击批次 id（打击反馈去重用） */
+  attackId?: number;
 }

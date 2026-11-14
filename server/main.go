@@ -16,8 +16,8 @@ import (
 )
 
 // gameProtocolVersion 游戏同步协议版本（前端 src/net/protocol.ts 与 server/protocol.go 同一版）。
-// 发版检查：curl /healthz 看到 gameProtocol=3 才说明服务端已更新。
-const gameProtocolVersion = 3
+// 发版检查：curl /healthz 看到 gameProtocol=4 才说明服务端已更新。
+const gameProtocolVersion = 4
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  8192,

@@ -15,6 +15,12 @@
  * - Phaser 的指针坐标换算不支持"被 CSS 旋转过的画布"，所以旋转态下
  *   鼠标/触摸瞄准不可用。当前移动端只能观战，不影响（Web 端不旋转，瞄准正常）。
  * - 想反过来转（顺时针/逆时针），改 ROTATE_CLOCKWISE 即可。
+ *
+ * 坑 2（画布偏移）：旋转后 `canvas.getBoundingClientRect()` 返回的是**旋转后的外接矩形**
+ * （宽高对调），而 Phaser 的 autoCenter 正是用它算 margin，会把画布推出可视区
+ * （表现：手机上只看到游戏画面的一角）。所以旋转态不用 Phaser 的 margin 居中，
+ * 改由 CSS flex 居中 + 强制 margin:0（规则在 index.html 的 `#game-stage.rotated`），
+ * 同时给 stage 加 `rotated` class 供样式挂钩。
  */
 
 /** true = 顺时针 90°（手机左侧朝上）；false = 逆时针 90°（手机右侧朝上） */
@@ -108,6 +114,7 @@ export function createStage(parent: HTMLElement): HTMLElement {
 
     if (!want) {
       rotatedNow = false;
+      stage.classList.remove('rotated');
       stage.style.position = 'fixed';
       stage.style.inset = '0';
       stage.style.left = '0';
@@ -121,6 +128,7 @@ export function createStage(parent: HTMLElement): HTMLElement {
     }
 
     rotatedNow = true;
+    stage.classList.add('rotated');
     // 逻辑尺寸 = 把视口宽高对调。
     //
     // 必须用 position: fixed：绝对定位（in-flow）的 844px 宽元素会把文档撑宽，

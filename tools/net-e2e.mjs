@@ -184,7 +184,7 @@ async function main() {
   await a.cdp.waitFor('window.__room.net.isOpen === true');
   check('客户端已连上游戏服务', true);
 
-  // ---- 加载进度条 → "点击 W 开始游戏" → 按 W 进入 ----
+  // ---- 加载进度条 → "按 W 开始游戏"（仅键盘，不可点） → 按 W 进入 ----
   await a.cdp.waitFor(`window.__game.scene.isActive('GameScene')`, 20000);
   const loadingUi = await a.cdp.eval(`(() => {
     const bar = document.querySelector('.mp-progress');
@@ -206,16 +206,23 @@ async function main() {
     JSON.stringify(loadingUi),
   );
   await a.cdp.waitFor(`window.__startGate.phase === 'ready'`, 25000);
-  const readyUi = await a.cdp.eval(`(() => ({
-    startBtn: document.querySelector('.mp-start-btn')?.textContent ?? '',
-    startVisible: getComputedStyle(document.querySelector('.mp-start-actions')).display !== 'none',
-    spectate: document.querySelector('.mp-spectate-btn')?.textContent ?? '',
-    blocked: window.__startGate.blocked,
-    barHidden: getComputedStyle(document.querySelector('.mp-progress')).display === 'none',
-  }))()`);
+  const readyUi = await a.cdp.eval(`(() => {
+    const hint = document.querySelector('.mp-start-hint');
+    return {
+      hint: hint?.textContent ?? '',
+      hintIsButton: hint ? hint.tagName === 'BUTTON' : null,
+      hintClickable: hint ? getComputedStyle(hint).pointerEvents !== 'none' : null,
+      oldButtonGone: !document.querySelector('.mp-start-btn'),
+      startVisible: getComputedStyle(document.querySelector('.mp-start-actions')).display !== 'none',
+      spectate: document.querySelector('.mp-spectate-btn')?.textContent ?? '',
+      blocked: window.__startGate.blocked,
+      barHidden: getComputedStyle(document.querySelector('.mp-progress')).display === 'none',
+    };
+  })()`);
   check(
-    '就绪后弹出"点击 W 开始游戏"与观战按钮',
-    readyUi.startVisible && /W/.test(readyUi.startBtn) && /观战/.test(readyUi.spectate) && readyUi.blocked && readyUi.barHidden,
+    '就绪后弹出"按 W 开始游戏"提示（纯提示、鼠标点不动）与观战按钮',
+    readyUi.startVisible && /W/.test(readyUi.hint) && readyUi.hintIsButton === false && readyUi.hintClickable === false &&
+      readyUi.oldButtonGone && /观战/.test(readyUi.spectate) && readyUi.blocked && readyUi.barHidden,
     JSON.stringify(readyUi),
   );
   // 开始前：还没有自己的火柴人（不在对局里），并且输入被冻结
@@ -267,7 +274,10 @@ async function main() {
   launched.push(b);
   await b.cdp.waitFor(`window.__game.scene.isActive('GameScene')`, 25000);
   await b.cdp.waitFor(`window.__startGate.phase === 'ready'`, 25000);
-  await b.cdp.eval(`document.querySelector('.mp-start-btn').click()`);
+  await b.cdp.eval(`(() => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w', code: 'KeyW', keyCode: 87, which: 87, bubbles: true }));
+    return true;
+  })()`);
   await b.cdp.waitFor(
     `(() => {
       const s = window.__game.scene.getScene('GameScene');
@@ -511,6 +521,50 @@ async function main() {
     hpA.hp === hpB.hp && hpA.hp < 100 && hpA.matchId === bMove.matchId,
     `A端看到B=${JSON.stringify(hpA)} B端自己=${JSON.stringify(hpB)}（开局=${bMove.matchId}）`,
   );
+
+  // ---- 打击反馈：本地命中立刻出数字/硬直，不等 hp；hp 到达后不重复 ----
+  const preview1 = await b.cdp.eval(`(() => {
+    const s = window.__game.scene.getScene('GameScene');
+    const st = s.online.stats;
+    return { previews: st.hitPreviews, interpDelay: st.interpDelay };
+  })()`);
+  const hitFeedback = await b.cdp.eval(`(async () => {
+    const s = window.__game.scene.getScene('GameScene');
+    const me = s.online.localPlayer;
+    const other = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
+    const target = s.online.playerOf(other);
+    const before = s.online.stats.hitPreviews;
+    const hpBefore = target.health.hp;
+    // 模拟"我的子弹命中对手"（DamageSystem 会先播即时反馈，再上报）
+    s.damageSystem.damagePlayer(target, {
+      amount: 20, kind: 'bullet', sourceId: me.id, weaponId: 'pistol',
+      point: { x: target.container.x, y: target.container.y },
+      normal: { x: -1, y: 0 }, knockback: { x: -2, y: 0 }, attackId: 8801,
+    });
+    // 同步检查：此刻（同一帧内）应当已经播过反馈，而血量还没变
+    return {
+      previewsDelta: s.online.stats.hitPreviews - before,
+      hpRightNow: target.health.hp,
+      hpBefore,
+      previewed: s.previewedHits.has(8801),
+    };
+  })()`);
+  check(
+    '攻击方在同一帧就拿到打击反馈（不等 hp）',
+    hitFeedback.previewsDelta >= 1 && hitFeedback.previewed === true,
+    JSON.stringify(hitFeedback),
+  );
+  await sleep(900);
+  const reconciled = await a.cdp.eval(`(() => {
+    const s = window.__game.scene.getScene('GameScene');
+    const other = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
+    return { hp: s.online.playerOf(other).health.hp };
+  })()`);
+  check('随后 hp 把数值补齐（只补数值，不重复播数字）', reconciled.hp < hitFeedback.hpBefore, JSON.stringify(reconciled));
+
+  const preview2 = await b.cdp.eval(`window.__game.scene.getScene('GameScene').online.stats.hitPreviews`);
+  check('即时反馈计数在增长', preview2 > preview1.previews, JSON.stringify({ before: preview1.previews, after: preview2 }));
+  check('自适应插值延迟落在 60~140ms', preview1.interpDelay >= 60 && preview1.interpDelay <= 140, `interpDelay=${preview1.interpDelay}`);
 
   // ---- 拾取仲裁（重试：偶尔上一帧的位置还没进服务端） ----
   let pickResult = { ok: false };

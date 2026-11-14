@@ -13,6 +13,14 @@ export interface DamageNetSink {
   playerDamage(target: Player, info: DamageInfo): void;
   /** 地图物体被摧毁 → 广播给所有人（服务端按 id 去重） */
   objectDestroyed(runtimeId: string): void;
+  /**
+   * 联机：本地已经看到"命中了/被打中了"，先把打击反馈播出来（不改血量）。
+   *
+   * 为什么要它：血量必须等权威 `hp` 回来，但"手感"不能等。
+   * 攻击方本地立刻看到伤害数字/受击硬直，受击方本地立刻进入受击姿态，
+   * 等 `hp` 到达时只补数值（按攻击批次 id 去重，不会重复播）。
+   */
+  hitPreview?(target: Player, info: DamageInfo): void;
 }
 
 /**
@@ -63,6 +71,8 @@ export class DamageSystem {
       if (effective.point) {
         this.fx.hitSpark(effective.point, effective.normal, crit ? 0xffd166 : 0xff6b6b);
       }
+      // 先播本地打击反馈（伤害数字/受击硬直/音效），血条等权威 hp
+      this.netSink.hitPreview?.(player, effective);
       this.netSink.playerDamage(player, effective);
       return { applied: 0, killed: false };
     }

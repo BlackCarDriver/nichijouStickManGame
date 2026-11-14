@@ -165,7 +165,10 @@ async function main() {
   const enter = async (cdp) => {
     await cdp.waitFor(`window.__game.scene.isActive('GameScene')`, 60000);
     await cdp.waitFor(`window.__startGate.phase === 'ready'`, 60000);
-    await cdp.eval(`(() => { document.querySelector('.mp-start-btn')?.click(); return true; })()`);
+    await cdp.eval(`(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w', code: 'KeyW', keyCode: 87, which: 87, bubbles: true }));
+      return true;
+    })()`);
     await cdp.waitFor(
       `(() => { const s = window.__game.scene.getScene('GameScene'); return window.__startGate.phase === 'playing' && s?.online?.localNetId >= 0; })()`,
       30000,
@@ -221,17 +224,25 @@ async function main() {
 
   // ---- 3. 摔落伤害（自己检测自己）----
   const fallBefore = await b.eval(`window.__game.scene.getScene('GameScene').online.localPlayer.health.hp`);
+  // 从"出生点正上方"落下：出生点一定站在实地上，所以一定会落回实地（与地图几何无关，不会偶然卡在平台/墙里）
   await b.eval(`(() => {
     const s = window.__game.scene.getScene('GameScene');
     const me = s.online.localPlayer;
-    // 从"当前脚下的正上方"落下：一定能落回同一块地面（与地图几何无关）
-    me.container.setPosition(me.container.x, me.container.y - 450);
+    const sp = s.mapData.spawnPoints[0];
+    me.container.setPosition(sp.x, sp.y - 520);
     me.container.setVelocity(0, 0);
     return true;
   })()`);
-  await sleep(3500);
+  await sleep(4000);
   const fallAfter = await b.eval(`(() => { const s = window.__game.scene.getScene('GameScene'); return { hp: s.online.localPlayer.health.hp, y: Math.round(s.online.localPlayer.container.y) }; })()`);
   check('高空摔落会掉血（自己上报、服务端结算）', fallAfter.hp < fallBefore, JSON.stringify({ fallBefore, fallAfter }));
+
+  // 确定性校验"环境伤害只能自己伤自己"这条链路（不依赖地图几何）
+  const envBefore = await b.eval(`window.__game.scene.getScene('GameScene').online.localPlayer.health.hp`);
+  await b.eval(`(() => { window.__game.scene.getScene('GameScene').online.reportEnvDamage(15); return true; })()`);
+  await sleep(1200);
+  const envAfter = await b.eval(`window.__game.scene.getScene('GameScene').online.localPlayer.health.hp`);
+  check('环境伤害上报链路可用（自己报自己 → 服务端结算）', envAfter < envBefore, JSON.stringify({ envBefore, envAfter }));
 
   // ---- 4. 打人掉血（谁打的上报谁）----
   const hitBefore = await a.eval(`window.__game.scene.getScene('GameScene').online.localPlayer.health.hp`);
@@ -259,6 +270,28 @@ async function main() {
     return { ok: true, weapon: me.heldWeapon?.id ?? '' };
   })()`);
   check('捡枪成功（行动者请求 + 服务端授予）', !!pick.ok && !!pick.weapon, JSON.stringify(pick));
+
+  // ---- 5.5 自适应插值 + 即时打击反馈（真实时延下）----
+  const adapt = await b.eval(`window.__netDiag ? window.__netDiag() : null`);
+  check(
+    '真实时延下插值延迟自适应上调（60~140ms）',
+    !!adapt && adapt.interpDelay >= 60 && adapt.interpDelay <= 140,
+    JSON.stringify({ interpDelay: adapt?.interpDelay, rtt: adapt?.rtt }),
+  );
+  const preview = await b.eval(`(async () => {
+    const s = window.__game.scene.getScene('GameScene');
+    const me = s.online.localPlayer;
+    const other = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
+    const target = s.online.playerOf(other);
+    const before = s.online.stats.hitPreviews;
+    s.damageSystem.damagePlayer(target, {
+      amount: 18, kind: 'bullet', sourceId: me.id, weaponId: 'pistol',
+      point: { x: target.container.x, y: target.container.y }, normal: { x: -1, y: 0 },
+      knockback: { x: -2, y: 0 }, attackId: 9901,
+    });
+    return { delta: s.online.stats.hitPreviews - before, previewed: s.previewedHits.has(9901) };
+  })()`);
+  check('高时延下打击反馈仍然同帧（不额外等 RTT）', preview.delta >= 1 && preview.previewed === true, JSON.stringify(preview));
 
   // ---- 6. 角色自愈：模拟"房主漏收了 host 通知" ----
   // 服务端在 30Hz 的 in 广播里持续下发权威座位号，所以即使漏事件也会在 1 帧内恢复。
@@ -292,7 +325,9 @@ async function main() {
   );
   check('位置/快照都在持续收包', diagEnd.posHz > 5 && diagEnd.snapHz > 5, JSON.stringify({ posHz: diagEnd?.posHz, snapHz: diagEnd?.snapHz }));
   const panel = await b.eval(`document.querySelector('.mp-netdebug')?.textContent ?? ''`);
-  check('网络诊断面板（?netdebug=1）有内容', /role/.test(panel) && /ping/.test(panel), panel.slice(0, 80));
+  check('网络诊断面板（?netdebug=1）有内容', /role/.test(panel) && /插值延迟/.test(panel), panel.slice(0, 120));
+
+  console.log(`  ℹ️ 诊断: ${JSON.stringify({ oneWay: ONE_WAY, rtt: diagEnd?.rtt, interpDelay: diagEnd?.interpDelay, posHz: diagEnd?.posHz, snapHz: diagEnd?.snapHz, hitPreviews: diagEnd?.hitPreviews, streams: diagEnd?.streams })}`);
 
   const exceptions = [...a.exceptions, ...b.exceptions];
   check('全程无未捕获异常', exceptions.length === 0, exceptions.slice(0, 2).join(' | '));

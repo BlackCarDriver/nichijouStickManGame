@@ -7,7 +7,6 @@ import type { ShellRoomUser } from '../net/ShellBridge';
 export type OverlayAction =
   | { type: 'chat'; text: string }
   | { type: 'fullscreen'; v: boolean }
-  | { type: 'start' }
   | { type: 'spectate' };
 
 const STATUS_TEXT: Record<NetStatus, string> = {
@@ -45,7 +44,7 @@ export class Overlay {
   private readonly progressBar: HTMLDivElement;
   private readonly progressText: HTMLSpanElement;
   private readonly startActions: HTMLDivElement;
-  private readonly startBtn: HTMLButtonElement;
+  private readonly startHint: HTMLDivElement;
   private readonly spectateBtn: HTMLButtonElement;
   private readonly modal: HTMLDivElement;
   private readonly modalBody: HTMLDivElement;
@@ -118,15 +117,15 @@ export class Overlay {
     // 开始 / 观战
     this.startActions = document.createElement('div');
     this.startActions.className = 'mp-start-actions';
-    this.startBtn = document.createElement('button');
-    this.startBtn.className = 'mp-btn primary mp-start-btn';
-    this.startBtn.textContent = '点击 W 开始游戏';
-    this.startBtn.addEventListener('click', () => this.onAction?.({ type: 'start' }));
+    // "按 W 开始"只提示、不响应鼠标：用 div 而非 button，避免被点、被 Tab 聚焦
+    this.startHint = document.createElement('div');
+    this.startHint.className = 'mp-start-hint';
+    this.startHint.textContent = '按 W 开始游戏';
     this.spectateBtn = document.createElement('button');
     this.spectateBtn.className = 'mp-btn mp-spectate-btn';
     this.spectateBtn.textContent = '观战';
     this.spectateBtn.addEventListener('click', () => this.onAction?.({ type: 'spectate' }));
-    this.startActions.append(this.startBtn, this.spectateBtn);
+    this.startActions.append(this.startHint, this.spectateBtn);
 
     this.waiting.append(this.waitingText, this.progressWrap, this.waitingSub, this.startActions);
 
@@ -189,7 +188,19 @@ export class Overlay {
 
     this.el.append(topbar, this.hudbar, this.waiting, this.modal, this.fatal);
     if (this.chatBox) this.el.append(this.chatBox);
+    // 开始只认键盘 W：游戏常嵌在聊天室 iframe 里，键盘事件只会发给“已获得焦点”的文档。
+    // 点一下覆盖层（不点按钮也行）就把焦点交给游戏，但不触发开始。
+    this.el.addEventListener('pointerdown', () => this.focusSelf());
     root.append(this.el);
+  }
+
+  /** 把键盘焦点交给游戏所在窗口（iframe 内必须，否则按 W 无人接收） */
+  focusSelf(): void {
+    try {
+      window.focus();
+    } catch {
+      /* 容器不允许时忽略：用户点一下画面也能拿到焦点 */
+    }
   }
 
   get isTyping(): boolean {
@@ -278,15 +289,15 @@ export class Overlay {
     this.progressText.textContent = `${pct}%`;
   }
 
-  /** 就绪：显示"点击 W 开始游戏"与"观战" */
+  /** 就绪：显示"按 W 开始游戏"提示与"观战"按钮 */
   showStartActions(canPlay: boolean): void {
     this.waiting.classList.add('show');
     this.el.classList.remove('in-match');
     this.waitingText.textContent = canPlay ? '一切就绪' : '本设备建议观战';
     this.progressWrap.classList.remove('show');
     this.startActions.classList.add('show');
-    this.startBtn.style.display = canPlay ? '' : 'none';
-    this.startBtn.textContent = '点击 W 开始游戏';
+    // 提示不可点：仅键盘 W 生效（触屏设备干脆不显示）
+    this.startHint.style.display = canPlay ? '' : 'none';
     this.spectateBtn.classList.toggle('primary', !canPlay);
     this.spectateBtn.textContent = canPlay ? '观战' : '点击观战';
     this.renderWaitingSub();

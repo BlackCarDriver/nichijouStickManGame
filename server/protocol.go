@@ -315,7 +315,9 @@ type hpMsg struct {
 	KB     *vec2   `json:"kb"`
 	Src    int     `json:"src"`
 	// Weapon 造成这次伤害的武器 id（死亡回放用）
-	Weapon string         `json:"weapon,omitempty"`
+	Weapon string `json:"weapon,omitempty"`
+	// Attack 攻击批次 id（客户端用它给"打击反馈"去重：提前播过就不再重复播）
+	Attack int64          `json:"attack,omitempty"`
 	Kills  map[string]int `json:"kills"`
 }
 

@@ -41,6 +41,8 @@ export interface OnlineMatchDeps {
   spawnPlayer?: (entry: MatchPlayer, stat: PlayerStat) => void;
   /** 聊天消息（用于头顶气泡） */
   onChat?: (nick: string, text: string, fromRoom: boolean) => void;
+  /** 本地看到命中/被命中时的即时反馈（数字/硬直/音效），不等权威 hp */
+  onHitPreview?: (target: Player, info: DamageInfo) => void;
 }
 
 interface RemoteInput {
@@ -56,10 +58,30 @@ interface RemoteInput {
   pending: number;
 }
 
-/** 位置上报间隔（ms）：20Hz 足够做 100ms 插值 */
+/** 位置上报间隔（ms）：20Hz */
 const POS_INTERVAL = 50;
-/** 远端玩家渲染延迟：用这段时间的缓冲做插值，换取平滑（永不瞬移） */
-const POS_DELAY = 100;
+/**
+ * 远端玩家渲染延迟的**自适应范围**（ms）。
+ *
+ * 为什么自适应：这个延迟的物理含义是"必须盖住对方的单程延迟 + 抖动"。
+ * 固定 100ms 时，网络好（单程 10ms）的人被白白多拖 90ms（对手动作不跟手），
+ * 网络差（单程 150ms）的人又盖不住（会退化成外推、轻微抖动）。
+ *
+ * 目标值 = 单程延迟 × 1.15 + 25ms（再夹到 [60, 140]）。
+ * 单程延迟来自 ping/pong 的平滑 RTT。
+ *
+ * 注意：不能用"样本到达时间"来推断延迟 —— 到达时间只能说明"距离上次收包多久"，
+ * 跟链路延迟无关（这一点踩过坑：旧规则会永远收敛到同一个值）。
+ * 所以用 RTT 推目标，再用"渲染时刻已经越过最新样本 = 饿死了"作为兜底紧急上调。
+ */
+const POS_DELAY_MIN = 60;
+const POS_DELAY_MAX = 140;
+const POS_DELAY_INIT = 100;
+/** 目标延迟 = 单程 × 这个系数 + 余量（覆盖抖动与 50ms 的采样间隔） */
+const POS_DELAY_FACTOR = 1.15;
+const POS_DELAY_MARGIN = 25;
+/** RTT 还没测出来时的保守单程估计 */
+const POS_DELAY_FALLBACK_ONE_WAY = 60;
 /** 位置中断时最多向前外推多久 */
 const POS_EXTRAPOLATE = 200;
 /** 位置缓冲保留时长 */
@@ -90,10 +112,22 @@ interface PosSample {
   g: boolean;
 }
 
+/** 一个远端玩家的位置流（样本 + 自适应插值延迟） */
+interface PosStream {
+  samples: PosSample[];
+  delay: number;
+}
+
 interface SnapSample {
   at: number;
   objects: Map<string, SnapObj>;
   drops: Map<number, SnapDrop>;
+}
+
+/** 世界快照流（动态刚体插值用，同样自适应） */
+interface SnapStream {
+  samples: SnapSample[];
+  delay: number;
 }
 
 /**
@@ -143,12 +177,12 @@ export class OnlineMatch {
   private readonly lastObjSent = new Map<string, { x: number; y: number; a: number }>();
   private readonly lastDropSent = new Map<number, { x: number; y: number; f: boolean }>();
 
-  // ---- 客户端：远端玩家位置缓冲 ----
-  private readonly posBuffers = new Map<number, PosSample[]>();
+  // ---- 客户端：远端玩家位置缓冲（每人一份，各自自适应延迟）----
+  private readonly posStreams = new Map<number, PosStream>();
   private readonly lastRemoteAt = new Map<number, { x: number; y: number }>();
 
   // ---- 世界快照插值缓冲 ----
-  private samples: SnapSample[] = [];
+  private readonly snapStream: SnapStream = { samples: [], delay: POS_DELAY_INIT };
 
   // ---- 延迟估计 / 诊断 ----
   private pingTimer = 0;
@@ -177,6 +211,10 @@ export class OnlineMatch {
     snapGaps: 0,
     remoteMaxStep: 0,
     snapshotsSent: 0,
+    /** 当前自适应插值延迟（远端玩家，ms） */
+    interpDelay: POS_DELAY_INIT,
+    /** 本地提前播过打击反馈的次数（不等 hp） */
+    hitPreviews: 0,
     drops: 0,
     players: 0,
     fps: 0,
@@ -260,7 +298,21 @@ export class OnlineMatch {
       posHz: this.stats.posHz,
       snapHz: this.stats.snapHz,
       snapGaps: this.stats.snapGaps,
+      interpDelay: this.stats.interpDelay,
+      hitPreviews: this.stats.hitPreviews,
       remoteMaxStep: this.stats.remoteMaxStep,
+      // 每个远端位置流的自适应状态（延迟 / 样本数 / 缓冲里还剩多少"未来"样本）
+      streams: [...this.posStreams.entries()]
+        .filter(([id]) => id !== this.localNetId)
+        .map(([id, st]) => {
+          const newest = st.samples[st.samples.length - 1];
+          return {
+            id,
+            delay: Math.round(st.delay),
+            samples: st.samples.length,
+            sinceLast: newest ? Math.round(performance.now() - newest.at) : null,
+          };
+        }),
       drops: this.deps.pickups.netSpawns().length,
       players: this.deps.players.size,
       fps: this.stats.fps,
@@ -373,14 +425,19 @@ export class OnlineMatch {
    * 而不是自己那份会滞后一个来回的物理副本。
    */
   private driveRemotePlayers(): void {
-    if (this.posBuffers.size === 0) return;
+    if (this.posStreams.size === 0) return;
     const now = performance.now();
-    const renderAt = now - POS_DELAY;
-    for (const [netId, buffer] of this.posBuffers) {
+    let delaySum = 0;
+    let delayCount = 0;
+    for (const [netId, stream] of this.posStreams) {
       if (netId === this.localNetId) continue;
+      const newest = stream.samples[stream.samples.length - 1];
+      this.tuneDelay(stream, !!newest && now - stream.delay > newest.at);
+      delaySum += stream.delay;
+      delayCount++;
       const player = this.deps.players.get(netId);
       if (!player) continue;
-      const s = samplePos(buffer, renderAt);
+      const s = samplePos(stream.samples, now - stream.delay);
       if (!s) continue;
       const prev = this.lastRemoteAt.get(netId);
       if (prev) {
@@ -390,22 +447,46 @@ export class OnlineMatch {
       this.lastRemoteAt.set(netId, { x: s.x, y: s.y });
       player.driveRemoteState(s.x, s.y, s.vx, s.vy, s.g);
     }
+    if (delayCount > 0) this.stats.interpDelay = Math.round(delaySum / delayCount);
+  }
+
+  /**
+   * 自适应插值延迟：按实测单程延迟推目标值，并在"已经需要外推"时紧急上调。
+   *
+   * @param starved 渲染时刻是否已经越过最新样本（说明缓冲不够，正在外推）
+   */
+  private tuneDelay(stream: PosStream | SnapStream, starved: boolean): void {
+    if (stream.samples.length === 0) return;
+    if (starved) {
+      // 紧急：正在外推 = 延迟不够，立刻加一档（会带来一点画面变慢，但先稳住）
+      stream.delay = Math.min(POS_DELAY_MAX, stream.delay + 8);
+      return;
+    }
+    const oneWay = this.rtt > 0 ? this.rtt / 2 : POS_DELAY_FALLBACK_ONE_WAY;
+    const target = clamp(
+      oneWay * POS_DELAY_FACTOR + POS_DELAY_MARGIN,
+      POS_DELAY_MIN,
+      POS_DELAY_MAX,
+    );
+    if (stream.delay < target) stream.delay = Math.min(target, stream.delay + 4);
+    else if (stream.delay > target) stream.delay = Math.max(target, stream.delay - 2);
   }
 
   private ingestPos(list: PosSnapshot[]): void {
     const at = performance.now();
     for (const s of list) {
       if (s.id === this.localNetId) continue;
-      let buffer = this.posBuffers.get(s.id);
-      if (!buffer) {
-        buffer = [];
-        this.posBuffers.set(s.id, buffer);
+      let stream = this.posStreams.get(s.id);
+      if (!stream) {
+        stream = { samples: [], delay: POS_DELAY_INIT };
+        this.posStreams.set(s.id, stream);
       }
-      buffer.push({ at, x: s.x, y: s.y, vx: s.vx, vy: s.vy, g: s.g === true });
-      if (buffer.length > 4 && at - buffer[0].at > POS_KEEP) buffer.shift();
+      stream.samples.push({ at, x: s.x, y: s.y, vx: s.vx, vy: s.vy, g: s.g === true });
+      while (stream.samples.length > 4 && at - stream.samples[0].at > POS_KEEP) stream.samples.shift();
       this.posRecv++;
     }
   }
+
 
   // ---------- 房主：世界快照（动态刚体 + 掉落物） ----------
 
@@ -522,15 +603,17 @@ export class OnlineMatch {
 
   private ingestSnapshot(msg: SnapMsg, immediate = false): void {
     const at = performance.now();
-    const prev = this.samples[this.samples.length - 1];
+    const prev = this.snapStream.samples[this.snapStream.samples.length - 1];
     const objects = prev ? new Map(prev.objects) : new Map<string, SnapObj>();
     const drops = prev ? new Map(prev.drops) : new Map<number, SnapDrop>();
 
     for (const o of msg.o ?? []) objects.set(o.id, o);
     for (const d of msg.d ?? []) drops.set(d.id, d);
 
-    this.samples.push({ at, objects, drops });
-    while (this.samples.length > 2 && at - this.samples[0].at > SAMPLE_KEEP) this.samples.shift();
+    this.snapStream.samples.push({ at, objects, drops });
+    while (this.snapStream.samples.length > 2 && at - this.snapStream.samples[0].at > SAMPLE_KEEP) {
+      this.snapStream.samples.shift();
+    }
 
     this.snapRecv++;
     if (msg.seq > this.lastSnapSeq + 1) this.snapGaps += msg.seq - this.lastSnapSeq - 1;
@@ -549,7 +632,10 @@ export class OnlineMatch {
 
   /** 非房主：把动态刚体钉到插值目标上（视觉/碰撞都跟着走） */
   private driveRemoteObjects(): void {
-    const view = this.sampleObjects(performance.now() - POS_DELAY);
+    const now = performance.now();
+    const newest = this.snapStream.samples[this.snapStream.samples.length - 1];
+    this.tuneDelay(this.snapStream, !!newest && now - this.snapStream.delay > newest.at);
+    const view = this.sampleObjects(now - this.snapStream.delay);
     if (!view) return;
     for (const [id, o] of view) {
       const runtime = this.objectById.get(id);
@@ -559,7 +645,7 @@ export class OnlineMatch {
 
   /** 按渲染时间取样（两帧之间线性插值；过期则保持最后位置） */
   private sampleObjects(renderAt: number): Map<string, SnapObj> | null {
-    const list = this.samples;
+    const list = this.snapStream.samples;
     if (list.length === 0) return null;
     if (list.length === 1 || renderAt <= list[0].at) return list[0].objects;
     const last = list[list.length - 1];
@@ -605,6 +691,17 @@ export class OnlineMatch {
       playerDamage: (target, info) => this.reportDamage(target, info),
       objectDestroyed: (id) => {
         if (this.role === 'authority') this.send({ t: 'obj', id });
+      },
+      hitPreview: (target, info) => {
+        // 只有"自己参与的命中"才提前播：自己打的（攻击方）或打自己的（受击方）。
+        // 旁观者/第三方的互殴不预览，避免和 hp 的正式反馈撞车。
+        const local = this.localPlayer;
+        if (!local) return;
+        const mine = info.sourceId === local.id;
+        const victim = target === local;
+        if (!mine && !victim) return;
+        this.stats.hitPreviews++;
+        this.deps.onHitPreview?.(target, info);
       },
     });
     // 摔落伤害：**只有自己**检测自己（房主不再替别人算，避免用滞后副本判定）
@@ -729,6 +826,7 @@ export class OnlineMatch {
       knockback: msg.kb,
       sourceId: killer ? killer.id : undefined,
       weaponId: msg.weapon,
+      attackId: msg.attack,
     });
     if (msg.id === this.localNetId) this.lastShieldSent = msg.shield;
 
@@ -892,13 +990,17 @@ export class OnlineMatch {
     if (!player) return;
     this.deps.players.delete(netId);
     this.remote.delete(netId);
-    this.posBuffers.delete(netId);
+    this.posStreams.delete(netId);
     this.lastRemoteAt.delete(netId);
     this.entityToNet.delete(player.id);
     this.deps.kills.delete(player.id);
     player.destroy();
     this.deps.onRosterChanged();
   }
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
 }
 
 function round2(v: number): number {
