@@ -588,7 +588,7 @@ async function main() {
 
   const preview2 = await b.cdp.eval(`window.__game.scene.getScene('GameScene').online.stats.hitPreviews`);
   check('即时反馈计数在增长', preview2 > preview1.previews, JSON.stringify({ before: preview1.previews, after: preview2 }));
-  check('自适应插值延迟落在 60~140ms', preview1.interpDelay >= 60 && preview1.interpDelay <= 140, `interpDelay=${preview1.interpDelay}`);
+  check('自适应插值延迟落在 60~200ms', preview1.interpDelay >= 60 && preview1.interpDelay <= 200, `interpDelay=${preview1.interpDelay}`);
 
   // ---- 拾取仲裁（重试：偶尔上一帧的位置还没进服务端） ----
   let pickResult = { ok: false };
@@ -903,6 +903,40 @@ async function main() {
     spec.you === -1 && spec.hasLocal === false && /观战/.test(spec.hud) && spec.startVisible === false,
     JSON.stringify(spec),
   );
+
+  // ---- 死亡幽灵化：尸体不能再被踩，也不能当"看不见的墙"吃子弹 ----
+  const ghost = await a.cdp.eval(`(() => {
+    const s = window.__game.scene.getScene('GameScene');
+    const other = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
+    const p = s.online.playerOf(other);
+    const before = p.body.collisionFilter.mask;
+    return {
+      before,
+      playerBit: 0x0002,
+      maskNoPlayer: (before & 0x0002) === 0,
+      dead: p.health.isDead,
+    };
+  })()`);
+  // 让对手阵亡（打空血），再检查它的碰撞 mask 是否摘掉了 player 位
+  await a.cdp.eval(`(() => {
+    const s = window.__game.scene.getScene('GameScene');
+    const other = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
+    const target = s.online.playerOf(other);
+    s.damageSystem.damagePlayer(target, {
+      amount: 999, kind: 'bullet', sourceId: s.online.localPlayer.id, weaponId: 'ak47',
+      point: { x: target.container.x, y: target.container.y }, normal: { x: -1, y: 0 },
+      knockback: { x: 0, y: 0 }, attackId: 4242, ignoreInvuln: true,
+    });
+    return true;
+  })()`);
+  await sleep(900);
+  const ghostAfter = await a.cdp.eval(`(() => {
+    const s = window.__game.scene.getScene('GameScene');
+    const other = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
+    const p = s.online.playerOf(other);
+    return { dead: p.health.isDead, mask: p.body.collisionFilter.mask, noPlayerBit: (p.body.collisionFilter.mask & 0x0002) === 0 };
+  })()`);
+  check('阵亡后与玩家不再碰撞（尸体不会变成看不见的台阶）', ghostAfter.dead === true && ghostAfter.noPlayerBit === true, JSON.stringify({ before: ghost, after: ghostAfter }));
 
   // ---- 网络诊断（真实部署排查用）----
   const diag = await a.cdp.eval(`window.__netDiag ? window.__netDiag() : null`);

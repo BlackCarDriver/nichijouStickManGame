@@ -1220,7 +1220,7 @@ func (h *Hub) handlePos(c *client, msg posMsg) {
 	if m.posPending == nil {
 		m.posPending = map[int]posSnapshot{}
 	}
-	m.posPending[c.seat] = posSnapshot{ID: c.seat, X: msg.X, Y: msg.Y, VX: msg.VX, VY: msg.VY, G: msg.G}
+	m.posPending[c.seat] = posSnapshot{ID: c.seat, X: msg.X, Y: msg.Y, VX: msg.VX, VY: msg.VY, G: msg.G, Q: msg.Q}
 }
 
 // flushPosLocked 把本拍内所有玩家的最新位置合并成一条 pos 报文广播出去。

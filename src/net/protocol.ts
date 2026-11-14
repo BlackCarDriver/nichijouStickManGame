@@ -141,6 +141,16 @@ export interface PosSnapshot {
   vy: number;
   /** 着地（远端姿态用） */
   g?: boolean;
+  /**
+   * 该玩家的位置样本序号（发送者自增）。
+   *
+   * 为什么需要：服务端会把位置**合并成一条报文**下发，一批里可能同时出现
+   * 同一个玩家的 0 个或 2 个样本 —— 到达间隔在 0~83ms 之间跳。
+   * 如果按"到达时间"插值，遇到两个样本同一时刻到达（跨度 0）就会瞬间跳到最新值
+   * 再停 50ms，表现为"一顿一顿"。
+   * 有了序号，接收端可以按"序号 × 稳定间隔"重建**均匀时间轴**，与到达抖动无关。
+   */
+  q?: number;
 }
 
 export interface PosBatchMsg {
@@ -376,7 +386,7 @@ export type ClientMsg =
       aim: number;
       e: number;
     }
-  | { t: 'pos'; x: number; y: number; vx: number; vy: number; g?: boolean }
+  | { t: 'pos'; x: number; y: number; vx: number; vy: number; g?: boolean; q?: number }
   | {
       t: 'pick';
       id: number;

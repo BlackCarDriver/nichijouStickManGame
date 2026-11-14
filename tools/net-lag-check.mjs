@@ -298,6 +298,41 @@ async function main() {
     JSON.stringify({ flickers: anim.flickers, poses: anim.poses }),
   );
 
+  // ---- 2.7 远端位置的时间轴必须"等间隔"（这是一顿一顿的根因）----
+  // 服务端会把位置合并成一条报文下发，一批里可能同时出现同一个玩家的 0 或 2 个样本。
+  // 如果按"到达时间"当样本时刻，两个样本同批到达时跨度就是 0 →
+  // 瞬间跳到最新值再停 50ms，观感就是"一顿一顿"。
+  // 所以这里直接校验重建出来的时间轴：相邻样本必须保持接近的名义间隔（无 0 跨度）。
+  const movedPromise = a.eval(`(async () => {
+    const s = window.__game.scene.getScene('GameScene');
+    const me = s.online.localPlayer;
+    const sp = s.mapData.spawnPoints[0];
+    me.container.setPosition(sp.x, sp.y - 26);
+    me.container.setVelocity(0, 0);
+    const orig = s.inputManager.readP1.bind(s.inputManager);
+    window.__origWalkA = orig;
+    s.inputManager.readP1 = () => { const c = orig(); c.moveX = 1; c.crouch = false; return c; };
+    await new Promise((r) => setTimeout(r, 2500));
+    s.inputManager.readP1 = window.__origWalkA;
+    return true;
+  })()`);
+  await sleep(1200);
+  const timeline = await b.eval(`(() => {
+    const s = window.__game.scene.getScene('GameScene');
+    const st = [...s.online.posStreams.entries()].find(([id]) => id !== s.online.localNetId)?.[1];
+    if (!st || st.samples.length < 6) return null;
+    const spans = [];
+    for (let i = 1; i < st.samples.length; i++) spans.push(Math.round(st.samples[i].at - st.samples[i - 1].at));
+    const bad = spans.filter((v) => v < 30 || v > 90).length;
+    return { spans, bad, interval: Math.round(st.interval * 10) / 10, delay: Math.round(st.delay) };
+  })()`);
+  await movedPromise;
+  check(
+    '远端位置时间轴等间隔（无 0 跨度导致的"一顿一顿"）',
+    !!timeline && timeline.bad === 0 && timeline.interval >= 35 && timeline.interval <= 80,
+    JSON.stringify(timeline),
+  );
+
   // ---- 3. 摔落伤害（自己检测自己）----
   const total = `(() => { const h = window.__game.scene.getScene('GameScene').online.localPlayer.health; return h.hp + h.shield; })()`;
   const fallBefore = await b.eval(total);

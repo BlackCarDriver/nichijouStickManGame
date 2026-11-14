@@ -268,6 +268,10 @@ export class Player extends Entity {
   private rayGrounded = false;
   /** 联机：房主下发的着地状态（非 null 时优先于本地射线） */
   private remoteGroundedHint: boolean | null = null;
+  /** 死亡幽灵化（不再与其它玩家碰撞，避免尸体变成"看不见的台阶"） */
+  private ghost = false;
+  /** 是否忽略单向平台（由场景每帧设置，和 ghost 一起决定 mask） */
+  private ignoreOneWay = false;
   /**
    * 联机：这个玩家由网络快照驱动（不是本端模拟）。
    *
@@ -448,9 +452,9 @@ export class Player extends Entity {
    */
   setOneWayState(ignore: boolean, standing: boolean): void {
     this.standingOnOneWay = standing;
-    this.body.collisionFilter.mask = ignore
-      ? PLAYER_MASK_ALL & ~COLLISION_CATEGORY.oneWayPlatform
-      : PLAYER_MASK_ALL;
+    if (this.ignoreOneWay === ignore) return;
+    this.ignoreOneWay = ignore;
+    this.applyCollisionMask();
   }
 
   /**
@@ -562,6 +566,7 @@ export class Player extends Entity {
     const absorbed = Math.max(0, prevShield - n.shield);
 
     this.health.setState(n.hp, n.shield, n.dead);
+    this.syncGhostFromHealth();
     if (n.sourceId !== undefined && n.sourceId >= 0) this.lastDamageSourceId = n.sourceId;
     if (n.weaponId !== undefined) this.lastHitWeaponId = n.weaponId;
     if (n.kind !== undefined) this.lastHitKind = n.kind;
@@ -612,6 +617,7 @@ export class Player extends Entity {
       this.respawnTimer = 0;
       this.visual.setAlpha(0.55);
     }
+    this.syncGhostFromHealth();
   }
 
   /** 最近一次致伤/致命伤害的武器 id（'fist'/'kick' 等特殊值；环境伤害为 undefined） */
@@ -815,6 +821,7 @@ export class Player extends Entity {
 
   private die(): void {
     this.grenadeMode = false;
+    this.setGhost(true);
     // 死亡 → 超级战士解除（增益/武器锁找回，护盾随 health.reset() 清空）
     this.exitSuperMode();
     // 死亡 → 武器消失（最初确认的规则；近战武器因为取消了耐久度，
@@ -828,9 +835,37 @@ export class Player extends Entity {
     this.scene.events.emit('player-died', this, this.lastDamageSourceId);
   }
 
+  /**
+   * 死亡后"幽灵化"：不再与其它玩家碰撞，也不再被玩家踩。
+   *
+   * 为什么不是直接移除刚体：尸体还要继续被打飞/翻滚（表现层需要）。
+   * 所以只把 mask 里的 player 位摘掉 —— 仍然和地面/箱子碰撞（会躺下），
+   * 但玩家可以直接穿过它，不会出现"看不见的台阶"。
+   */
+  private setGhost(ghost: boolean): void {
+    if (this.ghost === ghost) return;
+    this.ghost = ghost;
+    this.applyCollisionMask();
+  }
+
+  /** 按"是否幽灵 / 是否忽略单向平台"重算碰撞 mask（两处逻辑共用一个出口，避免互相覆盖） */
+  private applyCollisionMask(): void {
+    let mask = this.ignoreOneWay
+      ? PLAYER_MASK_ALL & ~COLLISION_CATEGORY.oneWayPlatform
+      : PLAYER_MASK_ALL;
+    if (this.ghost) mask &= ~COLLISION_CATEGORY.player;
+    this.body.collisionFilter.mask = mask;
+  }
+
+  /** 联机：这个玩家（网络状态）已死亡时，本地副本也要幽灵化 */
+  syncGhostFromHealth(): void {
+    this.setGhost(this.health.isDead);
+  }
+
   /** 复活：回到出生点、满血、短无敌 */
   private respawn(x = this.spawnX, y = this.spawnY): void {
     this.respawnTimer = 0;
+    this.setGhost(false);
     this.health.reset();
     this.health.setInvulnerable(PLAYER_CONFIG.spawnInvulnMs);
     this.container.setPosition(x, y);

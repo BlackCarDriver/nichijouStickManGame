@@ -120,6 +120,16 @@ interface PosSample {
 interface PosStream {
   samples: PosSample[];
   delay: number;
+  /** 上一次收到的样本序号（用于识别丢包与重建时间轴） */
+  lastSeq: number;
+  /** 重建出来的"均匀时间轴"上的最后一个时刻 */
+  lastTimeline: number;
+  /** 发送端的名义间隔（ms，EWMA），由"序号差 / 到达时间差"估出来 */
+  interval: number;
+  /** 上一次样本的到达时刻（估计名义间隔用） */
+  lastArrival: number;
+  /** 时间轴与到达时间之间的缓慢偏移（把长期漂移吸收掉） */
+  timeOffset: number;
   /**
    * 兜底下限（ms）：只要出现过"缓冲饿死"，就把它抬到当时的延迟之上，
    * 并**很慢**地衰减。
@@ -182,6 +192,8 @@ export class OnlineMatch {
 
   /** 本帧累积的开火事件（霰弹 7 发只发一包） */
   private pendingShots: ShotWire[] = [];
+  /** 位置样本序号（自增，供接收端重建均匀时间轴） */
+  private posSeq = 0;
   private lastPosAt = 0;
   private lastShieldSent = 0;
   private disposed = false;
@@ -517,19 +529,73 @@ export class OnlineMatch {
 
 
   private ingestPos(list: PosSnapshot[]): void {
-    const at = performance.now();
+    const now = performance.now();
     for (const s of list) {
       if (s.id === this.localNetId) continue;
       let stream = this.posStreams.get(s.id);
       if (!stream) {
-        stream = { samples: [], delay: POS_DELAY_INIT, floor: 0, quietMs: 0 };
+        stream = {
+          samples: [],
+          delay: POS_DELAY_INIT,
+          floor: 0,
+          quietMs: 0,
+          lastSeq: -1,
+          lastTimeline: 0,
+          interval: POS_INTERVAL,
+          lastArrival: 0,
+          timeOffset: 0,
+        };
         this.posStreams.set(s.id, stream);
       }
+
+      // ---- 重建均匀时间轴 ----
+      // 直接拿"到达时间"当样本时刻会被服务端合批搞乱（一批里可能 0 或 2 个样本，
+      // 间隔在 0~83ms 之间跳；若两个样本到达时刻相同，插值跨度就是 0 →
+      // 瞬间跳到最新值再停住，观感就是"一顿一顿"）。
+      // 用发送端的序号 + 名义间隔，能还原出等间隔的时间轴，与到达抖动无关。
+      const seq = typeof s.q === 'number' ? s.q : -1;
+      const dSeq =
+        seq >= 0 && stream.lastSeq >= 0 ? (seq - stream.lastSeq + 0x100000000) % 0x100000000 : 1;
+      let at: number;
+      if (stream.samples.length === 0) {
+        at = now;
+      } else {
+        // 名义间隔：用"到达时间差 / 序号差"估计（抖动会被 EWMA 抹平）。
+        // 只接受合理区间内的样本：一次卡顿（比如 300ms 才到）会把估计值拉大，
+        // 时间轴被拉长 → 对手"慢放"几百毫秒再猛跳一下，是非常典型的观感问题。
+        if (seq >= 0 && stream.lastSeq >= 0 && dSeq >= 1 && dSeq <= 8) {
+          const per = (now - stream.lastArrival) / dSeq;
+          if (per >= 25 && per <= 100) {
+            stream.interval = clamp(stream.interval * 0.95 + per * 0.05, 35, 80);
+          }
+        }
+        const step = dSeq >= 1 && dSeq <= 8 ? dSeq : 1;
+        at = stream.lastTimeline + stream.interval * step;
+        // 与"到达时间"缓慢对齐：每次样本最多修正 0.8ms。
+        // 不能直接 snap（150ms 的跳变在 150px/s 下就是 22px 的突跳，肉眼可见）；
+        // 也不能完全不对齐（间隔估计的偏差会累积，最后整段滑出缓冲窗口）。
+        const target = now - stream.timeOffset;
+        const err = target - at;
+        if (Math.abs(err) > 600) {
+          // 极端情况（切后台/长时间卡顿）才硬对齐
+          at = target;
+        } else {
+          at += clamp(err, -0.8, 0.8);
+        }
+        // 偏移量本身缓慢跟随（把长期漂移吸收掉，但不会反过来抖动时间轴）
+        stream.timeOffset = clamp(stream.timeOffset + (now - at - stream.timeOffset) * 0.02, 0, 800);
+      }
+      stream.lastArrival = now;
+
+      stream.lastSeq = seq;
+      stream.lastTimeline = at;
       stream.samples.push({ at, x: s.x, y: s.y, vx: s.vx, vy: s.vy, g: s.g === true });
-      while (stream.samples.length > 4 && at - stream.samples[0].at > POS_KEEP) stream.samples.shift();
+      // 只保留最近 1.5 秒（以时间轴为准）
+      while (stream.samples.length > 3 && at - stream.samples[0].at > POS_KEEP) stream.samples.shift();
       this.posRecv++;
     }
   }
+
 
 
 
@@ -974,6 +1040,7 @@ export class OnlineMatch {
         vx: round2(local.body.velocity.x),
         vy: round2(local.body.velocity.y),
         g: local.isGrounded,
+        q: ++this.posSeq,
       });
       this.posSent++;
     }

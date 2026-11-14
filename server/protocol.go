@@ -34,6 +34,8 @@ type posMsg struct {
 	VX float64 `json:"vx"`
 	VY float64 `json:"vy"`
 	G  bool    `json:"g,omitempty"`
+	// Q 位置样本序号（发送者自增，原样透传；接收端据此重建均匀时间轴）
+	Q uint32 `json:"q,omitempty"`
 }
 
 type swapPayload struct {
@@ -318,6 +320,8 @@ type posSnapshot struct {
 	VX float64 `json:"vx"`
 	VY float64 `json:"vy"`
 	G  bool    `json:"g,omitempty"`
+	// Q 位置样本序号（原样透传；接收端据此重建均匀时间轴，消除合并抖动）
+	Q uint32 `json:"q,omitempty"`
 }
 
 type posBatchMsg struct {

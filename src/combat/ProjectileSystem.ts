@@ -375,6 +375,12 @@ export class ProjectileSystem {
 
     // ---- 命中玩家 ----
     const target = this.bodyToPlayer.get(hit.body.id);
+    if (target && target.health.isDead) {
+      // 已阵亡的玩家（尸体）不该当"看不见的墙"吃子弹：忽略并继续飞
+      p.ignore.push(hit.body);
+      this.advancePast(p, hit, dirX, dirY);
+      return false;
+    }
     if (target) {
       this.damageSystem.damagePlayer(target, {
         amount,
@@ -464,7 +470,7 @@ export class ProjectileSystem {
     knockback: { x: number; y: number },
   ): void {
     const player = this.bodyToPlayer.get(hit.body.id);
-    if (player) {
+    if (player && !player.health.isDead) {
       this.damageSystem.damagePlayer(player, {
         amount,
         kind: 'melee',
