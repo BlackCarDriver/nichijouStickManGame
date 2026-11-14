@@ -6,7 +6,7 @@
  */
 
 /** 游戏同步协议版本（与 server/main.go 的 gameProtocolVersion 一致；前后端必须同版本上线） */
-export const GAME_PROTOCOL_VERSION = 5;
+export const GAME_PROTOCOL_VERSION = 6;
 
 /** 输入边沿掩码（与 server/protocol.go 一致） */
 export const EDGE = {
