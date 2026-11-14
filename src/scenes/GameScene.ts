@@ -13,6 +13,8 @@ import type { ActionClip } from '../editor/ActionFormat';
 import { buildMap, syncCompoundVisuals } from '../map/MapLoader';
 import type { MapObjectRuntime } from '../map/MapLoader';
 import type { DamageInfo } from '../combat/DamageInfo';
+import { buildThrownBullet } from '../combat/WeaponSystem';
+import type { ShotWire } from '../net/protocol';
 import { MATERIALS } from '../config/materials';
 import { preloadMaterialTextures } from '../map/TextureLoader';
 import { WorldRegistry } from '../world/WorldRegistry';
@@ -371,7 +373,10 @@ export class GameScene extends Phaser.Scene {
         spawnPlayer: (entry, stat) => this.spawnNetPlayer(entry, stat),
         onChat: (nick, text) => this.showChatBubble(nick, text),
         onHitPreview: (target, info) => this.showHitPreview(target, info),
+        onRemoteShot: (shooter, shots) => this.spawnRemoteShots(shooter, shots),
       });
+      // 投掷物出生拦截：自己的广播出去，别人的等中继事件（见 spawnRemoteShots）
+      this.projectileSystem.onSpawn = (opts) => this.online?.interceptSpawn(opts) ?? true;
       // 昵称先就位；头像贴图异步加载完后再补
       for (const entry of this.onlineData.players) {
         if (entry.avatar) this.avatarSources.set(entry.netId, entry.avatar);
@@ -803,6 +808,46 @@ export class GameScene extends Phaser.Scene {
     this.damageNumbers.update(delta);
     this.hud.update();
     this.deathNotice.update();
+  }
+
+  /**
+   * 联机：按别人广播的出生状态重建投掷物（视觉同款）。
+   *
+   * 参数全部来自"开火的人"自己算的枪口/角度，所以两边看到的是同一发子弹：
+   * 同一个起点、同一个方向、同一套弹道参数（用 `buildThrownBullet` 等公共构造函数）。
+   */
+  private spawnRemoteShots(shooter: Player, shots: ShotWire[]): void {
+    for (const shot of shots) {
+      const weapon = getWeapon(shot.w);
+      if (!weapon) continue;
+
+      let bullet = weapon.bullet;
+      if (shot.k === 'throw' && weapon.throw) bullet = buildThrownBullet(weapon);
+      else if (shot.k === 'grenade') {
+        const g = getWeapon('grenade');
+        if (!g?.throw) continue;
+        bullet = { ...buildThrownBullet(g), kind: 'grenade', size: 5, trail: 0 };
+      }
+      if (!bullet) continue;
+
+      const isGrenade = shot.k === 'grenade';
+      this.projectileSystem.spawn({
+        weaponId: shot.w,
+        x: shot.x,
+        y: shot.y,
+        angle: shot.a,
+        damage: weapon.damage,
+        knockback: weapon.knockback,
+        ownerId: shooter.id,
+        ownerBody: shooter.body,
+        bullet,
+        explosion: weapon.explosion,
+        fuseMs: isGrenade ? weapon.throw?.fuseMs : weapon.throw?.fuseMs,
+        stickMs: weapon.throw?.stickMs,
+        attackId: shot.at,
+        relayed: true,
+      });
+    }
   }
 
   /**

@@ -229,6 +229,23 @@ async function main() {
     check('重复拾取同一件不生效', b.msgs.filter((m) => m.t === 'pick' && m.id === drop.id).length === 1);
   }
 
+  // ---- 投掷物出生事件中继（发射者的真实枪口/角度）----
+  b.clear();
+  a.send({ t: 'shot', s: [{ w: 'pistol', k: 'shoot', x: 512.5, y: 800.25, a: 0.5, at: 1234 }] });
+  const shotB = await b.wait('shot', (m) => m.by === seatA);
+  check('开火事件被转发（带发射者与枪口/角度）',
+    shotB.s.length === 1 && shotB.s[0].w === 'pistol' && shotB.s[0].x === 512.5 && shotB.s[0].a === 0.5 && shotB.s[0].at === 1234,
+    JSON.stringify(shotB));
+  a.clear();
+  check('开火事件不回发给发射者自己', !a.msgs.some((m) => m.t === 'shot'));
+
+  // 非法武器 / 越界坐标要被丢弃
+  b.clear();
+  a.send({ t: 'shot', s: [{ w: 'not_a_weapon', k: 'shoot', x: 10, y: 10, a: 0 }] });
+  a.send({ t: 'shot', s: [{ w: 'pistol', k: 'shoot', x: 99999, y: 10, a: 0 }] });
+  await sleep(350);
+  check('非法开火事件被丢弃', !b.msgs.some((m) => m.t === 'shot'));
+
   // ---- 物体销毁 / 聊天 / 延迟 ----
   b.clear();
   a.send({ t: 'obj', id: 'crate_test_1' });

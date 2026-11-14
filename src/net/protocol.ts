@@ -211,10 +211,41 @@ export interface DropRemoveMsg {
   id: number;
 }
 
+/**
+ * 投掷物（子弹/手雷/投掷武器）的出生事件。
+ *
+ * 为什么需要它：投掷物由每个客户端本地模拟，但"谁的枪口在哪、朝哪打"
+ * 只能由开枪的人自己知道。别人的枪口在我屏幕上是插值过的（晚 100~200ms），
+ * 我本地猜出来的弹道必然和对方看到的差一截。所以改成：
+ * **开枪的人广播出生状态，其它人据此生成"视觉同款"的投掷物**。
+ */
+export interface ShotWire {
+  /** 武器 id（决定弹道参数） */
+  w: string;
+  /** 出生形态：shoot = 枪械弹丸，throw = 投掷武器，grenade = 手雷 */
+  k: 'shoot' | 'throw' | 'grenade';
+  /** 枪口位置 */
+  x: number;
+  y: number;
+  /** 方向（弧度） */
+  a: number;
+  /** 攻击批次 id（用于受击反馈去重） */
+  at?: number;
+}
+
 /** 世界权威变更（房主掉线时顺延） */
 export interface HostMsg {
   t: 'host';
   id: number;
+}
+
+/** 投掷物出生广播（服务端补齐发射者座位号后转发） */
+export interface ShotBatchMsg {
+  t: 'shot';
+  /** 发射者座位号 */
+  by: number;
+  /** 同一次开火的多发弹丸（霰弹）合并成一包 */
+  s: ShotWire[];
 }
 
 export interface HpMsg {
@@ -316,6 +347,7 @@ export type ServerMsg =
   | SnapMsg
   | DropRemoveMsg
   | HostMsg
+  | ShotBatchMsg
   | HpMsg
   | DropAddMsg
   | PickMsg
@@ -371,6 +403,7 @@ export type ClientMsg =
   | { t: 'drop'; weaponId: string; ammo: number; x: number; y: number }
   | { t: 'obj'; id: string }
   | { t: 'snap'; seq: number; key: boolean; o?: SnapObj[]; d?: SnapDrop[] }
+  | { t: 'shot'; s: ShotWire[] }
   | { t: 'drop_remove'; id: number }
   | { t: 'ping'; ts: number; tag?: string };
 

@@ -19,6 +19,7 @@ import {
   type SnapDrop,
   type SnapMsg,
   type SnapObj,
+  type ShotWire,
 } from './protocol';
 
 export interface OnlineMatchDeps {
@@ -43,6 +44,8 @@ export interface OnlineMatchDeps {
   onChat?: (nick: string, text: string, fromRoom: boolean) => void;
   /** 本地看到命中/被命中时的即时反馈（数字/硬直/音效），不等权威 hp */
   onHitPreview?: (target: Player, info: DamageInfo) => void;
+  /** 收到别人开火的出生事件（用它生成视觉同款的投掷物） */
+  onRemoteShot?: (shooter: Player, shots: ShotWire[]) => void;
 }
 
 interface RemoteInput {
@@ -177,6 +180,8 @@ export class OnlineMatch {
   private localEdges = 0;
   private seq = 0;
 
+  /** 本帧累积的开火事件（霰弹 7 发只发一包） */
+  private pendingShots: ShotWire[] = [];
   private lastPosAt = 0;
   private lastShieldSent = 0;
   private disposed = false;
@@ -426,6 +431,7 @@ export class OnlineMatch {
     this.tickPing(dtMs);
     this.driveRemotePlayers(dtMs);
     if (this.role === 'client') this.driveRemoteObjects(dtMs);
+    this.flushShots();
     this.sendLocalState(dtMs);
     this.updateRates(dtMs);
     if (this.role === 'authority') this.authorityTick(dtMs);
@@ -829,6 +835,11 @@ export class OnlineMatch {
       case 'drop_add':
         this.spawnDrop(msg.item);
         break;
+      case 'shot': {
+        const shooter = this.deps.players.get(msg.by);
+        if (shooter) this.deps.onRemoteShot?.(shooter, msg.s);
+        break;
+      }
       case 'drop_remove':
         this.deps.pickups.removeByNetId(msg.id);
         this.lastDropSent.delete(msg.id);
@@ -1020,6 +1031,51 @@ export class OnlineMatch {
       attack: info.attackId ?? 0,
       ignoreInvuln: info.ignoreInvuln === true,
     });
+  }
+
+  /**
+   * 本地投掷物出生拦截（由 ProjectileSystem.spawn 调用）。
+   *
+   * - 自己开的火：正常在本地创建，同时把出生状态广播出去（别人据此重建）；
+   * - 别人开的火：**本地不创建** —— 等他的 `shot` 事件再生成。
+   *   否则会出现两套视觉（我猜的一条 + 他真实的一条），而且我猜的那条
+   *   是从"晚 100~200ms 的枪口位置"打出来的，看起来就是"弹道不一样"。
+   * - 单机/无对局：不做任何拦截。
+   */
+  interceptSpawn(options: {
+    weaponId: string;
+    x: number;
+    y: number;
+    angle: number;
+    ownerId: number;
+    attackId?: number;
+    bullet: { kind?: string };
+  }): boolean {
+    const local = this.localPlayer;
+    // 观战者没有本地角色：本地不再自算投掷物，统一用中继事件
+    if (!local) return false;
+    if (options.ownerId !== local.id) return false;
+
+    const kind: ShotWire['k'] =
+      options.bullet.kind === 'grenade' ? 'grenade' : options.bullet.kind === 'thrown' ? 'throw' : 'shoot';
+    // 同一帧的多发弹丸（霰弹/连射）合并成一包，避免一次开火发 7 条报文
+    this.pendingShots.push({
+      w: options.weaponId,
+      k: kind,
+      x: round2(options.x),
+      y: round2(options.y),
+      a: round3(options.angle),
+      at: options.attackId,
+    });
+    return true;
+  }
+
+  /** 把本帧累积的开火事件发出去（每帧最多一包） */
+  private flushShots(): void {
+    if (this.pendingShots.length === 0) return;
+    const s = this.pendingShots;
+    this.pendingShots = [];
+    this.send({ t: 'shot', s });
   }
 
   /** 拾取请求：只请求自己的拾取（带着自己真实的落点），服务端先到先得 */

@@ -314,6 +314,11 @@ func (s *server) handleClientMessage(c *client, data []byte) {
 		if json.Unmarshal(data, &m) == nil {
 			s.hub.handleObjectDestroyed(c, m.ID)
 		}
+	case "shot":
+		var m shotMsg
+		if json.Unmarshal(data, &m) == nil {
+			s.hub.handleShot(c, m)
+		}
 	case "drop_remove":
 		var m dropRemoveMsg
 		if json.Unmarshal(data, &m) == nil {

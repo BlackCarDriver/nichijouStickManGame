@@ -43,6 +43,8 @@ export interface ProjectileSpawnOptions {
   stickMs?: number;
   /** 攻击批次 id（霰弹多弹丸共用，用于绕过同批次的无敌帧） */
   attackId?: number;
+  /** 由网络事件重建（不再触发"本端开火"的拦截/广播） */
+  relayed?: boolean;
 }
 
 interface Projectile {
@@ -158,7 +160,24 @@ export class ProjectileSystem {
     return this.projectiles.length;
   }
 
+  /** 调试/自动化测试用：当前在场投掷物的只读快照 */
+  debugProjectiles(): Array<{ x: number; y: number; ownerId: number; weaponId: string }> {
+    return this.projectiles.map((p) => ({ x: p.x, y: p.y, ownerId: p.ownerId, weaponId: p.weaponId }));
+  }
+
+  /**
+   * 出生拦截器（联机用）。
+   *
+   * 返回 false = 这次出生不要在本地创建（别人的投掷物会由中继事件补上来），
+   * 返回 true = 正常创建。同时由实现方负责"把自己开火的出生广播出去"。
+   *
+   * 为什么在这个位置拦：`spawn()` 是所有投掷物的唯一出口
+   * （枪械弹丸 / 投掷武器 / 手雷都走它），拦这里就不会漏。
+   */
+  onSpawn?: (options: ProjectileSpawnOptions) => boolean;
+
   spawn(options: ProjectileSpawnOptions): void {
+    if (!options.relayed && this.onSpawn && !this.onSpawn(options)) return;
     if (this.projectiles.length >= ProjectileSystem.MAX_PROJECTILES) {
       const dropped = this.projectiles.shift();
       dropped?.gfx?.destroy();

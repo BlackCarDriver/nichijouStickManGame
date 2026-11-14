@@ -1309,6 +1309,44 @@ func finite(v float64) bool {
 	return v == v && v < 1e9 && v > -1e9
 }
 
+// handleShot 转发投掷物出生事件（只做校验与转发，不参与弹道计算）。
+//
+// 为什么由发射者广播：只有他自己知道"枪口真实在哪、朝哪打"。
+// 其它端的枪口位置是插值过的（晚 100~200ms），本地猜出来的弹道必然偏。
+func (h *Hub) handleShot(c *client, msg shotMsg) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	m := h.m
+	if m == nil || m.Over || c.seat < 0 || len(msg.S) == 0 {
+		return
+	}
+	if len(msg.S) > 32 {
+		return
+	}
+	out := make([]shotWire, 0, len(msg.S))
+	for _, s := range msg.S {
+		if s.W == "" || len(s.W) > 40 || !h.data.hasWeapon(s.W) {
+			continue
+		}
+		if !finite(s.X) || !finite(s.Y) || !finite(s.A) {
+			continue
+		}
+		if s.X < -800 || s.X > m.Map.Width+800 || s.Y < -1200 || s.Y > m.Map.Height+1200 {
+			continue
+		}
+		out = append(out, s)
+	}
+	if len(out) == 0 {
+		return
+	}
+	payload := &shotBatchOut{T: "shot", By: c.seat, S: out}
+	for _, other := range h.clients {
+		if other != c {
+			other.pushDroppable(payload)
+		}
+	}
+}
+
 // ---------- 掉落物移除 ----------
 
 // handleDropRemove 房主请求移除一件掉落物（掉出地图/被销毁），服务端删记录并广播。

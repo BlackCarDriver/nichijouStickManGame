@@ -504,22 +504,26 @@ async function main() {
     const s = window.__game.scene.getScene('GameScene');
     const other = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
     const p = s.online.playerOf(other);
-    return { hp: p.health.hp, dead: p.health.isDead, matchId: s.onlineData.matchId };
+    return { hp: p.health.hp, shield: p.health.shield, dead: p.health.isDead, matchId: s.onlineData.matchId };
   })()`);
   const hpB = await b.cdp.eval(`(() => {
     const s = window.__game.scene.getScene('GameScene');
     return {
       hp: s.online.localPlayer.health.hp,
+      shield: s.online.localPlayer.health.shield,
       dead: s.online.localPlayer.health.isDead,
       matchId: s.onlineData.matchId,
       diag: window.__netDiag ? window.__netDiag() : null,
       sink: !!s.damageSystem.netSink,
     };
   })()`);
+  // 伤害先扣护盾再扣血，所以用 "hp + shield" 的总量来判断"确实掉了"
+  const totalA = hpA.hp + (hpA.shield ?? 0);
+  const totalB = hpB.hp + (hpB.shield ?? 0);
   check(
-    '服务端权威血量：双方一致',
-    hpA.hp === hpB.hp && hpA.hp < 100 && hpA.matchId === bMove.matchId,
-    `A端看到B=${JSON.stringify(hpA)} B端自己=${JSON.stringify(hpB)}（开局=${bMove.matchId}）`,
+    '服务端权威血量：双方一致且确有扣减',
+    hpA.hp === hpB.hp && (hpA.shield ?? 0) === (hpB.shield ?? 0) && totalA < 100 && hpA.matchId === bMove.matchId,
+    `A端看到B=${JSON.stringify(hpA)} B端自己=${JSON.stringify(hpB)} 总量=${totalA}（开局=${bMove.matchId}）`,
   );
 
   // ---- 打击反馈：本地命中立刻出数字/硬直，不等 hp；hp 到达后不重复 ----
@@ -558,9 +562,14 @@ async function main() {
   const reconciled = await a.cdp.eval(`(() => {
     const s = window.__game.scene.getScene('GameScene');
     const other = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
-    return { hp: s.online.playerOf(other).health.hp };
+    const p = s.online.playerOf(other);
+    return { hp: p.health.hp, shield: p.health.shield };
   })()`);
-  check('随后 hp 把数值补齐（只补数值，不重复播数字）', reconciled.hp < hitFeedback.hpBefore, JSON.stringify(reconciled));
+  check(
+    '随后 hp 把数值补齐（只补数值，不重复播数字）',
+    reconciled.hp + reconciled.shield < hitFeedback.hpBefore,
+    JSON.stringify(reconciled),
+  );
 
   const preview2 = await b.cdp.eval(`window.__game.scene.getScene('GameScene').online.stats.hitPreviews`);
   check('即时反馈计数在增长', preview2 > preview1.previews, JSON.stringify({ before: preview1.previews, after: preview2 }));

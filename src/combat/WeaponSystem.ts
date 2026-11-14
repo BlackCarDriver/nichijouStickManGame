@@ -802,21 +802,7 @@ export class WeaponSystem {
     const angle = player.aim;
     player.setAttack('stab', 160, weapon.visual.style === 'spear' ? 'spear_throw' : undefined);
 
-    const bullet: BulletConfig = {
-      kind: weapon.attackMode === 'melee' ? 'thrown' : 'grenade',
-      speed: cfg.speed,
-      range: cfg.range,
-      // 投掷物按武器本体渲染：trail = 武器长度，size = 粗细
-      size: Math.max(2, weapon.visual.thickness * 0.85),
-      color: weapon.visual.color,
-      trail: weapon.attackMode === 'melee' ? weapon.visual.length : 0,
-      maxBounces: 0,
-      bounceDamageMul: 1,
-      pierceDamageMul: 1,
-      piercePlayers: false,
-      bounceAny: cfg.bounceAny,
-      bounceRestitution: cfg.bounceRestitution,
-    };
+    const bullet = buildThrownBullet(weapon);
 
     this.projectiles.spawn({
       // 用真实武器 id（匕首/长矛），插不进去时场景据此在落点生成掉落物
@@ -857,4 +843,29 @@ export class WeaponSystem {
     player.heldWeapon = null;
     this.scene.events.emit('weapon-lost', player, id, reason, snapshot);
   }
+}
+
+/**
+ * 投掷武器（匕首/长矛/手雷）的弹道配置。
+ *
+ * 抽成公共函数：联机时"开枪的人"广播出生事件，其它端要用**同一份参数**
+ * 重建一枚视觉同款投掷物，否则两边弹道会不一样。
+ */
+export function buildThrownBullet(weapon: WeaponJson): BulletConfig {
+  const cfg = weapon.throw!;
+  return {
+    kind: weapon.attackMode === 'melee' ? 'thrown' : 'grenade',
+    speed: cfg.speed,
+    range: cfg.range,
+    // 投掷物按武器本体渲染：trail = 武器长度，size = 粗细
+    size: Math.max(2, weapon.visual.thickness * 0.85),
+    color: weapon.visual.color,
+    trail: weapon.attackMode === 'melee' ? weapon.visual.length : 0,
+    maxBounces: 0,
+    bounceDamageMul: 1,
+    pierceDamageMul: 1,
+    piercePlayers: false,
+    bounceAny: cfg.bounceAny,
+    bounceRestitution: cfg.bounceRestitution,
+  };
 }

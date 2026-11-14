@@ -4,6 +4,7 @@ import type { ProjectileSystem } from './ProjectileSystem';
 import { getWeapon } from './WeaponFormat';
 import type { BulletConfig } from './WeaponFormat';
 import { TrajectoryPreview } from './TrajectoryPreview';
+import { buildThrownBullet } from './WeaponSystem';
 
 /**
  * 手榴弹系统。
@@ -47,21 +48,8 @@ export class GrenadeSystem {
     if (!weapon || !cfg) return false;
 
     const from = player.muzzle;
-    const bullet: BulletConfig = {
-      kind: 'grenade',
-      speed: cfg.speed,
-      gravity: undefined, // 用全局重力
-      range: cfg.range,
-      size: 5,
-      color: weapon.visual.color,
-      trail: 0,
-      maxBounces: 0,
-      bounceDamageMul: 1,
-      pierceDamageMul: 1,
-      piercePlayers: false,
-      bounceAny: cfg.bounceAny,
-      bounceRestitution: cfg.bounceRestitution,
-    };
+    // 与投掷武器共用同一份弹道配置构造函数（联机中继要用同一份参数重建）
+    const bullet: BulletConfig = { ...buildThrownBullet(weapon), kind: 'grenade', size: 5, trail: 0 };
 
     this.projectiles.spawn({
       weaponId: 'grenade',

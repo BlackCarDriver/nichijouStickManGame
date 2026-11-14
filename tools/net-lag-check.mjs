@@ -370,7 +370,86 @@ async function main() {
   })()`);
   check('高时延下打击反馈仍然同帧（不额外等 RTT）', preview.delta >= 1 && preview.previewed === true, JSON.stringify(preview));
 
-  // ---- 6. 角色自愈：模拟"房主漏收了 host 通知" ----
+  // ---- 5.8 投掷物出生同步：远端子弹必须从"真实枪口"出发 ----
+  // 通过包一层 spawn() 精确拿到"重建出来的投掷物"的出生参数：
+  // 它必须等于发射者自己的枪口坐标（而不是本端插值出来的、晚一个往返的枪口）。
+  await a.eval(`(() => {
+    const s = window.__game.scene.getScene('GameScene');
+    window.__spawned = [];
+    const orig = s.projectileSystem.spawn.bind(s.projectileSystem);
+    s.projectileSystem.spawn = (opts) => {
+      window.__spawned.push({ x: opts.x, y: opts.y, a: opts.angle, w: opts.weaponId, relayed: !!opts.relayed, ownerId: opts.ownerId });
+      orig(opts);
+    };
+    return true;
+  })()`);
+  const shotFrom = await b.eval(`(() => {
+    const s = window.__game.scene.getScene('GameScene');
+    const me = s.online.localPlayer;
+    me.heldWeapon = { id: 'pistol', ammo: 99 };
+    me.container.setVelocity(0, 0);
+    const before = s.projectileSystem.count;
+    const m = me.muzzle;
+    s.weaponSystem.tryAttack(me, { attack: true, attackHeld: true });
+    return { muzzle: { x: Math.round(m.x), y: Math.round(m.y) }, fired: s.projectileSystem.count > before };
+  })()`);
+  await sleep(1600);
+  const relayed = await a.eval(`(() => {
+    const s = window.__game.scene.getScene('GameScene');
+    const other = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
+    const owner = s.online.playerOf(other);
+    const mine = window.__spawned.filter((o) => o.relayed && o.ownerId === owner.id);
+    return { count: window.__spawned.length, relayedCount: mine.length, first: mine[0] ?? null };
+  })()`);
+  check('发射者确实开火了', shotFrom.fired === true, JSON.stringify(shotFrom));
+  check(
+    '观察者收到并重建了远端投掷物（relayed）',
+    relayed.relayedCount >= 1,
+    JSON.stringify({ 重建数: relayed.relayedCount, 全部出生: relayed.count }),
+  );
+  check(
+    '重建的投掷物起点 = 发射者的真实枪口（不是本端插值猜测）',
+    !!relayed.first &&
+      Math.abs(relayed.first.x - shotFrom.muzzle.x) <= 2 &&
+      Math.abs(relayed.first.y - shotFrom.muzzle.y) <= 2,
+    JSON.stringify({ 重建起点: relayed.first, 真实枪口: shotFrom.muzzle }),
+  );
+
+  // ---- 5.9 中继出来的投掷物在房主端仍然是"实体"（能打坏箱子）----
+  // 关键不变量：远端玩家不再本地生成弹丸，但如果中继弹丸在房主端不结算物体耐久，
+  // 就会出现"我打箱子它不坏"。这里直接在房主端放一发 relayed 弹丸打向可破坏物体。
+  const relayDamage = await a.eval(`(async () => {
+    const s = window.__game.scene.getScene('GameScene');
+    const target = s.mapObjects.find((m) => m.body && m.durability > 0);
+    if (!target) return { ok: false, reason: '没有可破坏物体' };
+    const before = target.durability;
+    const b = target.body.position;
+    // 直接在物体中心放一枚"中继进来的引信手雷"：40ms 后原地爆炸
+    // （不依赖地形/朝向，任何地图都稳定）
+    s.projectileSystem.spawn({
+      weaponId: 'grenade',
+      x: b.x,
+      y: b.y,
+      angle: 0,
+      damage: 1,
+      knockback: 1,
+      ownerId: s.online.localPlayer.id,
+      ownerBody: s.online.localPlayer.body,
+      bullet: { kind: 'grenade', speed: 1, range: 10, size: 5, color: '#fff', trail: 0, maxBounces: 0, bounceDamageMul: 1, pierceDamageMul: 1, piercePlayers: false, bounceAny: false },
+      explosion: { radius: 140, damage: 120, knockback: 4, selfDamage: false },
+      fuseMs: 40,
+      relayed: true,
+    });
+    await new Promise((r) => setTimeout(r, 700));
+    return { ok: true, before, after: target.durability, id: target.id };
+  })()`);
+  check(
+    '中继出来的弹丸在房主端仍会结算物体耐久（远端也能打坏箱子）',
+    relayDamage.ok !== false && relayDamage.after < relayDamage.before,
+    JSON.stringify(relayDamage),
+  );
+
+  // ---- 6. 角色自愈：模拟"房主漏收了 host 通知" ----  // ---- 6. 角色自愈：模拟"房主漏收了 host 通知" ----
   // 服务端在 30Hz 的 in 广播里持续下发权威座位号，所以即使漏事件也会在 1 帧内恢复。
   const healed = await a.eval(`(async () => {
     const s = window.__game.scene.getScene('GameScene');

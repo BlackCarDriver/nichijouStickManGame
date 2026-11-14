@@ -90,6 +90,29 @@ type objMsg struct {
 	ID string `json:"id"`
 }
 
+// shotWire 一发投掷物（子弹/手雷/投掷武器）的出生状态。
+type shotWire struct {
+	W  string  `json:"w"`
+	K  string  `json:"k"` // shoot | throw | grenade
+	X  float64 `json:"x"`
+	Y  float64 `json:"y"`
+	A  float64 `json:"a"`
+	At int64   `json:"at,omitempty"`
+}
+
+// shotMsg 客户端上报"我开火了"（一次开火的多发弹丸合并成一包）。
+type shotMsg struct {
+	T string     `json:"t"`
+	S []shotWire `json:"s"`
+}
+
+// shotBatchOut 服务端转发：补齐发射者座位号。
+type shotBatchOut struct {
+	T  string     `json:"t"`
+	By int        `json:"by"`
+	S  []shotWire `json:"s"`
+}
+
 // dropRemoveMsg 客户端（房主）请求移除一件掉落物（掉出地图等）。
 type dropRemoveMsg struct {
 	T  string `json:"t"`
