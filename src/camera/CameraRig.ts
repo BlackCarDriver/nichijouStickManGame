@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import type { Player } from '../entities/Player';
-import { getRenderScale } from '../config/display';
+import { viewScaleOf } from '../config/display';
 
 /**
  * 镜头系统（camera-systems 技能驱动）：
@@ -55,7 +55,7 @@ export class CameraRig {
 
   /** 设置目标缩放（武器切换时调用）；镜头会平滑过渡，不会瞬跳 */
   setZoomTarget(zoom: number): void {
-    const k = getRenderScale();
+    const k = viewScaleOf(this.camera.width);
     this.zoomTarget = Phaser.Math.Clamp(zoom, 0.4 * k, 2.2 * k);
   }
 

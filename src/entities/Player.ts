@@ -282,6 +282,25 @@ export class Player extends Entity {
    * - 用权威速度算姿态，行走/奔跑/跳跃切换才稳定，不会一帧 walk 一帧 idle。
    */
   remoteDriven = false;
+  /**
+   * 远端玩家的权威速度（由 `driveRemoteState` 写入）。
+   *
+   * 姿态/步态必须用它，不能用 `body.velocity`：
+   * 远端刚体是被"每帧摆位"的，Matter 在解算接触（例如身体与箱子的轻微穿插）时
+   * 会给出瞬时速度尖峰 → 站着不动却切到 walk 姿态、或者一帧走一帧停。
+   */
+  private remoteVelX = 0;
+  private remoteVelY = 0;
+
+  /** 姿态/动画用的水平速度（远端取权威值，本端取物理值） */
+  private get animVelX(): number {
+    return this.remoteDriven ? this.remoteVelX : this.body.velocity.x;
+  }
+
+  /** 姿态/动画用的垂直速度 */
+  private get animVelY(): number {
+    return this.remoteDriven ? this.remoteVelY : this.body.velocity.y;
+  }
   /** 是否站在单向平台上（由场景每帧设置） */
   private standingOnOneWay = false;
   /** 地面法线（由碰撞事件更新）：用于斜面时左右脚的高度差 */
@@ -387,6 +406,8 @@ export class Player extends Entity {
    */
   driveRemoteState(x: number, y: number, vx: number, vy: number, grounded: boolean): void {
     this.remoteGroundedHint = grounded;
+    this.remoteVelX = vx;
+    this.remoteVelY = vy;
     this.container.setPosition(x, y);
     this.container.setVelocity(vx, vy);
   }
@@ -1341,11 +1362,11 @@ export class Player extends Entity {
     }
 
     this.container.rotation = 0;
-    const speed = Math.abs(this.body.velocity.x);
+    const speed = Math.abs(this.animVelX);
     const moving = speed > 0.5;
 
     if (!this.isGrounded) {
-      this.pose = this.body.velocity.y < 0 ? 'jump' : 'fall';
+      this.pose = this.animVelY < 0 ? 'jump' : 'fall';
     } else if (this.crouching) {
       // 蹲下：保留步态时间推进（便于呼吸/微动）
       this.gaitTime += deltaMs / 1000;
@@ -1375,7 +1396,7 @@ export class Player extends Entity {
         }
       }
 
-      const fallSpeed = this.body.velocity.y;
+      const fallSpeed = this.animVelY;
       // 下落速度 → 冲击强度（力的大小决定吸收深度）
       this.landImpactStrength = Phaser.Math.Clamp(fallSpeed / 18, 0.15, 1);
       this.landImpact = Player.LAND_IMPACT_DURATION;
@@ -1415,12 +1436,12 @@ export class Player extends Entity {
       color: this.color,
       gaitTime: this.gaitTime,
       pose: this.pose,
-      moving: Math.abs(this.body.velocity.x) > 0.5,
+      moving: Math.abs(this.animVelX) > 0.5,
       grounded: this.isGrounded,
       hitIntensity: this.hitTimer > 0 ? Math.min(1, this.hitTimer / Player.HIT_DURATION) : 0,
       hitPhase: this.hitPhase,
-      velocityX: this.body.velocity.x,
-      velocityY: this.body.velocity.y,
+      velocityX: this.animVelX,
+      velocityY: this.animVelY,
       landImpact: this.landImpact > 0 ? this.landImpact / Player.LAND_IMPACT_DURATION : 0,
       landImpactStrength: this.landImpactStrength,
       jumpAnticipation: this.jumpAnticipation > 0 ? this.jumpAnticipation / Player.JUMP_ANTICIPATION_DURATION : 0,

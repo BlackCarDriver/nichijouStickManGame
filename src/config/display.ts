@@ -48,5 +48,20 @@ export const RENDER_SCALE = renderScale;
 export const DESIGN_WIDTH = 1280;
 export const DESIGN_HEIGHT = 720;
 
+/**
+ * "画布像素 ÷ 设计像素"比例 —— 相机 zoom 与屏幕空间 UI（HUD/箭头/播报）都按它推导。
+ *
+ * 正式游戏画布 = DESIGN × RENDER_SCALE，所以它恰好等于 RENDER_SCALE，行为不变；
+ * 编辑器用 Phaser.Scale.RESIZE（画布跟着窗口/面板走），它就是"实际画布宽 ÷ 1280"。
+ * 这样两边看到的世界范围一致（视野宽 = DESIGN_WIDTH ÷ 镜头设计缩放），
+ * 编辑器里点「测试」不会再出现镜头贴脸（原来 zoom 乘的是 RENDER_SCALE，比画布比例大）。
+ */
+export function viewScaleOf(cameraWidth?: number): number {
+  if (cameraWidth && Number.isFinite(cameraWidth) && cameraWidth > 0) {
+    return cameraWidth / DESIGN_WIDTH;
+  }
+  return getRenderScale();
+}
+
 /** Phaser 文本纹理的分辨率倍数（让世界/屏幕文字不虚；取整即可） */
 export const TEXT_RESOLUTION = Math.max(1, Math.ceil(RENDER_SCALE));

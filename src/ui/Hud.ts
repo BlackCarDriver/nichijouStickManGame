@@ -3,7 +3,7 @@ import type { Player } from '../entities/Player';
 import { getWeapon } from '../combat/WeaponFormat';
 import type { PlayerProfile } from '../config/playerProfiles';
 import { getFakeProfiles } from '../config/playerProfiles';
-import { getRenderScale, TEXT_RESOLUTION } from '../config/display';
+import { DESIGN_WIDTH, TEXT_RESOLUTION, viewScaleOf } from '../config/display';
 
 /** 单个玩家的状态面板（容器 + 自己的 Graphics + 文本 + 圆形头像） */
 interface Slot {
@@ -63,8 +63,8 @@ export class Hud {
     for (const slot of this.slots) slot.root.destroy(true);
     this.slots = [];
 
-    // scale.width 是内部渲染像素（已乘 RENDER_SCALE），面板常量是设计像素
-    const usable = this.scene.scale.width / getRenderScale() - Hud.MARGIN * 2;
+    // 面板常量是设计像素，布局宽度按设计宽算（正式游戏画布 = 设计宽 × RENDER_SCALE）
+    const usable = DESIGN_WIDTH - Hud.MARGIN * 2;
     const perRow = Math.max(1, Math.floor((usable + Hud.GAP) / (Hud.PANEL_W + Hud.GAP)));
 
     this.players.forEach((player, i) => {
@@ -213,13 +213,13 @@ export class Hud {
   /**
    * 把 HUD 根容器补偿到"设计像素坐标"。
    *
-   * 相机 zoom = 设计缩放 × RENDER_SCALE，画布也放大 RENDER_SCALE 倍，
-   * 所以这里用 RENDER_SCALE/zoom 让 HUD 的物理尺寸/位置保持不变、像素密度跟着提高。
+   * 相机 zoom = 设计缩放 × 画布比例（见 viewScaleOf），所以这里用
+   * 画布比例/zoom 抵消相机 zoom，让 HUD 尺寸/位置固定在屏幕空间。
    */
   private syncRootToScreen(): void {
     const cam = this.scene.cameras.main;
     const zoom = cam.zoom > 0 ? cam.zoom : 1;
-    const k = getRenderScale();
+    const k = viewScaleOf(cam.width);
     const cx = cam.width / 2;
     const cy = cam.height / 2;
     this.root.setScale(k / zoom);

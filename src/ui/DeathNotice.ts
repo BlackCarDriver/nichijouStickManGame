@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { getRenderScale, TEXT_RESOLUTION } from '../config/display';
+import { TEXT_RESOLUTION, viewScaleOf } from '../config/display';
 
 /**
  * 死亡提示（屏幕中上方）：被谁、用什么击败；以及观战跟随目标。
@@ -90,21 +90,21 @@ export class DeathNotice {
 
   /**
    * 与 Hud.syncRootToScreen 同一套补偿：
-   * 相机 zoom = 设计缩放 × RENDER_SCALE，画布也放大 RENDER_SCALE 倍，
+   * 相机 zoom = 设计缩放 × 画布比例（见 viewScaleOf），
    * 用 scale/position 把根容器换算回"设计像素坐标"。
    */
   private syncToScreen(): void {
     const cam = this.scene.cameras.main;
     const zoom = cam.zoom > 0 ? cam.zoom : 1;
-    const k = getRenderScale();
+    const k = viewScaleOf(cam.width);
     const cx = cam.width / 2;
     const cy = cam.height / 2;
     this.root.setScale(k / zoom);
     this.root.setPosition(cx - cx / zoom, cy - cy / zoom);
 
     // 面板中心：横向居中，纵向按设计高度比例
-    const designW = this.scene.scale.width / k;
-    const designH = this.scene.scale.height / k;
+    const designW = cam.width / k;
+    const designH = cam.height / k;
     const panelX = designW / 2;
     const panelY = designH * DeathNotice.Y_RATIO;
     this.root.setPosition(

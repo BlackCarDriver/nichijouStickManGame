@@ -391,10 +391,13 @@ async function main() {
   const adapt = await b.eval(`window.__netDiag ? window.__netDiag() : null`);
   // 上限放开到 200：单程 150ms 时，要"不靠外推地平滑渲染对手"就必须盖住
   // 对方上行 + 我的下行（≈300ms 的一半以上），硬卡 140 反而会造成动作不连贯。
+  // 延迟现在按"缓冲需要"自适应（目标 = 时间轴落后真实时间的量 + 一个样本余量），
+  // 不再按 RTT 硬推 —— 因为时间轴锚定在"收包时刻"，网络单向延迟不进入公式。
+  // 真正该盯的是"饿死次数"：它持续增长才说明缓冲不够。
   check(
-    '真实时延下插值延迟自适应（60~200ms，且随 RTT 上升）',
-    !!adapt && adapt.interpDelay >= 60 && adapt.interpDelay <= 200 && adapt.interpDelay >= Math.min(200, ONE_WAY + 20),
-    JSON.stringify({ interpDelay: adapt?.interpDelay, rtt: adapt?.rtt, oneWay: ONE_WAY }),
+    '真实时延下插值延迟自适应（60~200ms 且几乎不饿死）',
+    !!adapt && adapt.interpDelay >= 60 && adapt.interpDelay <= 200 && (adapt.starves ?? 0) <= 8,
+    JSON.stringify({ interpDelay: adapt?.interpDelay, starves: adapt?.starves, rtt: adapt?.rtt, oneWay: ONE_WAY }),
   );
   const preview = await b.eval(`(async () => {
     const s = window.__game.scene.getScene('GameScene');
@@ -488,6 +491,41 @@ async function main() {
     '中继出来的弹丸在房主端仍会结算物体耐久（远端也能打坏箱子）',
     relayDamage.ok !== false && relayDamage.after < relayDamage.before,
     JSON.stringify(relayDamage),
+  );
+
+  // ---- 5.95 客户端开火 → 房主端箱子掉耐久（中继链路的真正端到端）----
+  // 用户反馈过"纸箱打不烂"，这条就是盯它：非房主开火时本端不结算耐久，
+  // 必须靠中继到房主的那发弹丸把耐久打下去。
+  const boxRelay = await b.eval(`(async () => {
+    const s = window.__game.scene.getScene('GameScene');
+    const me = s.online.localPlayer;
+    const box = s.mapObjects.find((m) => m.body && m.durability > 0 && m.material !== 'wall');
+    if (!box) return { ok: false, reason: '没有可破坏物体' };
+    const b = box.body.position;
+    me.container.setPosition(b.x - 80, b.y);
+    me.container.setVelocity(0, 0);
+    await new Promise((r) => setTimeout(r, 400));
+    // 走真实出口：spawn() → interceptSpawn() → 广播 → 房主重建
+    s.projectileSystem.spawn({
+      weaponId: 'pistol', x: b.x - 80, y: b.y, angle: 0,
+      damage: 60, knockback: 1, ownerId: me.id, ownerBody: me.body,
+      bullet: { kind: 'bullet', speed: 1600, range: 260, size: 3, color: '#fff', trail: 0, maxBounces: 0, bounceDamageMul: 1, pierceDamageMul: 1, piercePlayers: false, bounceAny: false },
+    });
+    return { ok: true, id: box.id, before: box.durability, isHost: s.online.isAuthority };
+  })()`);
+  await sleep(1500);
+  const hostForBox = (await a.eval(`window.__game.scene.getScene('GameScene').online.isAuthority`)) ? a : b;
+  const boxAfter = boxRelay.ok === false
+    ? null
+    : await hostForBox.eval(`(() => {
+        const s = window.__game.scene.getScene('GameScene');
+        const t = s.mapObjects.find((m) => m.id === ${JSON.stringify(boxRelay.id ?? '')});
+        return t ? { dur: t.durability } : null;
+      })()`).catch(() => null);
+  check(
+    '客户端开火 → 房主端箱子耐久下降（中继链路端到端）',
+    boxRelay.ok !== false && boxRelay.isHost !== true && boxAfter !== null && boxAfter.dur < (boxRelay.before ?? 100),
+    JSON.stringify({ boxRelay, boxAfter }),
   );
 
   // ---- 6. 角色自愈：模拟"房主漏收了 host 通知" ----  // ---- 6. 角色自愈：模拟"房主漏收了 host 通知" ----

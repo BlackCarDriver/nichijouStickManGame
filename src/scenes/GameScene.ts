@@ -51,6 +51,7 @@ import {
   getRenderScale,
   RENDER_SCALE_EXPLICIT,
   setRenderScale,
+  viewScaleOf,
 } from '../config/display';
 
 /**
@@ -122,6 +123,8 @@ export class GameScene extends Phaser.Scene {
   private audio!: AudioSystem;
   /** 顿帧期间物理是否已被暂停（避免重复 pause/resume） */
   private physicsFrozen = false;
+  /** 联机同步异常是否已经打过日志（避免每帧刷屏） */
+  private netErrorLogged = false;
   /** playerId → 击杀数 */
   private readonly kills = new Map<number, number>();
   private mapObjects: MapObjectRuntime[] = [];
@@ -343,7 +346,7 @@ export class GameScene extends Phaser.Scene {
       cam,
       this.mapData.width,
       this.mapData.height,
-      CAMERA_ZOOM * getRenderScale(),
+      CAMERA_ZOOM * viewScaleOf(cam.width),
     );
     this.gameFeel = new GameFeel();
     this.hitStop = new HitStop();
@@ -1019,6 +1022,19 @@ export class GameScene extends Phaser.Scene {
     this.handleAttacks(cmds);
     this.handleSecondary(cmds);
 
+    /**
+     * ★ 联机同步必须**先**跑，而且包一层 try/catch。
+     *
+     * 踩过的坑：原来 `online.update()` 放在整个 updateOnline 的最后，
+     * 一旦前面的表现层（镜头/特效/HUD/屏幕外指示器）在任何一帧抛异常，
+     * 同步层就永远执行不到 —— 表现是：
+     *   - 远端玩家不再被插值驱动（动作僵住/乱套）
+     *   - 位置与开火事件不再上报（房主收不到别人的子弹 → 箱子打不坏）
+     * 所以：同步先做（它只依赖物理与输入，不依赖表现层），
+     * 表现层有错也不影响联机，错误记到 __netDiag().lastError 里便于定位。
+     */
+    this.syncOnline(delta);
+
     this.sights.update(this.players);
     this.grenades.update(delta, this.players);
     this.projectileSystem.update(delta);
@@ -1035,14 +1051,44 @@ export class GameScene extends Phaser.Scene {
     if (target && this.cameraRig) this.cameraRig.update(target, delta);
     this.updateCameraZoom(target);
 
-    this.gameFeel.update(this.cameras.main, this.cameraRig.shakeOffset, delta);
-    this.fx.update(delta);
-    this.slashTrail.update(delta, this.players);
-    this.damageNumbers.update(delta);
-    this.hud.update();
-    this.deathNotice.update();
-    this.offscreen?.update(this.players, local, this.onlineNicks, (p) => online.netIdOf(p));
-    online.update(delta);
+    // 表现层统一包一层：任一子系统出错都不能拖垮对局循环（网络已经在前面同步过了）
+    this.runPresentation(delta, local, (p) => online.netIdOf(p));
+  }
+
+  /** 表现层更新（异常隔离：镜头/特效/HUD 出错不该中断对局） */
+  private runPresentation(delta: number, local: Player | null, netIdOf: (p: Player) => number): void {
+    try {
+      this.gameFeel.update(this.cameras.main, this.cameraRig.shakeOffset, delta);
+      this.fx.update(delta);
+      this.slashTrail.update(delta, this.players);
+      this.damageNumbers.update(delta);
+      this.hud.update();
+      this.deathNotice.update();
+      this.offscreen?.update(this.players, local, this.onlineNicks, netIdOf);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.online?.noteError(`presentation: ${msg}`);
+      if (!this.netErrorLogged) {
+        this.netErrorLogged = true;
+        console.error('[GameScene] 表现层异常（已隔离）:', err);
+      }
+    }
+  }
+
+  /** 帧内的联机同步（隔离异常：表现层出错绝不能拖垮网络层） */
+  private syncOnline(delta: number): void {
+    const online = this.online;
+    if (!online) return;
+    try {
+      online.update(delta);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      online.noteError(msg);
+      if (!this.netErrorLogged) {
+        this.netErrorLogged = true;
+        console.error('[GameScene] 联机同步异常（已隔离，不影响其它玩家）:', err);
+      }
+    }
   }
 
   /**
@@ -1089,6 +1135,9 @@ export class GameScene extends Phaser.Scene {
     if (next === cur || next < 1) return;
     setRenderScale(next);
     const k = getRenderScale();
+    // 只有"固定设计分辨率的画布"（正式游戏的 Scale.FIT）才需要改画布像素；
+    // 编辑器等自适应画布（Scale.RESIZE）由窗口决定尺寸，相机 zoom/UI 都走 viewScaleOf 自动跟随。
+    if (this.scale.scaleMode !== Phaser.Scale.FIT) return;
     this.scale.resize(DESIGN_WIDTH * k, DESIGN_HEIGHT * k);
     this.cameraRig?.rescale(k / cur);
     this.hud.bind(this.players, this.profiles());
@@ -1108,7 +1157,7 @@ export class GameScene extends Phaser.Scene {
       const weapon = weaponId ? getWeapon(weaponId) : undefined;
       if (weapon?.cameraZoom && weapon.cameraZoom > 0) zoom = weapon.cameraZoom;
     }
-    this.cameraRig.setZoomTarget(zoom * getRenderScale());
+    this.cameraRig.setZoomTarget(zoom * viewScaleOf(this.cameras.main.width));
   }
 
   /** 联机：本地玩家的瞄准只跟自己的鼠标 */

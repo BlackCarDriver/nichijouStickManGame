@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import type { Player } from '../entities/Player';
-import { getRenderScale, TEXT_RESOLUTION } from '../config/display';
+import { TEXT_RESOLUTION, viewScaleOf } from '../config/display';
 
 /**
  * 屏幕边缘的"对手方向箭头"。
@@ -49,10 +49,10 @@ export class OffscreenIndicators {
 
     const zoom = cam.zoom > 0 ? cam.zoom : 1;
     const view = cam.worldView;
-    // 设计像素坐标系下的屏幕中心
-    const k0 = getRenderScale();
-    const cx = cam.width / (2 * k0);
-    const cy = cam.height / (2 * k0);
+    // 设计像素坐标系下的屏幕中心（k = 画布像素 ÷ 设计像素，见 viewScaleOf）
+    const k = viewScaleOf(cam.width);
+    const cx = cam.width / (2 * k);
+    const cy = cam.height / (2 * k);
 
     const alive = new Set<number>();
 
@@ -64,8 +64,7 @@ export class OffscreenIndicators {
       if (netId < 0) continue;
       alive.add(player.id);
 
-      // 世界坐标 → 设计像素坐标（根容器会再乘 RENDER_SCALE）
-      const k = getRenderScale();
+      // 世界坐标 → 设计像素坐标（根容器会再乘 k）
       const sx = ((player.container.x - view.x) * zoom) / k;
       const sy = ((player.container.y - view.y) * zoom) / k;
       const designW = cam.width / k;
@@ -155,7 +154,7 @@ export class OffscreenIndicators {
     const zoom = cam.zoom > 0 ? cam.zoom : 1;
     const cx = cam.width / 2;
     const cy = cam.height / 2;
-    this.root.setScale(getRenderScale() / zoom);
+    this.root.setScale(viewScaleOf(cam.width) / zoom);
     this.root.setPosition(cx - cx / zoom, cy - cy / zoom);
   }
 

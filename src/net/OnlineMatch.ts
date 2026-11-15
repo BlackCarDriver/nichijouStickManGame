@@ -80,10 +80,6 @@ const POS_INTERVAL = 50;
 const POS_DELAY_MIN = 60;
 /** 初始值就取最小：网络好的人从第一帧起最跟手，差的人靠"饿死检测"迅速追上去 */
 const POS_DELAY_INIT = POS_DELAY_MIN;
-/** 目标延迟 = 对方上行延迟 + 我的下行延迟 + 余量（覆盖抖动与采样间隔） */
-const POS_DELAY_MARGIN = 45;
-/** RTT 还没测出来时的保守下行估计 */
-const POS_DELAY_FALLBACK_DOWN = 30;
 /** 自适应延迟上限：再大就"对手明显延迟"了，宁可少量外推 */
 const POS_DELAY_HARD_MAX = 200;
 /** 位置中断时最多向前外推多久 */
@@ -128,8 +124,6 @@ interface PosStream {
   interval: number;
   /** 上一次样本的到达时刻（估计名义间隔用） */
   lastArrival: number;
-  /** 时间轴与到达时间之间的缓慢偏移（把长期漂移吸收掉） */
-  timeOffset: number;
   /**
    * 兜底下限（ms）：只要出现过"缓冲饿死"，就把它抬到当时的延迟之上，
    * 并**很慢**地衰减。
@@ -245,6 +239,10 @@ export class OnlineMatch {
     interpDelay: POS_DELAY_INIT,
     /** 本地提前播过打击反馈的次数（不等 hp） */
     hitPreviews: 0,
+    /** 远端位置缓冲"饿死"（需要外推）的次数：持续增长说明延迟不够 */
+    starves: 0,
+    /** 最近一次"帧内异常"（表现层抛错但不该拖垮网络，见 GameScene.updateOnline） */
+    lastError: '',
     drops: 0,
     players: 0,
     fps: 0,
@@ -317,6 +315,11 @@ export class OnlineMatch {
     return this.deps.players.get(netId);
   }
 
+  /** 记录一次帧内异常（只保留第一条，避免刷屏） */
+  noteError(message: string): void {
+    if (!this.stats.lastError) this.stats.lastError = message.slice(0, 200);
+  }
+
   /** 诊断快照（`window.__netDiag()` 用） */
   diag(): Record<string, unknown> {
     const local = this.localPlayer;
@@ -330,6 +333,8 @@ export class OnlineMatch {
       snapHz: this.stats.snapHz,
       snapGaps: this.stats.snapGaps,
       interpDelay: this.stats.interpDelay,
+      starves: this.stats.starves,
+      lastError: this.stats.lastError,
       hitPreviews: this.stats.hitPreviews,
       remoteMaxStep: this.stats.remoteMaxStep,
       // 每个远端位置流的自适应状态（延迟 / 样本数 / 缓冲里还剩多少"未来"样本）
@@ -340,7 +345,6 @@ export class OnlineMatch {
           return {
             id,
             delay: Math.round(st.delay),
-            floor: Math.round(st.floor),
             samples: st.samples.length,
             sinceLast: newest ? Math.round(performance.now() - newest.at) : null,
           };
@@ -464,8 +468,7 @@ export class OnlineMatch {
     let delayCount = 0;
     for (const [netId, stream] of this.posStreams) {
       if (netId === this.localNetId) continue;
-      const newest = stream.samples[stream.samples.length - 1];
-      this.tuneDelay(stream, !!newest && now - stream.delay > newest.at, dtMs);
+      this.tuneDelay(stream, now, dtMs);
       delaySum += stream.delay;
       delayCount++;
       const player = this.deps.players.get(netId);
@@ -488,43 +491,30 @@ export class OnlineMatch {
    *
    * @param starved 渲染时刻是否已经越过最新样本（说明缓冲不够，正在外推）
    */
-  private tuneDelay(stream: PosStream | SnapStream, starved: boolean, dtMs = 16): void {
-    if (stream.samples.length === 0) return;
-    const down = this.rtt > 0 ? this.rtt / 2 : POS_DELAY_FALLBACK_DOWN;
-    const hasFloor = 'floor' in stream;
+  private tuneDelay(stream: PosStream | SnapStream, now: number, dtMs = 16): void {
+    const samples = stream.samples;
+    if (samples.length === 0) return;
+    const newest = samples[samples.length - 1];
+    const interval = 'interval' in stream ? stream.interval : POS_INTERVAL;
 
-    if (starved) {
-      // 刚建流的前几帧还没攒到样本，属正常现象，不算"饿死"
-      if (stream.samples.length < 8) return;
-      // 正在外推 = 延迟不够（多半是"对方上行"比我的下行更大）：抬高兜底下限并立刻跟上
-      if (hasFloor) {
-        stream.floor = Math.min(POS_DELAY_HARD_MAX, Math.max(stream.floor, stream.delay + 12));
-        stream.quietMs = 0;
-      }
-      stream.delay = Math.min(
-        POS_DELAY_HARD_MAX,
-        Math.max(stream.delay, hasFloor ? stream.floor : stream.delay + 12),
-      );
+    // 渲染时刻 = now - delay；要能插值就必须 "delay > 时间轴落后真实时间的量"，
+    // 再留出约一个样本的余量（保证光标前面永远还有样本对）。
+    const age = Math.max(0, now - newest.at);
+    const lead = Math.max(40, interval * 0.8);
+    const target = clamp(age + lead, POS_DELAY_MIN, POS_DELAY_HARD_MAX);
+
+    if (now - stream.delay > newest.at) {
+      // 已经在饿死（正在外推）：立刻拉到 age + 1.5 倍余量
+      this.stats.starves++;
+      stream.delay = Math.min(POS_DELAY_HARD_MAX, Math.max(stream.delay, age + lead * 1.5));
       return;
     }
-
-    if (hasFloor) stream.quietMs += dtMs;
-
-    // 目标：盖住自己的下行 + 一点余量；若曾饿死过则以补上的下限为准
-    const base = down + POS_DELAY_MARGIN;
-    const target = clamp(
-      Math.max(base, hasFloor ? stream.floor : 0),
-      POS_DELAY_MIN,
-      POS_DELAY_HARD_MAX,
-    );
-    if (stream.delay < target) stream.delay = Math.min(target, stream.delay + 4);
-    else if (stream.delay > target) stream.delay = Math.max(target, stream.delay - 15 * (dtMs / 1000));
-
-    // 兜底下限缓慢衰减：连续 8 秒没饿死才开始（约 -1ms/秒），避免"掉下去又饿死"的锯齿
-    if (hasFloor && stream.floor > POS_DELAY_MIN && stream.quietMs > 8000) {
-      stream.floor = Math.max(POS_DELAY_MIN, stream.floor - 1 * (dtMs / 1000));
-    }
+    // 上调要快（网络变差时宁可多延迟一点），下调要慢（避免来回抖）
+    const up = 80 * (dtMs / 1000);
+    const down = 15 * (dtMs / 1000);
+    stream.delay += clamp(target - stream.delay, -down, up);
   }
+
 
 
 
@@ -543,7 +533,6 @@ export class OnlineMatch {
           lastTimeline: 0,
           interval: POS_INTERVAL,
           lastArrival: 0,
-          timeOffset: 0,
         };
         this.posStreams.set(s.id, stream);
       }
@@ -571,19 +560,16 @@ export class OnlineMatch {
         }
         const step = dSeq >= 1 && dSeq <= 8 ? dSeq : 1;
         at = stream.lastTimeline + stream.interval * step;
-        // 与"到达时间"缓慢对齐：每次样本最多修正 0.8ms。
-        // 不能直接 snap（150ms 的跳变在 150px/s 下就是 22px 的突跳，肉眼可见）；
-        // 也不能完全不对齐（间隔估计的偏差会累积，最后整段滑出缓冲窗口）。
-        const target = now - stream.timeOffset;
-        const err = target - at;
+        // 与"到达时间"有界对齐：每个样本最多修正 1/4 个间隔。
+        // 为什么不硬 snap：150ms 的跳变在 150px/s 下就是 22px 的突跳，肉眼可见。
+        // 为什么不能只修正 0.8ms：间隔估计只要有 7ms 的系统偏差，
+        // 时间轴就会一路落后（曾经把 age 拖到 228ms，延迟上限都追不上 → 每帧饿死 → 抖动）。
+        const err = now - at;
         if (Math.abs(err) > 600) {
-          // 极端情况（切后台/长时间卡顿）才硬对齐
-          at = target;
+          at = now; // 切后台/长时间卡顿才硬对齐
         } else {
-          at += clamp(err, -0.8, 0.8);
+          at += clamp(err, -stream.interval * 0.25, stream.interval * 0.25);
         }
-        // 偏移量本身缓慢跟随（把长期漂移吸收掉，但不会反过来抖动时间轴）
-        stream.timeOffset = clamp(stream.timeOffset + (now - at - stream.timeOffset) * 0.02, 0, 800);
       }
       stream.lastArrival = now;
 
@@ -747,8 +733,7 @@ export class OnlineMatch {
   /** 非房主：把动态刚体钉到插值目标上（视觉/碰撞都跟着走） */
   private driveRemoteObjects(dtMs = 16): void {
     const now = performance.now();
-    const newest = this.snapStream.samples[this.snapStream.samples.length - 1];
-    this.tuneDelay(this.snapStream, !!newest && now - this.snapStream.delay > newest.at, dtMs);
+    this.tuneDelay(this.snapStream, now, dtMs);
     const view = this.sampleSnap(now - this.snapStream.delay);
     if (!view) return;
     for (const [id, o] of view.objects) {
