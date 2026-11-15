@@ -190,25 +190,39 @@
 
 /* ---------- 结算弹窗 ---------- */
 
+/*
+ * 结算不遮挡游戏画面：
+ * - 整个遮罩 pointer-events:none，鼠标事件透给画布 → 存活的玩家还能继续瞄准/操作；
+ * - 背景只留四周一圈很淡的压暗，中间透明，能看清场上的火柴人；
+ * - 卡片本身也不接收鼠标（不需要交互），避免“挡住瞄准”。
+ */
 .mp-modal {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(4, 6, 12, 0.58);
-  pointer-events: auto;
+  background: radial-gradient(ellipse at 50% 46%, rgba(4, 6, 12, 0) 40%, rgba(4, 6, 12, 0.4) 100%);
+  pointer-events: none;
 }
 .mp-modal.hidden { display: none; }
 
 .mp-modal-card {
   min-width: min(380px, 84vw);
-  background: rgba(16, 20, 32, 0.96);
+  background: rgba(16, 20, 32, 0.82);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 14px;
   padding: clamp(14px, 2.2vmin, 22px);
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  /* 抬到中心偏上一点，尽量不压住画面中间的交火区 */
+  transform: translateY(-6vh);
+  backdrop-filter: blur(2px);
 }
+
+/* 结算期间保留 in-match（否则覆盖层会铺上深色背景），这里再保险一次 */
+.mp-overlay.in-match.results { background: transparent; }
+
+.mp-results-hint { margin-top: 6px; color: #7d8a9e; letter-spacing: 0.02em; }
 .mp-modal-card h2 {
   margin: 0 0 4px;
   font-size: clamp(16px, 2.2vmin, 24px);

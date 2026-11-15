@@ -5,6 +5,7 @@
 import type { MapObject, PrefabInstance } from '../map/MapFormat';
 import type { PrefabData } from '../map/PrefabFormat';
 import { expandPrefab } from '../map/PrefabExpand';
+import { JUMP_EFFECTIVE_GRAVITY } from '../config/physics';
 
 export interface Vec {
   x: number;
@@ -140,15 +141,27 @@ export function clamp(v: number, min: number, max: number): number {
   return v < min ? min : v > max ? max : v;
 }
 
-/** 玩家跳跃能力（用于编辑器可达性尺子） */
-export function jumpMetrics(moveSpeed: number, jumpVelocity: number, gravity = 1): {
+/**
+ * 玩家跳跃能力（用于编辑器可达性尺子）。
+ *
+ * 单位说明：`moveSpeed` / `jumpVelocity` 都是 Matter 的"px / 物理步"，
+ * 所以顶高与滞空要用**每步² 的有效加速度**（见 config/physics 的标定值）来算：
+ * 高 = v²/(2a)、滞空 = 2v/a、横移 = moveSpeed × 滞空。
+ * 用旧默认值 1（把重力设置当作加速度）会得到 高 144px / 远 170px，
+ * 比线上实测（高 251px / 同高横移 295px）小一半，会把能跳过的间距误报为"跳不过去"。
+ */
+export function jumpMetrics(
+  moveSpeed: number,
+  jumpVelocity: number,
+  effectiveGravity = JUMP_EFFECTIVE_GRAVITY,
+): {
   height: number;
   distance: number;
   safeGap: number;
 } {
   const v = Math.abs(jumpVelocity);
-  const height = (v * v) / (2 * gravity);
-  const airTime = (2 * v) / gravity;
+  const height = (v * v) / (2 * effectiveGravity);
+  const airTime = (2 * v) / effectiveGravity;
   const distance = moveSpeed * airTime;
   return { height, distance, safeGap: distance * 0.7 };
 }

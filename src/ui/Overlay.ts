@@ -1,6 +1,7 @@
 import './overlay.css';
 import { inputBlock } from '../net/inputBlock';
 import type { MatchEndMsg, RoomSnapshot } from '../net/protocol';
+import { modeShortLabel, teamColor, teamName } from '../config/teams';
 import type { NetStatus } from '../net/NetClient';
 import type { ShellRoomUser } from '../net/ShellBridge';
 
@@ -375,12 +376,25 @@ export class Overlay {
     this.modalBody.innerHTML = '';
 
     const title = document.createElement('h2');
-    const youWin = msg.results[0] && msg.results[0].netId === you;
-    title.textContent = youWin ? '你赢了！' : '本局结束';
+    const teamMode = msg.mode === 'tdm';
+    const winnerTeam = teamMode ? (msg.winnerTeam ?? -1) : -1;
+    const youTeam = teamMode ? (msg.results.find((r) => r.netId === you)?.team ?? -1) : -1;
+    const youWin = teamMode
+      ? winnerTeam >= 0 && youTeam === winnerTeam
+      : !!msg.results[0] && msg.results[0].netId === you;
+    if (teamMode && winnerTeam < 0) {
+      title.textContent = '平局';
+    } else {
+      title.textContent = youWin ? (teamMode ? '你们赢了！' : '你赢了！') : '本局结束';
+    }
 
     const sub = document.createElement('div');
     sub.className = 'mp-sub';
-    sub.textContent = msg.winner ? `胜者：${msg.winner}` : '无人生还';
+    if (teamMode) {
+      sub.textContent = winnerTeam >= 0 ? `胜方：${teamName(winnerTeam)}` : '两队同归于尽，平局';
+    } else {
+      sub.textContent = msg.winner ? `胜者：${msg.winner}` : '无人生还';
+    }
 
     const list = document.createElement('div');
     list.className = 'mp-modal-list';
@@ -392,7 +406,10 @@ export class Overlay {
       rank.textContent = `#${i + 1}`;
       const nick = document.createElement('span');
       nick.className = 'nick';
-      nick.textContent = r.nick + (r.netId === you ? '（你）' : '');
+      const team = teamMode ? (r.team ?? -1) : -1;
+      nick.textContent =
+        (team >= 0 ? `${teamName(team)} · ` : '') + r.nick + (r.netId === you ? '（你）' : '');
+      if (team >= 0) nick.style.color = `#${teamColor(team).toString(16).padStart(6, '0')}`;
       const kills = document.createElement('span');
       kills.className = 'kills';
       kills.textContent = `${r.kills} 杀`;
@@ -403,23 +420,35 @@ export class Overlay {
     const tip = document.createElement('div');
     tip.className = 'mp-hint mp-countdown';
     const nextMap = msg.nextMap ? `「${msg.nextMap}」` : '下一张地图';
+    // 下一局模式：预告弹窗必须说清楚是混战还是团队战
+    const nextMode = modeShortLabel(msg.nextMode);
     const tick = (): void => {
       const left = Math.max(0, Math.ceil((restartAt - Date.now()) / 1000));
-      tip.textContent = left > 0 ? `${left} 秒后切换到 ${nextMap}` : `正在切换到 ${nextMap}…`;
+      tip.textContent =
+        left > 0
+          ? `${left} 秒后开始下一局：${nextMap} · ${nextMode}`
+          : `正在开始下一局：${nextMap} · ${nextMode}…`;
       if (left <= 0) this.stopCountdown();
     };
     tick();
     this.countdownTimer = window.setInterval(tick, 250);
 
-    this.modalBody.append(title, sub, list, tip);
+    // 对局结束后不锁定画面：仍可自由活动（见 overlay.css 里 mp-modal 的 pointer-events）
+    const hint = document.createElement('div');
+    hint.className = 'mp-hint mp-results-hint';
+    hint.textContent = '结算期间仍可自由活动';
+
+    this.modalBody.append(title, sub, list, tip, hint);
     this.modal.classList.remove('hidden');
-    this.el.classList.remove('in-match');
+    // 保留 in-match：否则覆盖层会铺上深色背景，把游戏画面盖住
+    this.el.classList.add('results');
   }
 
   hideResults(): void {
     this.stopCountdown();
     this.clearResultsTimer();
     this.modal.classList.add('hidden');
+    this.el.classList.remove('results');
     const inMatch = this.hudbar.textContent !== '';
     if (inMatch) this.el.classList.add('in-match');
   }

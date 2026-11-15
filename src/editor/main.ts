@@ -3,6 +3,7 @@ import { bindUI, createShell } from './EditorUI';
 import { EditorScene } from './EditorScene';
 import { editorStore } from './EditorStore';
 import { GameScene } from '../scenes/GameScene';
+import { WORLD_GRAVITY_Y } from '../config/physics';
 import './editor.css';
 
 createShell();
@@ -20,7 +21,8 @@ const game = new Phaser.Game({
   physics: {
     default: 'matter',
     matter: {
-      gravity: { x: 0, y: 1 },
+      // 必须与正式对局一致（见 config/physics）：重力不同，测试里的跳跃高度就不同
+      gravity: { x: 0, y: WORLD_GRAVITY_Y },
       debug: false,
     },
   },

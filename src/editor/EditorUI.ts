@@ -12,13 +12,13 @@ import type { EditorTab, ToolKind } from './EditorStore';
 import { MATERIALS, materialIds } from '../config/materials';
 import { listMaps, listPrefabs } from '../map/MapRegistry';
 import { getWeapon, listWeaponIds } from '../combat/WeaponFormat';
+import { getItem, listItemIds } from '../world/ItemFormat';
 import type { Issue } from '../map/MapValidator';
-import type { MapObject } from '../map/MapFormat';
+import type { MapObject, MapObjectLabel, ObjectLabelAnchor } from '../map/MapFormat';
 import { setStatus, setStatusSink } from './status';
+import { objectBounds, objectCenter } from './geometry';
 import { textureUrl } from '../map/TextureLoader';
 import type { EditorScene } from './EditorScene';
-import { actionStore } from './ActionStore';
-import type { ActionPose } from './ActionFormat';
 
 type Child = Node | string | null | undefined | false;
 
@@ -107,12 +107,14 @@ let statusTextEl!: HTMLElement;
 let fpsEl!: HTMLElement;
 let canvasHostEl!: HTMLElement;
 let toastEl!: HTMLElement;
-let actionTimelineRange: HTMLInputElement | null = null;
-let actionTimelineLabel: HTMLElement | null = null;
+
+/** 预制件左栏「＋ 武器」用：当前选中的武器 id */
+let prefabWeaponPick = 'ak47';
 
 /** 左栏【随机武器】选项的哨兵值（不是真实武器 id） */
 const RANDOM_WEAPON_SENTINEL = '__random__';
 
+/** 所有叶子工具（快捷键、状态栏展示用） */
 const TOOLS: Array<{ id: ToolKind; label: string; key: string }> = [
   { id: 'select', label: '选择', key: 'V' },
   { id: 'rect', label: '矩形', key: 'R' },
@@ -120,10 +122,130 @@ const TOOLS: Array<{ id: ToolKind; label: string; key: string }> = [
   { id: 'polygon', label: '多边形', key: 'P' },
   { id: 'spawn', label: '出生点', key: 'S' },
   { id: 'prefab', label: '放预制件', key: 'F' },
-  { id: 'weapon', label: '放武器', key: 'B' },
+  { id: 'weapon', label: '投放点', key: 'B' },
   { id: 'joint', label: '关节', key: 'J' },
   { id: 'ruler', label: '尺子', key: 'M' },
+  { id: 'ref', label: '参考火柴人', key: 'K' },
 ];
+
+/**
+ * 工具分组：一级选项是“几何体 / 放置预制件 / 投放点”，
+ * 矩形·圆形·多边形 / 预制件库 / 武器选择是它们的二级选项，
+ * 只有对应一级项被选中时才展示。
+ */
+type ToolGroupId = 'shape' | 'prefab' | 'weapon';
+
+const TOOL_GROUP: Partial<Record<ToolKind, ToolGroupId>> = {
+  rect: 'shape',
+  circle: 'shape',
+  polygon: 'shape',
+  prefab: 'prefab',
+  weapon: 'weapon',
+};
+
+const GROUP_PRIMARY: Array<{
+  group: ToolGroupId | null;
+  tool?: ToolKind;
+  label: string;
+  key: string;
+}> = [
+  { group: null, tool: 'select', label: '选择', key: 'V' },
+  { group: 'shape', label: '几何体', key: 'R/C/P' },
+  { group: null, tool: 'spawn', label: '出生点', key: 'S' },
+  { group: 'prefab', label: '放置预制件', key: 'F' },
+  { group: 'weapon', label: '投放点', key: 'B' },
+  { group: null, tool: 'joint', label: '关节', key: 'J' },
+  { group: null, tool: 'ruler', label: '尺子', key: 'M' },
+  { group: null, tool: 'ref', label: '参考火柴人', key: 'K' },
+];
+
+const TOOL_LABEL: Record<string, string> = Object.fromEntries(TOOLS.map((t) => [t.id, t.label]));
+
+const SHAPE_TOOLS: Array<{ id: ToolKind; label: string; key: string }> = [
+  { id: 'rect', label: '矩形', key: 'R' },
+  { id: 'circle', label: '圆形', key: 'C' },
+  { id: 'polygon', label: '多边形', key: 'P' },
+];
+
+/** 地图 Tab 的左栏分区 */
+type LeftPanelTab = 'place' | 'objects' | 'display';
+const LEFT_TABS: Array<{ id: LeftPanelTab; label: string }> = [
+  { id: 'place', label: '放置' },
+  { id: 'objects', label: '对象列表' },
+  { id: 'display', label: '显示' },
+];
+
+/** 预制件页的左栏分区 */
+type PrefabLeftTab = 'parts' | 'library' | 'display';
+const PREFAB_LEFT_TABS: Array<{ id: PrefabLeftTab; label: string }> = [
+  { id: 'parts', label: '部件' },
+  { id: 'library', label: '预制件库' },
+  { id: 'display', label: '显示' },
+];
+
+let leftPanelTab: LeftPanelTab = 'place';
+let prefabLeftTab: PrefabLeftTab = 'parts';
+
+/** 左栏顶部的分区切换条（地图页 / 预制件页共用） */
+function subTabs<T extends string>(
+  tabs: Array<{ id: T; label: string }>,
+  current: T,
+  pick: (id: T) => void,
+): HTMLElement {
+  return h(
+    'div',
+    { class: 'ed-subtabs' },
+    tabs.map((t) =>
+      h(
+        'button',
+        { class: `ed-subtab ${current === t.id ? 'active' : ''}`, onclick: () => pick(t.id) },
+        [t.label],
+      ),
+    ),
+  );
+}
+/** 被手动收起的分组（当前工具仍属于它，只是二级选项隐藏） */
+let collapsedGroup: ToolGroupId | null = null;
+
+function groupOf(tool: ToolKind): ToolGroupId | null {
+  return TOOL_GROUP[tool] ?? null;
+}
+
+/** 当前应该展开的二级面板（= 当前工具所属分组，除非被主动收起） */
+function openToolGroup(): ToolGroupId | null {
+  const g = groupOf(editorStore.tool);
+  return g && collapsedGroup === g ? null : g;
+}
+
+/** 统一入口：切工具时同步分组页张状态 */
+function setTool(tool: ToolKind): void {
+  const store = editorStore;
+  const prev = groupOf(store.tool);
+  store.tool = tool;
+  store.pendingJointBodyA = null;
+  if (groupOf(tool) !== prev) collapsedGroup = null;
+  store.touch();
+}
+
+/** 点一级选项：已选则收起/展开，未选则切到默认子工具并展开 */
+function selectPrimaryTool(group: ToolGroupId | null, tool?: ToolKind): void {
+  const store = editorStore;
+  if (!group) {
+    collapsedGroup = null;
+    if (tool) setTool(tool);
+    return;
+  }
+  if (groupOf(store.tool) === group) {
+    collapsedGroup = collapsedGroup === group ? null : group;
+    store.touch();
+    return;
+  }
+  collapsedGroup = null;
+  const fallback: ToolKind = group === 'shape' ? 'rect' : group;
+  if (group === 'prefab' && !store.activePrefabId) store.activePrefabId = listPrefabs()[0]?.id ?? null;
+  if (group === 'weapon' && !store.activeWeaponId) store.activeWeaponId = RANDOM_WEAPON_SENTINEL;
+  setTool(fallback);
+}
 
 export function createShell(): void {
   document.body.innerHTML = '';
@@ -169,14 +291,6 @@ export function bindUI(phaserGame: Phaser.Game): void {
     statusTextEl.classList.add('ed-status-active');
   });
   editorStore.subscribe(render);
-  actionStore.subscribe(render);
-  actionStore.subscribeTime((timeMs, durationMs) => {
-    if (actionTimelineRange) {
-      actionTimelineRange.max = String(durationMs);
-      actionTimelineRange.value = String(Math.round(timeMs));
-    }
-    if (actionTimelineLabel) actionTimelineLabel.textContent = `${Math.round(timeMs)} / ${durationMs} ms`;
-  });
   window.addEventListener('keydown', onKeyDown);
   // FPS 指示（每 500ms 刷新一次，不参与面板重建）
   window.setInterval(() => {
@@ -194,6 +308,8 @@ function scene(): EditorScene | null {
 let headerSig = '';
 let leftSig = '';
 let rightSig = '';
+/** 上一次渲染时的选择（变化时强制重建面板，即使焦点在输入框里） */
+let lastRenderedSelection = '';
 
 /**
  * 渲染调度：给每个面板算一个"内容签名"，只有签名变了才重建 DOM。
@@ -205,21 +321,24 @@ function render(): void {
   const errors = issues.filter((i) => i.level === 'error').length;
   const warns = issues.length - errors;
 
-  const hSig = `${store.tab}|${errors}|${warns}|${store.map.name}|${listMaps().length}|${testing}|${actionStore.revision}`;
+  const hSig = `${store.tab}|${errors}|${warns}|${store.map.name}|${listMaps().length}|${testing}`;
   if (hSig !== headerSig) {
     headerSig = hSig;
     renderHeader();
   }
 
   const selection = store.selection.join(',');
-  const lSig = `${store.tab}|${store.revision}|${selection}|${store.activePrefabId}|${store.activeMaterialId}|${store.tool}|${store.gridSize}|${store.snapToGrid}|${store.showGrid}|${(store.prefabDraft.parts ?? []).length}|${materialIds().length}|${(store.map.objects ?? []).length}|${(store.map.prefabs ?? []).length}|${actionStore.revision}|${actionStore.activeId}|${actionStore.timeMs}`;
-  if (lSig !== leftSig && !isEditingPanel(leftEl)) {
+  const selectionChanged = selection !== lastRenderedSelection;
+  lastRenderedSelection = selection;
+  const lSig = `${store.tab}|${leftPanelTab}|${prefabLeftTab}|${collapsedGroup}|${store.revision}|${selection}|${store.activePrefabId}|${store.activeMaterialId}|${store.activeWeaponId}|${store.tool}|${store.gridSize}|${store.snapToGrid}|${store.showGrid}|${store.showSpawnPoints}|${store.showWeaponSpawns}|${store.showPrefabRef}|${store.refFigures.length}|${store.selectedRefIndex}|${(store.prefabDraft.parts ?? []).length}|${materialIds().length}|${(store.map.objects ?? []).length}|${(store.map.prefabs ?? []).length}`;
+  // 选择变了就必须重建：否则"在画布上点了对象，右侧属性还是旧的"（焦点还留在输入框里时最明显）
+  if (lSig !== leftSig && (selectionChanged || !isEditingPanel(leftEl))) {
     leftSig = lSig;
     renderLeft();
   }
 
-  const rSig = `${store.tab}|${store.revision}|${selection}|${store.activeMaterialId}|${actionStore.revision}|${actionStore.activeId}|${actionStore.timeMs}|${actionStore.selectedKeyframe}`;
-  if (rSig !== rightSig && !isEditingPanel(rightEl)) {
+  const rSig = `${store.tab}|${store.revision}|${selection}|${store.activeMaterialId}|${store.selectedRefIndex}|${prefabRightTab}|${store.prefabJoints().length}`;
+  if (rSig !== rightSig && (selectionChanged || !isEditingPanel(rightEl))) {
     rightSig = rSig;
     renderRight();
   }
@@ -249,8 +368,10 @@ function renderHeader(): void {
       store.map = JSON.parse(JSON.stringify(map));
       store.tab = 'map';
       store.selection = [];
+      store.selectedRefIndex = null;
       store.tool = 'select';
       store.ruler = null;
+      store.clearRefFigures();
       store.ensureIds();
       store.message = `已打开地图 ${name}`;
       store.commit();
@@ -267,7 +388,7 @@ function renderHeader(): void {
     h(
       'div',
       { class: 'ed-tabs' },
-      (['map', 'prefab', 'material', 'action'] as EditorTab[]).map((tab) =>
+      (['map', 'prefab', 'material'] as EditorTab[]).map((tab) =>
         h(
           'button',
           {
@@ -275,17 +396,27 @@ function renderHeader(): void {
             onclick: () => {
               store.tab = tab;
               store.selection = [];
+              store.selectedRefIndex = null;
               store.tool = 'select';
               store.ruler = null;
               store.touch();
             },
           },
-          [tab === 'map' ? '地图' : tab === 'prefab' ? '预制件' : tab === 'material' ? '材质' : '动作'],
+          [tab === 'map' ? '地图' : tab === 'prefab' ? '预制件' : '材质'],
         ),
       ),
     ),
     h('div', { class: 'ed-actions' }, [
       openMapSelect,
+      button('⟳ 重载文件', () => {
+        const res = store.reloadCurrentFromFile();
+        if (!res.ok) {
+          store.message = `重载失败：${res.reason ?? '未知原因'}`;
+          store.touch();
+          return;
+        }
+        scene()?.refreshEditor();
+      }),
       button('＋ 新建地图', () => {
         const name = window.prompt('新地图名称（建议英文，导出为 data/maps/<name>.json）', 'map_new');
         if (name === null) return;
@@ -297,21 +428,10 @@ function renderHeader(): void {
         }
         scene()?.refreshEditor();
       }),
-      button('导入', () => {
-        if (store.tab === 'action') {
-          store.message = '动作第一版采用导出工作流，暂不支持导入';
-          store.touch();
-          return;
-        }
-        openJsonModal('导入（粘贴 JSON）', '', 'import');
-      }),
-      button('导出', () => openJsonModal(
-        store.tab === 'action' ? `导出 ${actionStore.exportFileName()}` : `导出 ${store.exportFileName()}`,
-        store.tab === 'action' ? actionStore.exportCurrent() : store.exportCurrent(),
-        'export',
-      )),
+      button('导入', () => openJsonModal('导入（粘贴 JSON）', '', 'import')),
+      button('导出', () => openJsonModal(`导出 ${store.exportFileName()}`, store.exportCurrent(), 'export')),
       button('复制', () => {
-        void navigator.clipboard.writeText(store.tab === 'action' ? actionStore.exportCurrent() : store.exportCurrent());
+        void navigator.clipboard.writeText(store.exportCurrent());
         statusTextEl.textContent = '已复制当前数据到剪贴板';
       }),
       button(errors > 0 ? `校验：${errors} 错误` : warns > 0 ? `校验：${warns} 警告` : '校验通过', () =>
@@ -321,16 +441,73 @@ function renderHeader(): void {
   );
 }
 
+/**
+ * 选中内容的大小（状态栏底部展示）。
+ *
+ * - 地图/材质 Tab：单选按形状给出最直观的尺寸（圆用直径、多边形用包围盒）；
+ *   多选给整体包围盒 + 件数
+ * - 预制件 Tab：选中部件（可多选）的尺寸/整体包围盒
+ */
+function selectionSizeLabel(): string | null {
+  const store = editorStore;
+  const fmt = (w: number, h: number): string => `${Math.round(w)}×${Math.round(h)} px`;
+
+  if (store.tab === 'prefab') {
+    const idxs = store.selectedPartIndices();
+    if (idxs.length === 0) return null;
+    if (idxs.length === 1) {
+      const part = store.prefabDraft.parts[idxs[0]];
+      if (!part) return null;
+      if (part.type === 'rect') return `矩形 ${fmt(part.w, part.h)}`;
+      if (part.type === 'circle') return `圆形 ⌀${Math.round(part.radius * 2)} px`;
+      const b = store.partWorldBounds(idxs[0]);
+      return b ? `多边形 ${fmt(b.maxX - b.minX, b.maxY - b.minY)}` : null;
+    }
+    const boxes = idxs.map((i) => store.partWorldBounds(i)).filter((b): b is NonNullable<typeof b> => !!b);
+    if (boxes.length === 0) return null;
+    const minX = Math.min(...boxes.map((b) => b.minX));
+    const maxX = Math.max(...boxes.map((b) => b.maxX));
+    const minY = Math.min(...boxes.map((b) => b.minY));
+    const maxY = Math.max(...boxes.map((b) => b.maxY));
+    return `${idxs.length} 件 · ${fmt(maxX - minX, maxY - minY)}`;
+  }
+
+  // 地图 / 材质 Tab
+  const single = store.selection.length === 1 ? store.selection[0] : null;
+  if (single) {
+    const obj = store.getObject(single);
+    if (obj) {
+      if (obj.type === 'rect') return `矩形 ${fmt(obj.w, obj.h)}`;
+      if (obj.type === 'circle') return `圆形 ⌀${Math.round(obj.radius * 2)} px`;
+      const b = store.selectionBounds();
+      return b ? `多边形 ${fmt(b.maxX - b.minX, b.maxY - b.minY)}` : null;
+    }
+    if (store.getInstance(single)) {
+      const b = store.selectionBounds();
+      return b ? `预制件 ${fmt(b.maxX - b.minX, b.maxY - b.minY)}` : null;
+    }
+    if (/^spawn:/.test(single)) return '出生点（标记）';
+    if (/^weapon:/.test(single)) return '武器点（标记）';
+  }
+
+  const b = store.selectionBounds();
+  if (!b) return store.selectedRefIndex !== null ? '参考火柴人 ≈111 px 高' : null;
+  return `${store.selection.length} 项 · ${fmt(b.maxX - b.minX, b.maxY - b.minY)}`;
+}
+
 function renderStatus(): void {
   const store = editorStore;
   const objCount = (store.map.objects ?? []).length + (store.map.prefabs ?? []).length;
-  const toolLabel = TOOLS.find((t) => t.id === store.tool)?.label ?? store.tool;
+  const sizeLabel = selectionSizeLabel();
   const parts = [
-    `工具：${toolLabel}`,
+    `工具：${TOOL_LABEL[store.tool] ?? store.tool}`,
+    `地图：${store.map.width}×${store.map.height}`,
     `网格：${store.gridSize}px${store.snapToGrid ? '（吸附）' : ''}`,
     `对象：${objCount}`,
     `选中：${store.selection.length}`,
   ];
+  // 选中对象的实际尺寸（各 Tab 通用）：摆放/对尺寸时最常看的一个数
+  if (sizeLabel) parts.push(`尺寸：${sizeLabel}`);
   if (store.tool === 'joint') parts.push(store.jointHint());
   if (store.tab === 'map' && store.selection.length === 1) {
     parts.push('绿方块=拖拽改大小 · 橙圆点=拖拽旋转 · Shift=不吸附');
@@ -363,61 +540,93 @@ function renderLeft(): void {
   const store = editorStore;
   leftEl.replaceChildren();
 
-  if (store.tab === 'action') {
-    leftEl.append(actionLeftPanel());
-    return;
-  }
-
   if (store.tab === 'map') {
+    // ---- 左栏分区：放置 / 对象列表 / 显示 ----
+    leftEl.append(
+      subTabs(LEFT_TABS, leftPanelTab, (id) => {
+        leftPanelTab = id;
+        editorStore.touch();
+      }),
+    );
+
+    if (leftPanelTab === 'objects') {
+      const listEl = buildObjectList();
+      listEl.classList.add('ed-list-fill');
+      leftEl.append(
+        h('h3', { class: 'ed-h3' }, [`对象列表（${(store.map.objects ?? []).length}）`]),
+        h('p', { class: 'ed-help' }, ['数组越靠后 = 越上层（列表里显示在前面）。可拖动行调整遮挡顺序。']),
+        listEl,
+      );
+      return;
+    }
+
+    if (leftPanelTab === 'display') {
+      leftEl.append(
+        h('h3', { class: 'ed-h3' }, ['网格']),
+        h('div', { class: 'ed-row' }, [
+          field('大小', numberInput(store.gridSize, (v) => { store.gridSize = Math.max(2, v); store.commit(); }, 2)),
+        ]),
+        h('label', { class: 'ed-check' }, [
+          checkbox(store.snapToGrid, (v) => { store.snapToGrid = v; store.touch(); }),
+          '拖动吸附到网格',
+        ]),
+        h('label', { class: 'ed-check' }, [
+          checkbox(store.showGrid, (v) => { store.showGrid = v; store.touch(); }),
+          '显示网格（G）',
+        ]),
+        h('h3', { class: 'ed-h3' }, ['显示元素']),
+        h('label', { class: 'ed-check' }, [
+          checkbox(store.showSpawnPoints, (v) => { store.showSpawnPoints = v; scene()?.refreshEditor(); store.touch(); }),
+          '显示出生点',
+        ]),
+        h('label', { class: 'ed-check' }, [
+          checkbox(store.showWeaponSpawns, (v) => { store.showWeaponSpawns = v; scene()?.refreshEditor(); store.touch(); }),
+          '显示武器刷新点',
+        ]),
+        h('h3', { class: 'ed-h3' }, ['参考火柴人']),
+        h('p', { class: 'ed-help' }, [
+          `画布上 ${store.refFigures.length} 个（用「参考火柴人」工具点击画布放置，仅用于对照尺寸，不会写入地图）。`,
+        ]),
+        h('div', { class: 'ed-row' }, [
+          button('清除全部', () => { store.clearRefFigures(); scene()?.refreshEditor(); }, 'danger'),
+        ]),
+        h('h3', { class: 'ed-h3' }, ['视图']),
+        h('div', { class: 'ed-row' }, [button('适配地图（0）', () => scene()?.fitToMap())]),
+        h('p', { class: 'ed-help' }, ['中键/右键/空格+左键 平移 · 滚轮缩放 · 地图边界外会压暗并画亮框。']),
+      );
+      return;
+    }
+
+    // ---- 放置 ----
+    const group = openToolGroup();
     leftEl.append(
       h('h3', { class: 'ed-h3' }, ['工具']),
       h(
         'div',
         { class: 'ed-tools' },
-        TOOLS.map((t) =>
-          h(
+        GROUP_PRIMARY.map((item) => {
+          const active = item.group ? groupOf(store.tool) === item.group : store.tool === item.tool;
+          const open = item.group !== null && group === item.group;
+          return h(
             'button',
             {
-              class: `ed-tool ${store.tool === t.id ? 'active' : ''}`,
-              onclick: () => {
-                store.tool = t.id;
-                store.pendingJointBodyA = null;
-                store.touch();
-              },
+              class: `ed-tool ${active ? 'active' : ''} ${open ? 'open' : ''}`,
+              onclick: () => selectPrimaryTool(item.group, item.tool),
             },
-            [`${t.label}`, h('span', { class: 'ed-key' }, [t.key])],
-          ),
-        ),
+            [
+              `${item.label}`,
+              h('span', { class: 'ed-key' }, [item.group ? `${open ? '▾' : '▸'} ${item.key}` : item.key]),
+            ],
+          );
+        }),
       ),
-      h('div', { class: 'ed-row' }, [
-        field('网格', numberInput(store.gridSize, (v) => { store.gridSize = Math.max(2, v); store.commit(); }, 2)),
-        h('label', { class: 'ed-check' }, [checkbox(store.snapToGrid, (v) => { store.snapToGrid = v; store.touch(); }), '吸附']),
-        h('label', { class: 'ed-check' }, [checkbox(store.showGrid, (v) => { store.showGrid = v; store.touch(); }), '显示网格']),
-      ]),
-      // 放武器时只显示武器选项，避免"材质/预制件"干扰；其它工具下不显示武器选项
+      // ---- 二级选项（选中对应一级项时才展示）----
+      ...(group === 'shape' ? [shapeSubPanel()] : []),
+      ...(group === 'prefab' ? [prefabSubPanel()] : []),
+      ...(group === 'weapon' ? [weaponSubPanel()] : []),
+      // 新物体材质：与几何体/预制件配合使用；投放点无关，隐藏
       ...(store.tool === 'weapon'
-        ? [
-            h('h3', { class: 'ed-h3' }, ['武器掉落点（点击画布放置）']),
-            selectInput(
-              [
-                { value: RANDOM_WEAPON_SENTINEL, label: '随机武器（从全部武器抽）' },
-                ...listWeaponIds().map((id) => ({ value: id, label: `${getWeapon(id)?.name ?? id} (${id})` })),
-              ],
-              store.activeWeaponId ?? '',
-              (v) => {
-                store.activeWeaponId = v || null;
-                if (v) {
-                  store.message =
-                    v === RANDOM_WEAPON_SENTINEL
-                      ? '随机武器掉落点：点击画布放置'
-                      : '已选择武器，点击画布放置掉落点';
-                }
-                store.touch();
-              },
-              '选择武器…',
-            ),
-            h('p', { class: 'ed-help' }, ['放置后可在画布上拖动调整位置；右侧属性面板可配刷新规则。']),
-          ]
+        ? []
         : [
             h('h3', { class: 'ed-h3' }, ['新物体材质']),
             selectInput(
@@ -428,100 +637,39 @@ function renderLeft(): void {
                 store.touch();
               },
             ),
-            h('h3', { class: 'ed-h3' }, ['预制件库']),
-            h(
-              'div',
-              { class: 'ed-list' },
-              listPrefabs().map((p) =>
-                h(
-                  'button',
-                  {
-                    class: `ed-list-row ${store.activePrefabId === p.id ? 'active' : ''}`,
-                    onclick: () => {
-                      store.activePrefabId = p.id;
-                      store.tool = 'prefab';
-                      store.message = `已选择预制件 ${p.name}，点击画布放置`;
-                      store.touch();
-                    },
-                  },
-                  [h('span', { class: 'ed-list-main' }, [p.name]), h('span', { class: 'ed-list-sub' }, [p.id])],
-                ),
-              ),
-            ),
           ]),
-      h('h3', { class: 'ed-h3' }, [`对象列表（${(store.map.objects ?? []).length})`]),
-      buildObjectList(),
+      ...(store.tool === 'ref'
+        ? [
+            h('p', { class: 'ed-help' }, [
+              '点击画布放置（Shift+点击 = 朝左），放完自动切回选择工具；之后可点选/拖动/Delete 删除。只在编辑器里显示，不会写进地图 JSON。',
+            ]),
+          ]
+        : []),
+      h('p', { class: 'ed-help' }, ['对象列表与显示开关在左栏顶部切换。']),
     );
     return;
   }
 
   if (store.tab === 'prefab') {
+    // ---- 左栏分区：部件 / 预制件库 / 显示 ----
     leftEl.append(
-      h('h3', { class: 'ed-h3' }, ['预制件']),
-      h(
-        'div',
-        { class: 'ed-list' },
-        listPrefabs().map((p) =>
-          h('button', { class: 'ed-list-row', onclick: () => store.loadPrefab(p.id) }, [
-            h('span', { class: 'ed-list-main' }, [p.name]),
-            h('span', { class: 'ed-list-sub' }, [p.id]),
-          ]),
-        ),
-      ),
-      h('div', { class: 'ed-row' }, [button('新建预制件', () => store.newPrefab())]),
-      h('h3', { class: 'ed-h3' }, ['元信息']),
-      field('id（= 文件名）', textInput(store.prefabDraft.id, (v) => store.updatePrefabMeta({ id: v.trim() || 'new_prefab' }))),
-      field('名称', textInput(store.prefabDraft.name, (v) => store.updatePrefabMeta({ name: v }))),
-      field(
-        '物理形态',
-        selectInput(
-          [
-            { value: 'loose', label: '松件 loose（部件各自独立）' },
-            { value: 'compound', label: '焊接 compound（整体一个刚体）' },
-          ],
-          store.prefabDraft.bodyMode ?? 'loose',
-          (v) => store.updatePrefabMeta({ bodyMode: v as 'loose' | 'compound' }),
-        ),
-      ),
-      h('p', { class: 'ed-help' }, [
-        store.prefabDraft.bodyMode === 'compound'
-          ? '焊接：所有部件合并成一个刚体，整体被推/踢飞，整体掉耐久；物理属性取「面积最大部件」的材质。'
-          : '松件：每个部件独立刚体，可逐块破坏；动态时整体受力可能散架。',
-      ]),
-      h('h3', { class: 'ed-h3' }, [`部件（${store.prefabDraft.parts.length}）`]),
-      h(
-        'div',
-        { class: 'ed-list ed-list-scroll' },
-        store.prefabDraft.parts.map((p, i) =>
-          h(
-            'button',
-            {
-              class: `ed-list-row ${store.selection.includes(`part:${i}`) ? 'active' : ''}`,
-              onclick: () => store.select([`part:${i}`]),
-            },
-            [
-              h('span', { class: 'ed-list-main' }, [`#${i} ${p.type} · ${p.material}`]),
-              h('button', {
-                class: 'ed-mini-danger',
-                onclick: (e: Event) => {
-                  e.stopPropagation();
-                  store.removePart(i);
-                },
-              }, ['删']),
-            ],
-          ),
-        ),
-      ),
-      h('div', { class: 'ed-row' }, [
-        button('+ 矩形', () => store.addPart({ type: 'rect', x: -40, y: 0, w: 80, h: 40, material: store.activeMaterialId })),
-        button('+ 圆形', () => store.addPart({ type: 'circle', x: 0, y: 0, radius: 30, material: store.activeMaterialId })),
-        button('+ 多边形', () => store.addPart({ type: 'polygon', x: 0, y: 0, sides: 3, radius: 40, material: store.activeMaterialId })),
-      ]),
-      h('p', { class: 'ed-help' }, [
-        '画布操作：点部件=选中 · 拖动=移动 · 右下角绿点=改大小 · 上方蓝点=旋转（Shift 吸附 15°）。',
-        '拖动/缩放时按住 Shift = 临时取消网格吸附，可做精细调整。',
-      ]),
+      subTabs(PREFAB_LEFT_TABS, prefabLeftTab, (id) => {
+        prefabLeftTab = id;
+        editorStore.touch();
+      }),
     );
+
+    if (prefabLeftTab === 'library') {
+      leftEl.append(prefabLibraryPanel());
+      return;
+    }
+
+    if (prefabLeftTab === 'display') {
+      leftEl.append(prefabDisplayPanel());
+      return;
+    }
+
+    leftEl.append(prefabPartsPanel());
     return;
   }
 
@@ -553,171 +701,286 @@ function renderLeft(): void {
                   },
                 })
               : h('span', { class: 'ed-swatch', style: `background:${MATERIALS[id].colorHex}` }),
-            h('span', { class: 'ed-list-main' }, [MATERIALS[id].name]),
-            h('span', { class: 'ed-list-sub' }, [id]),
+            h('span', { class: 'ed-list-main' }, [
+              `${MATERIALS[id].damagePerSecond > 0 ? '⚠' : ''}${MATERIALS[id].glow ? '✦' : ''}${MATERIALS[id].explosive ? '✷' : ''} ${MATERIALS[id].name}`.trim(),
+            ]),
+            h('span', { class: 'ed-list-sub' }, [MATERIALS[id].damagePerSecond > 0 ? `${id} · ${MATERIALS[id].damagePerSecond}/s` : id]),
           ],
         ),
       ),
     ),
     h('div', { class: 'ed-row' }, [button('+ 新增材质', () => openNewMaterialModal())]),
+    h('p', { class: 'ed-help' }, [
+      '改完材质后：在画布上点选物体 → 右侧「▶ 测试（选中对象）」只看这个物体；「应用到选中对象」写进地图。',
+    ]),
     h('p', { class: 'ed-help' }, ['导出 materials.json 后，把贴图文件放到 public/textures/ 下即可在游戏中使用。']),
   );
 }
 
-function actionLeftPanel(): HTMLElement {
-  const action = actionStore.current;
-  const range = h('input', {
-    class: 'ed-slider',
-    type: 'range',
-    min: '0',
-    max: String(action.durationMs),
-    step: '1',
-    value: String(actionStore.timeMs),
-  }) as HTMLInputElement;
-  actionTimelineRange = range;
-  range.addEventListener('input', () => actionStore.setTime(Number(range.value)));
+/** 预制件页 · 部件：列表（可多选/删除）+ 新建部件 */
+function prefabPartsPanel(): HTMLElement {
+  const store = editorStore;
+  const parts = store.prefabDraft.parts;
+  const selected = store.selectedPartIndices();
 
-  const timeLabel = h('span', { class: 'ed-help', style: 'margin:0' }, [`${actionStore.timeMs} / ${action.durationMs} ms`]);
-  actionTimelineLabel = timeLabel;
+  const rows = parts.map((p, i) => {
+    const isSelected = selected.includes(i);
+    const size = p.type === 'rect'
+      ? `${Math.round(p.w)}×${Math.round(p.h)}`
+      : `r ${Math.round(p.radius ?? 0)}`;
+    return h(
+      'button',
+      {
+        class: `ed-list-row ${isSelected ? 'active' : ''}`,
+        onclick: (e: MouseEvent) => {
+          // Ctrl/Shift/Cmd+点击 = 加选（和画布框选保持同一套多选语义）
+          if (e.ctrlKey || e.metaKey || e.shiftKey) store.toggleSelect(`part:${i}`);
+          else store.select([`part:${i}`]);
+        },
+      },
+      [
+        h('span', { class: 'ed-list-order' }, [String(i + 1)]),
+        h('span', { class: 'ed-list-main' }, [`${p.type} · ${p.material}`]),
+        h('span', { class: 'ed-list-sub' }, [size]),
+        h('button', {
+          class: 'ed-mini-danger',
+          onclick: (e: Event) => {
+            e.stopPropagation();
+            store.removePart(i);
+          },
+        }, ['删']),
+      ],
+    );
+  });
 
   return h('div', {}, [
-    h('h3', { class: 'ed-h3' }, ['动作库']),
-    h('div', { class: 'ed-list ed-list-scroll' }, actionStore.actions.map((item) =>
-      h('button', { class: `ed-list-row ${item.id === actionStore.activeId ? 'active' : ''}`, onclick: () => actionStore.select(item.id) }, [
-        h('span', { class: 'ed-list-main' }, [item.name]),
-        h('span', { class: 'ed-list-sub' }, [
-          `${item.weapon === 'spear' ? '长矛' : item.weapon === 'dagger' ? '匕首' : item.weapon === 'lightsaber' ? '光刀' : '无武器'} · ${item.id}`,
-        ]),
-      ]),
-    )),
-    h('div', { class: 'ed-row' }, [
-      button('+ 新动作', () => actionStore.createAction()),
-      button('删除动作', () => actionStore.deleteCurrent(), 'danger'),
-    ]),
-    h('h3', { class: 'ed-h3' }, ['动作属性']),
-    field('id', textInput(action.id, (v) => actionStore.updateMeta({ id: v.trim() || action.id }))),
-    field('名称', textInput(action.name, (v) => actionStore.updateMeta({ name: v }))),
-    field('类型', selectInput(
-      [
-        { value: 'none', label: '无武器' },
-        { value: 'dagger', label: '匕首' },
-        { value: 'spear', label: '长矛' },
-        { value: 'lightsaber', label: '光刀' },
-      ],
-      action.weapon,
-      (v) => actionStore.updateMeta({ weapon: v as 'none' | 'dagger' | 'spear' | 'lightsaber' }),
-    )),
-    field('时长（毫秒）', numberInput(action.durationMs, (v) => actionStore.updateMeta({ durationMs: v }), 10)),
-    h('label', { class: 'ed-check' }, [checkbox(action.loop, (v) => actionStore.updateMeta({ loop: v })), '循环播放']),
-    h('h3', { class: 'ed-h3' }, ['时间轴']),
-    h('div', { class: 'ed-row ed-row-between' }, [
-      timeLabel,
-      button(actionStore.playing ? '暂停' : '播放', () => actionStore.togglePlaying(), 'primary'),
-    ]),
-    range,
-    h('div', { class: 'ed-row' }, [
-      button('添加/更新关键帧', () => actionStore.addOrUpdateKeyframe(), 'primary'),
-      button('删除当前帧', () => actionStore.deleteSelectedKeyframe(), 'danger'),
-    ]),
-    h('div', { class: 'ed-list ed-list-scroll' }, action.keyframes.map((frame, index) =>
-      h('button', {
-        class: `ed-list-row ${index === actionStore.selectedKeyframe ? 'active' : ''}`,
-        onclick: () => actionStore.selectKeyframe(index),
-      }, [
-        h('span', { class: 'ed-list-main' }, [`关键帧 ${index + 1}`]),
-        h('span', { class: 'ed-list-sub' }, [`${frame.timeMs} ms`]),
-      ]),
-    )),
+    h('h3', { class: 'ed-h3' }, [`部件（${parts.length}）`]),
     h('p', { class: 'ed-help' }, [
-      '画布中拖动蓝色关节控制点：手腕/肘部使用手臂 IK，脚部使用腿部 IK，髋部和肩部调整身体重心。',
-      '拖动会自动在当前时间创建关键帧；动作数据通过顶部“导出”下载。',
+      selected.length > 1
+        ? `已选 ${selected.length} 个：拖动其中一个会整体移动（相对位置保持不变）；右侧可批量改材质/复制/删除。`
+        : '点=选中 · Ctrl/Shift+点=加选 · 画布空白处拖动=框选 · Alt+拖动=任意处框选 · Del=删除',
+    ]),
+    h('div', { class: 'ed-list ed-list-fill' }, rows),
+    h('h3', { class: 'ed-h3' }, [`武器掉落点（${store.prefabWeaponSpawns().length}）`]),
+    h('div', { class: 'ed-list' }, store.prefabWeaponSpawns().map((w, i) =>
+      h('button', {
+        class: `ed-list-row ${store.selection.includes(`pweapon:${i}`) ? 'active' : ''}`,
+        onclick: () => store.select([`pweapon:${i}`]),
+      }, [
+        h('span', { class: 'ed-list-order' }, [String(i + 1)]),
+        h('span', { class: 'ed-list-main' }, [
+          (w.mode ?? 'fixed') === 'random' ? '随机武器' : (getWeapon(w.weapon ?? w.type ?? '')?.name ?? w.weapon ?? w.type ?? '未指定'),
+        ]),
+        h('span', { class: 'ed-list-sub' }, [
+          `${Math.round(w.x)}, ${Math.round(w.y)}${(w.respawnMs ?? 0) > 0 ? ' · 刷新' : ''}`,
+        ]),
+        h('button', {
+          class: 'ed-mini-danger',
+          onclick: (e: Event) => {
+            e.stopPropagation();
+            store.removePrefabWeaponSpawn(i);
+          },
+        }, ['删']),
+      ]),
+    )),
+    h('div', { class: 'ed-row' }, [
+      selectInput(
+        listWeaponIds().map((id) => ({ value: id, label: `${getWeapon(id)?.name ?? id} (${id})` })),
+        'ak47',
+        (v) => { prefabWeaponPick = v; },
+      ),
+      button('＋ 武器', () => {
+        store.addPrefabWeaponSpawn(prefabWeaponPick, store.prefabDropLocalPoint());
+      }),
+      button('＋ 随机', () => {
+        store.addPrefabWeaponSpawn('', store.prefabDropLocalPoint(), 'random');
+      }),
+    ]),
+    h('p', { class: 'ed-help' }, [
+      '武器点坐标是预制件局部坐标；放实例到地图时自动跟着旋转/翻转。加完后在画布上拖到合适位置。',
+    ]),
+
+    h('h3', { class: 'ed-h3' }, ['新建部件']),
+    h('p', { class: 'ed-help' }, ['按钮=加默认尺寸部件；也可按 R / C / P 选形状后在**画布上拖出**任意大小的部件。']),
+    h('div', { class: 'ed-chips' }, [
+      h('button', {
+        class: 'ed-chip',
+        onclick: () => store.addPart({ type: 'rect', x: -40, y: 0, w: 80, h: 40, material: store.activeMaterialId }),
+      }, ['+ 矩形']),
+      h('button', {
+        class: 'ed-chip',
+        onclick: () => store.addPart({ type: 'circle', x: 0, y: 0, radius: 30, material: store.activeMaterialId }),
+      }, ['+ 圆形']),
+      h('button', {
+        class: 'ed-chip',
+        onclick: () => store.addPart({ type: 'polygon', x: 0, y: 0, sides: 3, radius: 40, material: store.activeMaterialId }),
+      }, ['+ 多边形']),
+    ]),
+    h('p', { class: 'ed-help' }, [
+      `新部件材质取当前选中的「${store.activeMaterialId}」（在材质 Tab 里切换）。`,
+      '画布：拖动=移动 · 右下绿点=改大小 · 上方蓝点=旋转（Shift=不吸附/15°步进）。',
     ]),
   ]);
 }
 
-const ACTION_POSE_RANGES: Record<keyof ActionPose, { min: number; max: number; step: number }> = {
-  rootX: { min: -100, max: 100, step: 1 },
-  rootY: { min: -80, max: 80, step: 1 },
-  torsoTilt: { min: -60, max: 60, step: 1 },
-  torsoTwist: { min: -60, max: 60, step: 1 },
-  headTilt: { min: -60, max: 60, step: 1 },
-  headOffsetY: { min: -30, max: 30, step: 1 },
-  armFrontShoulder: { min: -180, max: 180, step: 1 },
-  armFrontElbow: { min: -120, max: 120, step: 1 },
-  armBackShoulder: { min: -180, max: 180, step: 1 },
-  armBackElbow: { min: -120, max: 120, step: 1 },
-  footLX: { min: -100, max: 100, step: 1 },
-  footLY: { min: 0, max: 110, step: 1 },
-  footRX: { min: -100, max: 100, step: 1 },
-  footRY: { min: 0, max: 110, step: 1 },
-  kneeLHintX: { min: -80, max: 80, step: 1 },
-  kneeLHintY: { min: 0, max: 90, step: 1 },
-  kneeRHintX: { min: -80, max: 80, step: 1 },
-  kneeRHintY: { min: 0, max: 90, step: 1 },
-};
+/** 预制件页 · 预制件库：载入已有 / 新建 / 元信息 */
+function prefabLibraryPanel(): HTMLElement {
+  const store = editorStore;
+  const prefabs = listPrefabs();
+  const draft = store.prefabDraft;
 
-function actionPoseField(label: string, pose: ActionPose, key: keyof ActionPose): HTMLElement {
-  const config = ACTION_POSE_RANGES[key];
-  const value = pose[key];
-  const slider = h('input', {
-    class: 'ed-slider',
-    type: 'range',
-    min: String(Math.min(config.min, value)),
-    max: String(Math.max(config.max, value)),
-    step: String(config.step),
-    value: String(value),
-  }) as HTMLInputElement;
-  const valueLabel = h('span', { class: 'ed-slider-val' }, [String(Math.round(value))]);
-  slider.addEventListener('input', () => {
-    const next = Number(slider.value);
-    valueLabel.textContent = String(Math.round(next));
-    actionStore.updateCurrentPoseLive({ [key]: next });
-  });
-  slider.addEventListener('change', () => actionStore.commit());
-  return field(label, h('div', { class: 'ed-pose-slider' }, [slider, valueLabel]));
+  return h('div', {}, [
+    h('h3', { class: 'ed-h3' }, [`已有预制件（${prefabs.length}）`]),
+    h('div', { class: 'ed-list ed-list-scroll' }, prefabs.map((p) =>
+      h(
+        'button',
+        {
+          class: `ed-list-row ${draft.id === p.id ? 'active' : ''}`,
+          onclick: () => store.loadPrefab(p.id),
+        },
+        [
+          h('span', { class: 'ed-list-main' }, [p.name]),
+          h('span', { class: 'ed-list-sub' }, [`${p.id} · ${p.parts.length} 件`]),
+        ],
+      ),
+    )),
+    h('div', { class: 'ed-row' }, [button('＋ 新建预制件', () => store.newPrefab())]),
+
+    h('h3', { class: 'ed-h3' }, ['当前预制件']),
+    field('id（= 文件名）', textInput(draft.id, (v) => store.updatePrefabMeta({ id: v.trim() || 'new_prefab' }))),
+    field('名称', textInput(draft.name, (v) => store.updatePrefabMeta({ name: v }))),
+    field(
+      '物理形态',
+      selectInput(
+        [
+          { value: 'loose', label: '松件 loose（部件各自独立）' },
+          { value: 'compound', label: '焊接 compound（整体一个刚体）' },
+        ],
+        draft.bodyMode ?? 'loose',
+        (v) => store.updatePrefabMeta({ bodyMode: v as 'loose' | 'compound' }),
+      ),
+    ),
+    h('p', { class: 'ed-help' }, [
+      draft.bodyMode === 'compound'
+        ? '焊接：所有部件合并成一个刚体，整体被推/踢飞，整体掉耐久；物理属性取「面积最大部件」的材质。'
+        : '松件：每个部件独立刚体，可逐块破坏；动态时整体受力可能散架。',
+    ]),
+    h('p', { class: 'ed-help' }, [
+      `当前 ${draft.parts.length} 个部件，坐标是相对预制件中心的局部坐标；放到地图时由锚点（中心）定位。`,
+    ]),
+  ]);
 }
 
-function actionRightPanel(): HTMLElement {
-  const action = actionStore.current;
-  const pose = actionStore.currentPose;
-  return h('div', { class: 'ed-action-panel' }, [
-    h('h3', { class: 'ed-h3' }, ['当前姿态']),
-    h('p', { class: 'ed-help' }, [`${action.name} · ${actionStore.timeMs} ms · 拖动控制点可直接编辑`]),
-    h('h3', { class: 'ed-h3' }, ['身体']),
-    h('div', { class: 'ed-grid2' }, [
-      actionPoseField('髋 X', pose, 'rootX'),
-      actionPoseField('髋 Y', pose, 'rootY'),
-      actionPoseField('躯干前倾', pose, 'torsoTilt'),
-      actionPoseField('躯干扭转', pose, 'torsoTwist'),
-      actionPoseField('头部倾角', pose, 'headTilt'),
-      actionPoseField('头部偏移', pose, 'headOffsetY'),
+/** 预制件页 · 显示：网格 / 参照物 / 视图 */
+function prefabDisplayPanel(): HTMLElement {
+  const store = editorStore;
+  return h('div', {}, [
+    h('h3', { class: 'ed-h3' }, ['网格']),
+    h('div', { class: 'ed-row' }, [
+      field('大小', numberInput(store.gridSize, (v) => { store.gridSize = Math.max(2, v); store.commit(); }, 2)),
     ]),
-    h('h3', { class: 'ed-h3' }, ['前臂 / 武器手']),
-    h('div', { class: 'ed-grid2' }, [
-      actionPoseField('肩角', pose, 'armFrontShoulder'),
-      actionPoseField('肘弯', pose, 'armFrontElbow'),
+    h('label', { class: 'ed-check' }, [
+      checkbox(store.snapToGrid, (v) => { store.snapToGrid = v; store.touch(); }),
+      '拖动吸附到网格',
     ]),
-    h('h3', { class: 'ed-h3' }, ['后臂 / 支撑手']),
-    h('div', { class: 'ed-grid2' }, [
-      actionPoseField('肩角', pose, 'armBackShoulder'),
-      actionPoseField('肘弯', pose, 'armBackElbow'),
+    h('label', { class: 'ed-check' }, [
+      checkbox(store.showGrid, (v) => { store.showGrid = v; store.touch(); }),
+      '显示网格（G）',
     ]),
-    h('h3', { class: 'ed-h3' }, ['脚部目标（相对髋部）']),
-    h('div', { class: 'ed-grid2' }, [
-      actionPoseField('左脚 X', pose, 'footLX'),
-      actionPoseField('左脚 Y', pose, 'footLY'),
-      actionPoseField('右脚 X', pose, 'footRX'),
-      actionPoseField('右脚 Y', pose, 'footRY'),
+    h('h3', { class: 'ed-h3' }, ['显示元素']),
+    h('label', { class: 'ed-check' }, [
+      checkbox(store.showPrefabRef, (v) => { store.showPrefabRef = v; scene()?.refreshEditor(); store.touch(); }),
+      '显示参照火柴人（≈111px 高，用来对比大小）',
     ]),
-    h('h3', { class: 'ed-h3' }, ['膝盖控制点（相对髋部）']),
-    h('div', { class: 'ed-grid2' }, [
-      actionPoseField('左膝 X', pose, 'kneeLHintX'),
-      actionPoseField('左膝 Y', pose, 'kneeLHintY'),
-      actionPoseField('右膝 X', pose, 'kneeRHintX'),
-      actionPoseField('右膝 Y', pose, 'kneeRHintY'),
+    h('h3', { class: 'ed-h3' }, ['视图']),
+    h('div', { class: 'ed-row' }, [button('适配视图（0）', () => scene()?.fitToMap())]),
+    h('p', { class: 'ed-help' }, [
+      '中键/右键/空格+左键 平移 · 滚轮缩放 · 0 适配 · 画布左侧灰火柴人是参照物（不进数据）。',
     ]),
-    h('p', { class: 'ed-help' }, ['拖动画布中的黄色膝盖点，或用滑块改变膝盖朝向；脚部位置和骨骼长度保持不变。']),
-    h('p', { class: 'ed-help' }, ['数值面板用于微调；骨骼长度固定，腿部会自动通过 IK 求解膝盖位置。']),
+  ]);
+}
+
+/** 二级选项：几何体 → 矩形 / 圆形 / 多边形 */
+function shapeSubPanel(): HTMLElement {
+  const store = editorStore;
+  return h('div', { class: 'ed-subgroup' }, [
+    h('div', { class: 'ed-subgroup-title' }, ['几何形状']),
+    h(
+      'div',
+      { class: 'ed-chips' },
+      SHAPE_TOOLS.map((t) =>
+        h(
+          'button',
+          {
+            class: `ed-chip ${store.tool === t.id ? 'active' : ''}`,
+            onclick: () => {
+              collapsedGroup = null;
+              setTool(t.id);
+            },
+          },
+          [t.label, h('span', { class: 'ed-key' }, [t.key])],
+        ),
+      ),
+    ),
+    h('p', { class: 'ed-help' }, ['在画布上拖动生成形状；材质取下方「新物体材质」。']),
+  ]);
+}
+
+/** 二级选项：放置预制件 → 预制件库 */
+function prefabSubPanel(): HTMLElement {
+  const store = editorStore;
+  const prefabs = listPrefabs();
+  return h('div', { class: 'ed-subgroup' }, [
+    h('div', { class: 'ed-subgroup-title' }, [`预制件库（${prefabs.length}）`]),
+    h(
+      'div',
+      { class: 'ed-list ed-list-scroll ed-list-short' },
+      prefabs.map((p) =>
+        h(
+          'button',
+          {
+            class: `ed-list-row ${store.activePrefabId === p.id ? 'active' : ''}`,
+            onclick: () => {
+              store.activePrefabId = p.id;
+              collapsedGroup = null;
+              setTool('prefab');
+              store.message = `已选择预制件 ${p.name}，点击画布放置`;
+            },
+          },
+          [h('span', { class: 'ed-list-main' }, [p.name]), h('span', { class: 'ed-list-sub' }, [p.id])],
+        ),
+      ),
+    ),
+    h('p', { class: 'ed-help' }, ['点击画布放置；放置后可拖动/旋转，右侧属性面板可改翻转与固定。']),
+  ]);
+}
+
+/** 二级选项：投放点 → 投放内容（武器 / 补给道具） */
+function weaponSubPanel(): HTMLElement {
+  const store = editorStore;
+  return h('div', { class: 'ed-subgroup' }, [
+    h('div', { class: 'ed-subgroup-title' }, ['投放内容']),
+    selectInput(
+      [
+        { value: RANDOM_WEAPON_SENTINEL, label: '随机武器（从全部武器抽）' },
+        ...listWeaponIds().map((id) => ({ value: id, label: `武器 · ${getWeapon(id)?.name ?? id} (${id})` })),
+        ...listItemIds().map((id) => ({ value: id, label: `道具 · ${getItem(id)?.name ?? id} (${id})` })),
+      ],
+      store.activeWeaponId ?? '',
+      (v) => {
+        store.activeWeaponId = v || null;
+        if (v) {
+          store.message =
+            v === RANDOM_WEAPON_SENTINEL ? '随机武器投放点：点击画布放置' : '已选择投放内容，点击画布放置';
+        }
+        store.touch();
+      },
+      '选择武器或道具…',
+    ),
+    h('p', { class: 'ed-help' }, [
+      '点击画布放置；右侧属性面板可配刷新间隔与次数、以及"从天而降"。',
+      '投放点可以放武器，也可以放医疗包/防弹衣（道具不占武器槽，触碰即用）。',
+    ]),
   ]);
 }
 
@@ -852,18 +1115,14 @@ function renderRight(): void {
   const store = editorStore;
   rightEl.replaceChildren();
 
-  if (store.tab === 'action') {
-    rightEl.append(actionRightPanel());
-    return;
-  }
-
   if (store.tab === 'map') {
     const spawnIndex = store.selectedSpawnIndex();
     const weaponIndex = store.selectedWeaponIndex();
     const jointIndex = store.selectedJointIndex();
     const obj = store.firstSelectedObject();
     const inst = store.firstSelectedInstance();
-    if (spawnIndex !== null) rightEl.append(spawnForm(spawnIndex));
+    if (store.selectedRefIndex !== null) rightEl.append(refFigureForm(store.selectedRefIndex));
+    else if (spawnIndex !== null) rightEl.append(spawnForm(spawnIndex));
     else if (weaponIndex !== null) rightEl.append(weaponSpawnForm(weaponIndex));
     else if (jointIndex !== null) rightEl.append(jointForm(jointIndex));
     else if (obj) rightEl.append(objectForm(obj));
@@ -874,25 +1133,89 @@ function renderRight(): void {
   }
 
   if (store.tab === 'prefab') {
-    const sel = store.selection[0];
-    if (sel?.startsWith('part:')) {
-      const index = Number(sel.slice(5));
-      rightEl.append(partForm(index));
+    const weaponIdx = store.selectedPrefabWeaponIndex();
+    if (weaponIdx !== null) {
+      rightEl.append(prefabWeaponSpawnForm(weaponIdx));
+      rightEl.append(issuesPanel('预制件校验', store.validateCurrent()));
+      return;
+    }
+    const partIdxs = store.selectedPartIndices();
+    if (partIdxs.length > 1) {
+      rightEl.append(partsMultiForm(partIdxs));
+    } else if (partIdxs.length === 1) {
+      // 单选：右栏分「部件 / 内部关节」两个 Tab
+      rightEl.append(prefabPartTabs(partIdxs[0]));
+      rightEl.append(issuesPanel('预制件校验', store.validateCurrent()));
+      return;
     } else {
       rightEl.append(
         h('h3', { class: 'ed-h3' }, ['预制件说明']),
         h('p', { class: 'ed-help' }, [
           '部件坐标是相对预制件中心的局部坐标。放置到地图时由锚点（中心）定位。',
           '左侧可载入已有预制件、增删部件；选中部件后可在此精确填写属性。',
+          '画布：拖空白处=框选（Alt+拖动=任意处框选）· Ctrl/Shift+点=加选 · 拖动选中项=整体移动。',
           '画布左侧的灰色火柴人 ≈ 111px 高，用来对比预制件实际大小。',
         ]),
       );
     }
+    rightEl.append(prefabJointsPanel());
     rightEl.append(issuesPanel('预制件校验', store.validateCurrent()));
     return;
   }
 
   rightEl.append(materialForm(), issuesPanel('材质校验', store.validateCurrent()));
+}
+
+/** 文字标签的九宫格选项 */
+const LABEL_ANCHORS: Array<{ value: ObjectLabelAnchor; label: string }> = [
+  { value: 'center', label: '居中' },
+  { value: 'top', label: '上' },
+  { value: 'bottom', label: '下' },
+  { value: 'left', label: '左' },
+  { value: 'right', label: '右' },
+  { value: 'topLeft', label: '左上' },
+  { value: 'topRight', label: '右上' },
+  { value: 'bottomLeft', label: '左下' },
+  { value: 'bottomRight', label: '右下' },
+];
+
+/**
+ * 物体文字的表单项（地图物体 / 预制件部件共用）。
+ *
+ * 文案清空 = 删除文字（不留空节点，避免 JSON 里堆垃圾）。
+ * 文案输入框失焦时补一次 touch：否则「填完文案 → 出现字号/颜色/位置」这步会被
+ * “正在输入时不重建面板”的保护挡住，得再点一下别处才刷新。
+ */
+function labelFields(
+  label: MapObjectLabel | undefined,
+  update: (label: MapObjectLabel | undefined) => void,
+): Child[] {
+  const cur = label;
+  const textInputEl = textInput(cur?.text ?? '', (v) => {
+    const text = v.trim();
+    update(text ? { ...cur, text } : undefined);
+  });
+  textInputEl.addEventListener('blur', () => editorStore.touch());
+
+  const rows: Child[] = [
+    h('h3', { class: 'ed-h3' }, ['文字（显示在物体上）']),
+    field('文案', textInputEl),
+  ];
+  if (cur && cur.text.trim()) {
+    const patchLabel = (p: Partial<MapObjectLabel>) => update({ ...cur, ...p });
+    rows.push(
+      h('div', { class: 'ed-grid2' }, [
+        field('字号（px）', numberInput(cur.size ?? 20, (v) => patchLabel({ size: Math.max(4, Math.round(v)) }), 1)),
+        field('颜色', colorInput(cur.color ?? '#ffffff', (v) => patchLabel({ color: v }))),
+      ]),
+      field('位置', selectInput(LABEL_ANCHORS, cur.anchor ?? 'center', (v) =>
+        patchLabel({ anchor: v as ObjectLabelAnchor }),
+      )),
+      h('p', { class: 'ed-help' }, ['纯视觉：不参与物理，随物体移动/旋转；自动加描边保证可读。']),
+      h('div', { class: 'ed-row' }, [button('删除文字', () => update(undefined), 'danger')]),
+    );
+  }
+  return rows;
 }
 
 function objectForm(obj: MapObject): HTMLElement {
@@ -991,9 +1314,10 @@ function objectForm(obj: MapObject): HTMLElement {
         ? colorInput(obj.color, (v) => patch({ color: v }))
         : h('span', { class: 'ed-help' }, [MATERIALS[obj.material].colorHex]),
     ]),
+    ...labelFields(obj.label, (label) => patch({ label })),
     ...(obj.type === 'rect'
       ? [
-          h('h3', { class: 'ed-h3' }, ['贴图（仅矩形）']),
+          h('h3', { class: 'ed-h3' }, ['贴图（所有形状）']),
           field('贴图路径', textInput(obj.texture ?? '', (v) => patch({ texture: v.trim() || undefined }))),
           h('p', { class: 'ed-help' }, [
             `留空 = 跟随材质贴图（当前材质：${MATERIALS[obj.material].texture ?? '无'}）。`,
@@ -1010,7 +1334,8 @@ function objectForm(obj: MapObject): HTMLElement {
         ]
       : []),
     h('div', { class: 'ed-row' }, [
-      button('复制', () => store.duplicateSelected()),
+      button('复制（Ctrl+C）', () => store.copySelection()),
+      button('粘贴（Ctrl+V）', () => store.pasteClipboard()),
       button('删除', () => store.deleteSelected(), 'danger'),
     ]),
   );
@@ -1034,6 +1359,26 @@ function instanceForm(): HTMLElement {
     h('p', { class: 'ed-help' }, [
       `ref: ${inst.ref} · 形态: ${listPrefabs().find((p) => p.id === inst.ref)?.bodyMode === 'compound' ? '焊接' : '松件'}`,
     ]),
+    ...(() => {
+      // 实例包含的部件（只读）：选中实例时也能看到"这个预制件里有什么"，
+      // 不用切回预制件 Tab 才知道尺寸/材质
+      const prefab = listPrefabs().find((p) => p.id === inst.ref);
+      if (!prefab) return [];
+      const parts = prefab.parts ?? [];
+      return [
+        h('h3', { class: 'ed-h3' }, [`包含的部件（${parts.length}）`]),
+        h('div', { class: 'ed-list ed-list-scroll' }, parts.map((part, i) => {
+          const size = part.type === 'rect'
+            ? `${Math.round(part.w)}×${Math.round(part.h)}`
+            : `r ${Math.round(part.radius ?? 0)}`;
+          return h('div', { class: 'ed-list-row', style: 'cursor:default' }, [
+            h('span', { class: 'ed-list-main' }, [`#${i} ${part.type} · ${part.material}`]),
+            h('span', { class: 'ed-list-sub' }, [size]),
+          ]);
+        })),
+        h('p', { class: 'ed-help' }, ['只读：要改部件请切到「预制件」Tab（地图里所有该预制件的实例一起变）。']),
+      ];
+    })(),
     h('div', { class: 'ed-grid2' }, [
       field('x（中心）', numberInput(inst.x, (v) => store.patchSelected({ x: v }))),
       field('y（中心）', numberInput(inst.y, (v) => store.patchSelected({ y: v }))),
@@ -1053,8 +1398,37 @@ function instanceForm(): HTMLElement {
       (v) => store.patchSelected({ fixed: v }),
     )),
     h('div', { class: 'ed-row' }, [
-      button('复制', () => store.duplicateSelected()),
+      button('复制（Ctrl+C）', () => store.copySelection()),
+      button('粘贴（Ctrl+V）', () => store.pasteClipboard()),
       button('删除', () => store.deleteSelected(), 'danger'),
+    ]),
+  ]);
+}
+
+/** 参考火柴人属性（编辑器标注，不写入地图数据） */
+function refFigureForm(index: number): HTMLElement {
+  const store = editorStore;
+  const fig = store.refFigures[index];
+  if (!fig) return h('div', {}, ['参考火柴人已不存在']);
+  return h('div', {}, [
+    h('h3', { class: 'ed-h3' }, [`参考火柴人 #${index + 1}`]),
+    h('p', { class: 'ed-help' }, [
+      '只用于对照尺寸：不会写入地图 JSON，也不参与物理/碰撞。画布上可直接拖动。',
+    ]),
+    h('div', { class: 'ed-grid2' }, [
+      field('x', numberInput(fig.x, (v) => { store.moveRefFigure(index, v, fig.y); })),
+      field('y', numberInput(fig.y, (v) => { store.moveRefFigure(index, fig.x, v); })),
+    ]),
+    h('label', { class: 'ed-check' }, [
+      checkbox(fig.facing === -1, (v) => {
+        fig.facing = v ? -1 : 1;
+        store.touch();
+      }),
+      '朝左',
+    ]),
+    h('div', { class: 'ed-row' }, [
+      button('删除（Delete）', () => store.deleteRefFigure(index), 'danger'),
+      button(`清除全部（${store.refFigures.length}）`, () => store.clearRefFigures()),
     ]),
   ]);
 }
@@ -1082,16 +1456,44 @@ function jointForm(index: number): HTMLElement {
   const store = editorStore;
   const j = store.joints()[index];
   if (!j) return h('div');
+  const candidates = store.jointCandidates();
+  // 当前引用的 id 可能已经不在列表里（物体被删）——也补进去，避免下拉“跳回第一个”
+  const withCurrent = (id: string | undefined, extra: Array<{ value: string; label: string }>) => {
+    if (!id || extra.some((o) => o.value === id)) return extra;
+    return [...extra, { value: id, label: `⚠ ${id}（已不存在）` }];
+  };
+  const bodyAOptions = withCurrent(
+    j.bodyA,
+    candidates.map((c) => ({ value: c.id, label: c.label })),
+  );
+  const bodyBOptions = withCurrent(
+    j.bodyB,
+    candidates.map((c) => ({ value: c.id, label: c.label })),
+  );
   return h('div', {}, [
     h('h3', { class: 'ed-h3' }, [`关节 #${index + 1}（${j.type}）`]),
     h('p', { class: 'ed-help' }, [
-      `主体 bodyA: ${j.bodyA} · 另一端: ${j.bodyB ?? 'world（固定在世界锚点）'}`,
-      ' 画布上可直接拖动粉色锚点；也可在此精确填写。',
+      '销轴连接：两端可以绕锚点自由旋转（吊链 / 跷跷板 / 三节棍）。',
+      '“→世界”表示固定在世界锚点上（像挂在天花板上）。',
+    ]),
+    field('主体 A（bodyA）', selectInput(bodyAOptions, j.bodyA, (v) => store.updateJoint(index, { bodyA: v }))),
+    field(
+      '另一端（bodyB）',
+      selectInput(
+        [{ value: 'world', label: 'world（固定在世界锚点）' }, ...bodyBOptions],
+        j.bodyB ?? 'world',
+        (v) => store.updateJoint(index, { bodyB: v }),
+      ),
+    ),
+    h('label', { class: 'ed-check' }, [
+      checkbox(j.noCollide === true, (v) => store.updateJoint(index, { noCollide: v })),
+      '两端互不碰撞（链条/三节棍必开，否则旋转时端面会互顶）',
     ]),
     h('div', { class: 'ed-grid2' }, [
       field('锚点 x', numberInput(j.anchor.x, (v) => store.updateJoint(index, { anchor: { x: v, y: j.anchor.y } }))),
       field('锚点 y', numberInput(j.anchor.y, (v) => store.updateJoint(index, { anchor: { x: j.anchor.x, y: v } }))),
     ]),
+    h('p', { class: 'ed-help' }, ['画布上可直接拖动粉色锚点；也可在此精确填写。']),
     h('div', { class: 'ed-row' }, [
       button('删除该关节', () => store.removeJoint(index), 'danger'),
     ]),
@@ -1104,17 +1506,18 @@ function weaponSpawnForm(index: number): HTMLElement {
   const w = store.weaponSpawns()[index];
   if (!w) return h('div');
   const mode = w.mode ?? 'fixed';
-  const fixedId = w.weapon ?? w.type ?? '';
+  const fixedId = w.item ?? w.weapon ?? w.type ?? '';
+  const fixedIsItem = !!getItem(fixedId) && !getWeapon(fixedId);
 
   return h('div', {}, [
-    h('h3', { class: 'ed-h3' }, [`武器掉落点 #${index + 1}`]),
+    h('h3', { class: 'ed-h3' }, [`投放点 #${index + 1}`]),
     h('p', { class: 'ed-help' }, [
-      '开局在这里刷一把武器（从空中落下）；可配置被捡走后是否重新刷新。画布上可拖动。',
+      '开局在这里刷一份内容（武器，或医疗包/防弹衣）；可配置被捡走后是否重新刷新。画布上可拖动。',
     ]),
     field('模式', selectInput(
       [
-        { value: 'fixed', label: '固定武器（每次刷同一把）' },
-        { value: 'random', label: '随机武器（从候选池抽）' },
+        { value: 'fixed', label: '固定内容（每次刷同一个）' },
+        { value: 'random', label: '随机（从候选池抽）' },
       ],
       mode,
       (v) => store.updateWeaponSpawn(index, { mode: v as 'fixed' | 'random' }),
@@ -1122,10 +1525,17 @@ function weaponSpawnForm(index: number): HTMLElement {
 
     ...(mode === 'fixed'
       ? [
-          field('武器', selectInput(
-            listWeaponIds().map((id) => ({ value: id, label: `${getWeapon(id)?.name ?? id} (${id})` })),
+          field('投放内容', selectInput(
+            [
+              ...listWeaponIds().map((id) => ({ value: id, label: `武器 · ${getWeapon(id)?.name ?? id} (${id})` })),
+              ...listItemIds().map((id) => ({ value: id, label: `道具 · ${getItem(id)?.name ?? id} (${id})` })),
+            ],
             fixedId,
-            (v) => store.updateWeaponSpawn(index, { weapon: v }),
+            (v) => {
+              // 道具写 item、武器写 weapon：两种字段分开存，语义更清楚
+              const isItem = !!getItem(v) && !getWeapon(v);
+              store.updateWeaponSpawn(index, isItem ? { item: v, weapon: undefined } : { item: undefined, weapon: v });
+            },
           )),
         ]
       : [
@@ -1137,7 +1547,8 @@ function weaponSpawnForm(index: number): HTMLElement {
             store.updateWeaponSpawn(index, { pool });
           })),
           h('p', { class: 'ed-help' }, [
-            `可用：${listWeaponIds().join(', ')}`,
+            `可用武器：${listWeaponIds().join(', ')}`,
+            `可用道具：${listItemIds().join(', ')}（可混着写，例：ak47, medkit）`,
           ]),
         ]),
 
@@ -1150,6 +1561,15 @@ function weaponSpawnForm(index: number): HTMLElement {
       '间隔 >0 且次数留空（=无限）→ 被捡走后按间隔一直补。',
     ]),
 
+    h('label', { class: 'ed-check' }, [
+      checkbox((w as { fromSky?: boolean }).fromSky === true, (v) => store.updateWeaponSpawn(index, { fromSky: v })),
+      '从天而降（默认关闭 = 直接出现在该点）',
+    ]),
+    h('p', { class: 'ed-help' }, [
+      '默认原地生成：内容就出现在你放的这个点上（放进"门"里、掩体里都不会被屋顶挡住）。',
+      '勾选后改为从它上方 240px 落下 —— 上方有屋顶/门框时会停在屋顶上。',
+      fixedIsItem ? '当前内容：补给道具（不占武器槽，触碰即用）。' : '当前内容：武器。',
+    ]),
     h('p', { class: 'ed-help' }, ['位置：直接在画布上拖动该掉落点即可（无需手动填坐标）。']),
     h('div', { class: 'ed-row' }, [
       button('删除该掉落点', () => store.removeWeaponSpawn(index), 'danger'),
@@ -1185,8 +1605,9 @@ function mapForm(): HTMLElement {
     ]),
     h('h3', { class: 'ed-h3' }, ['自动空投（默认关闭）']),
     h('p', { class: 'ed-help' }, [
-      '关闭时：地图只会从「武器掉落点」产出武器（推荐，可控）。',
-      '开启后：像以前那样从天上随机掉武器、维持指定数量；投放 x 范围用 weaponDropZones。',
+      '关闭时：天上什么都不掉 —— 武器和药包/护盾都只来自「投放点」（和 items[] 固定点）。',
+      '开启后：从天上随机掉武器（维持数量），并同时按 items.json 的 maintain 补药包/护盾。',
+      '投放 x 范围用「空投区域」。',
     ]),
     h('label', { class: 'ed-check' }, [
       checkbox(map.autoDrop?.enabled === true, (v) => {
@@ -1228,9 +1649,251 @@ function mapForm(): HTMLElement {
       ),
     ),
     h('h3', { class: 'ed-h3' }, [`空投区域（${(map.weaponDropZones ?? []).length}）`]),
-    h('p', { class: 'ed-help' }, ['预留字段（M4 武器掉落使用），可在 JSON 中编辑 x/y/w/h。']),
+    h('p', { class: 'ed-help' }, [
+      map.autoDrop?.enabled === true
+        ? '生效中：随机空投的落点 x 会落在下面这些区间里（画布上显示为带箭头的黄线）。'
+        : '未生效：只有勾选上面的「启用全局自动空投」才会用到这些区域，画布上也不再显示。',
+      '只用到 x 与 w（掉落高度固定从屏幕上方落下），y/h 仅作摆放参考；数值在 JSON 的 weaponDropZones 里改。',
+    ]),
+    ...(map.weaponDropZones ?? []).map((z, i) =>
+      h('div', { class: 'ed-list-row', style: 'cursor:default' }, [
+        h('span', { class: 'ed-list-main' }, [`#${i + 1} x ${Math.round(z.x)} – ${Math.round(z.x + z.w)}`]),
+        h('span', { class: 'ed-list-sub' }, [`y ${Math.round(z.y)} h ${Math.round(z.h)}`]),
+      ]),
+    ),
     h('div', { class: 'ed-row' }, [button('重置为默认地图', () => store.resetToDefault(), 'danger')]),
   ]);
+}
+
+/** 预制件右栏的两个 Tab：部件属性 / 内部关节 */
+type PrefabRightTab = 'part' | 'joints';
+let prefabRightTab: PrefabRightTab = 'part';
+
+/** 单个部件选中时的右栏：Tab 切换「部件属性」与「内部关节」 */
+function prefabPartTabs(index: number): HTMLElement {
+  const tabs = subTabs<PrefabRightTab>(
+    [
+      { id: 'part', label: '部件' },
+      { id: 'joints', label: '内部关节' },
+    ],
+    prefabRightTab,
+    (id) => {
+      if (prefabRightTab === id) return;
+      prefabRightTab = id;
+      renderRight();
+    },
+  );
+  return h('div', {}, [
+    tabs,
+    prefabRightTab === 'joints' ? prefabJointsPanel(index) : partForm(index),
+  ]);
+}
+
+/**
+ * 内部关节面板。
+ * @param focus 传入部件下标时只显示该部件相关的关节，并提供「连接到…」的快捷建关节入口；
+ *              不传则显示全部（多选/未选中时用）。
+ */
+/**
+ * 预制件自带的武器掉落点属性面板。
+ * 字段与地图 Tab 的「武器掉落点」完全一致，只有坐标是**预制件局部坐标**。
+ */
+function prefabWeaponSpawnForm(index: number): HTMLElement {
+  const store = editorStore;
+  const w = store.prefabWeaponSpawns()[index];
+  if (!w) return h('div');
+  const mode = w.mode ?? 'fixed';
+  const fixedId = w.weapon ?? w.type ?? '';
+
+  return h('div', {}, [
+    h('h3', { class: 'ed-h3' }, [`武器掉落点 #${index + 1}（预制件）`]),
+    h('p', { class: 'ed-help' }, [
+      '预制件里带的枪位：每放一个实例，就会在对应位置刷一把武器（坐标是预制件局部坐标，跟随实例旋转/翻转）。',
+    ]),
+    field('模式', selectInput(
+      [
+        { value: 'fixed', label: '固定武器（每次刷同一把）' },
+        { value: 'random', label: '随机武器（从候选池抽）' },
+      ],
+      mode,
+      (v) => store.updatePrefabWeaponSpawn(index, { mode: v as 'fixed' | 'random' }),
+    )),
+    ...(mode === 'fixed'
+      ? [
+          field('武器', selectInput(
+            listWeaponIds().map((id) => ({ value: id, label: `${getWeapon(id)?.name ?? id} (${id})` })),
+            fixedId,
+            (v) => store.updatePrefabWeaponSpawn(index, { weapon: v }),
+          )),
+        ]
+      : [
+          field('候选池（逗号分隔，留空 = 全部武器）', textInput((w.pool ?? []).join(', '), (v) => {
+            const pool = v.split(',').map((x) => x.trim()).filter(Boolean);
+            store.updatePrefabWeaponSpawn(index, { pool });
+          })),
+          h('p', { class: 'ed-help' }, [`可用：${listWeaponIds().join(', ')}`]),
+        ]),
+    h('div', { class: 'ed-grid2' }, [
+      field('刷新间隔（ms，0=不刷新）', numberInput(w.respawnMs ?? 0, (v) => store.updatePrefabWeaponSpawn(index, { respawnMs: Math.max(0, Math.round(v)) }))),
+      field('最多刷新次数（0=只刷一次）', numberInput(w.maxRespawns ?? 0, (v) => store.updatePrefabWeaponSpawn(index, { maxRespawns: Math.max(0, Math.round(v)) }))),
+    ]),
+    h('div', { class: 'ed-grid2' }, [
+      field('局部 x', numberInput(w.x, (v) => store.updatePrefabWeaponSpawn(index, { x: v }))),
+      field('局部 y', numberInput(w.y, (v) => store.updatePrefabWeaponSpawn(index, { y: v }))),
+    ]),
+    h('label', { class: 'ed-check' }, [
+      checkbox((w as { fromSky?: boolean }).fromSky === true, (v) => store.updatePrefabWeaponSpawn(index, { fromSky: v })),
+      '从天而降（默认关闭 = 直接出现在该点）',
+    ]),
+    h('p', { class: 'ed-help' }, ['位置：画布上直接拖动这个枪位即可；也可以在上面填局部坐标。']),
+    h('div', { class: 'ed-row' }, [
+      button('删除该掉落点', () => store.removePrefabWeaponSpawn(index), 'danger'),
+    ]),
+  ]);
+}
+
+function prefabJointsPanel(focus?: number): HTMLElement {
+  const store = editorStore;
+  const parts = store.prefabDraft.parts;
+  const all = store.prefabJoints();
+  const partOptions = parts.map((p, i) => ({ value: String(i), label: `#${i} ${p.material}` }));
+  const selected = store.selectedPartIndices();
+
+  const involved = all
+    .map((j, k) => ({ j, k }))
+    .filter(({ j }) => focus === undefined || j.bodyA === focus || j.bodyB === focus);
+
+  /** 两件 → 中心连线中点（链节叠放时正好是接缝）；单件 → 该件上边中点 */
+  const anchorFor = (idxs: number[]): { x: number; y: number } | null => {
+    if (idxs.length === 2) {
+      const a = parts[idxs[0]];
+      const b = parts[idxs[1]];
+      if (!a || !b) return null;
+      const ca = objectCenter(a);
+      const cb = objectCenter(b);
+      return { x: (ca.x + cb.x) / 2, y: (ca.y + cb.y) / 2 };
+    }
+    if (idxs.length === 1) {
+      const part = parts[idxs[0]];
+      if (!part) return null;
+      const b = objectBounds(part);
+      return { x: (b.minX + b.maxX) / 2, y: b.minY };
+    }
+    return null;
+  };
+
+  const rows: Child[] = [
+    h('h3', { class: 'ed-h3' }, [
+      focus === undefined ? `内部关节（${all.length}）` : `内部关节（该部件 ${involved.length} / 共 ${all.length}）`,
+    ]),
+    h('p', { class: 'ed-help' }, [
+      '销轴连接：两端绕锚点自由旋转（吊链 / 三节棍 / 吊平台）。锚点是局部坐标，实例化到地图时自动跟着旋转/平移。',
+      '画布上：鼠标移到粉色十字会高亮这条关节并露出两个端点，把端点拖到别的部件上就改连接（拖到空白 = 改成 world）。',
+    ]),
+  ];
+
+  // ---- 选中单个部件时：直接在这里连一条新关节 ----
+  if (focus !== undefined) {
+    const others = partOptions.filter((o) => o.value !== String(focus));
+    const target = h('select', { class: 'ed-input' }, [
+      h('option', { value: 'world' }, ['world（固定在世界锚点）']),
+      ...others.map((o) => h('option', { value: o.value }, [o.label])),
+    ]) as HTMLSelectElement;
+    rows.push(
+      h('div', { class: 'ed-row' }, [
+        h('span', { class: 'ed-help', style: 'margin:0' }, [`#${focus} →`]),
+        target,
+        button('＋ 连接', () => {
+          const value = target.value;
+          if (value === 'world') {
+            const anchor = anchorFor([focus]);
+            if (!anchor) return;
+            store.addPrefabJoint(focus, anchor);
+            store.message = `已建关节 #${focus} → world（锚点取该件上边中点）`;
+            return;
+          }
+          const other = Number(value);
+          const anchor = anchorFor([focus, other]);
+          if (!anchor) return;
+          store.addPrefabJoint(focus, anchor, other);
+          store.message = `已建关节 #${focus} → #${other}（锚点取两件中心连线中点）`;
+        }, 'primary'),
+      ]),
+      h('p', { class: 'ed-help' }, [
+        '叠在一起的链节：中心距 = 节长，锚点就落在接缝上；吊链/三节棍保留「两端不互撞」。',
+      ]),
+    );
+  }
+
+  if (involved.length === 0) {
+    rows.push(
+      h('p', { class: 'ed-help' }, [
+        focus === undefined ? '还没有内部关节。' : `部件 #${focus} 还没有关节——用上面的「＋ 连接」加一条。`,
+      ]),
+    );
+  }
+
+  involved.forEach(({ j, k }) => {
+    rows.push(
+      h('div', { class: 'ed-joint-card' }, [
+        h('div', { class: 'ed-row ed-row-between' }, [
+          h('span', { class: 'ed-help', style: 'margin:0' }, [`#${k + 1}`]),
+          button('删除', () => editorStore.removePrefabJoint(k), 'danger'),
+        ]),
+        field('A', selectInput(partOptions, String(j.bodyA), (v) => editorStore.updatePrefabJoint(k, { bodyA: Number(v) }))),
+        field('B', selectInput(
+          [{ value: 'world', label: 'world（固定在世界锚点）' }, ...partOptions],
+          j.bodyB === undefined ? 'world' : String(j.bodyB),
+          (v) => editorStore.updatePrefabJoint(k, { bodyB: v === 'world' ? 'world' : Number(v) }),
+        )),
+        h('div', { class: 'ed-grid2' }, [
+          field('锚点 x', numberInput(j.anchor.x, (v) => editorStore.updatePrefabJoint(k, { anchor: { x: v, y: j.anchor.y } }))),
+          field('锚点 y', numberInput(j.anchor.y, (v) => editorStore.updatePrefabJoint(k, { anchor: { x: j.anchor.x, y: v } }))),
+        ]),
+        h('label', { class: 'ed-check' }, [
+          checkbox(j.noCollide === true, (v) => editorStore.updatePrefabJoint(k, { noCollide: v })),
+          '两端不互撞',
+        ]),
+      ]),
+    );
+  });
+
+  // ---- 未指定 focus（多选/未选中）：保留"选中 2 件一起连"的批量入口 ----
+  if (focus === undefined) {
+    rows.push(
+      h('div', { class: 'ed-row' }, [
+        button(
+          selected.length === 2 ? `＋ 连选中的 2 件（#${selected[0]} → #${selected[1]}）` : '＋ 连选中的 2 件（先选两件）',
+          () => {
+            const anchor = anchorFor(selected);
+            if (selected.length !== 2 || !anchor) {
+              store.message = '先在画布上选中 2 个部件（Ctrl/Shift+点击加选）再建关节';
+              store.touch();
+              return;
+            }
+            store.addPrefabJoint(selected[0], anchor, selected[1]);
+            store.message = `已建关节 #${selected[0]} → #${selected[1]}（锚点取两件中心连线的中点，可在上方微调）`;
+          },
+          'primary',
+        ),
+        button(
+          selected.length === 1 ? `＋ 选中件 #${selected[0]} ↔ 世界` : '＋ 选中件 ↔ 世界',
+          () => {
+            const anchor = anchorFor(selected);
+            if (selected.length !== 1 || !anchor) {
+              store.message = '先选中 1 个部件再建“→世界”关节';
+              store.touch();
+              return;
+            }
+            store.addPrefabJoint(selected[0], anchor);
+            store.message = `已建关节 #${selected[0]} → world（锚点取该件上边中点）`;
+          },
+        ),
+      ]),
+    );
+  }
+
+  return h('div', {}, rows);
 }
 
 function partForm(index: number): HTMLElement {
@@ -1273,10 +1936,76 @@ function partForm(index: number): HTMLElement {
     );
   }
   rows.push(
+    ...labelFields(part.label, (label) => store.updatePart(index, { label })),
     field('旋转角（度）', numberInput(part.angle ?? 0, (v) => store.updatePart(index, { angle: v }))),
-    h('div', { class: 'ed-row' }, [button('删除部件', () => store.removePart(index), 'danger')]),
+    h('div', { class: 'ed-row' }, [
+      button('删除部件', () => store.removePart(index), 'danger'),
+    ]),
   );
   return h('div', {}, rows);
+}
+
+/** 预制件 Tab：多选部件（框选/Ctrl+点击）后的批量面板 */
+function partsMultiForm(indices: number[]): HTMLElement {
+  const store = editorStore;
+  const parts = indices.map((i) => store.prefabDraft.parts[i]).filter(Boolean);
+  const materialsUsed = [...new Set(parts.map((p) => p.material))];
+  return h('div', {}, [
+    h('h3', { class: 'ed-h3' }, [`已选 ${indices.length} 个部件`]),
+    h('p', { class: 'ed-help' }, [
+      '框选：空白处按住拖动（部件太大不好找空地时，用 Alt+拖动 可从任意位置起手）· 加选：Ctrl/Shift+点击 · 拖动其中一个会带着全部一起移动。',
+    ]),
+    h('div', { class: 'ed-list ed-list-scroll' }, indices.map((i) => {
+      const part = store.prefabDraft.parts[i];
+      if (!part) return null;
+      const size = part.type === 'rect'
+        ? `${Math.round(part.w)}×${Math.round(part.h)}`
+        : `r ${Math.round(part.radius ?? 0)}`;
+      return h('div', { class: 'ed-list-row', style: 'cursor:default' }, [
+        h('span', { class: 'ed-list-main' }, [`#${i} ${part.type} · ${part.material}`]),
+        h('span', { class: 'ed-list-sub' }, [size]),
+      ]);
+    })),
+    field('批量改材质', selectInput(
+      [
+        { value: '', label: `保持原样（${materialsUsed.join(' / ') || '—'}）` },
+        ...materialIds().map((id) => ({ value: id, label: `${MATERIALS[id].name} (${id})` })),
+      ],
+      '',
+      (v) => {
+        if (!v) return;
+        for (const i of indices) store.patchPartLive(i, { material: v });
+        store.commit();
+      },
+    )),
+    h('div', { class: 'ed-row' }, [
+      button('复制（Ctrl+C）', () => store.copySelection()),
+      button('粘贴（Ctrl+V）', () => store.pasteClipboard()),
+      button(`删除 ${indices.length} 个`, () => store.deleteSelected(), 'danger'),
+    ]),
+  ]);
+}
+
+/** 当前材质的发光配置 → 可直接写回 JSON 的形态 */
+function glowJson(mat: { glow: { colorHex: string; brightness: number; radius: number; mode: string } | null }) {
+  const g = mat.glow;
+  return {
+    color: g?.colorHex ?? '#ffffff',
+    brightness: g?.brightness ?? 1,
+    radius: g?.radius ?? 18,
+    mode: g?.mode ?? 'constant',
+  };
+}
+
+/** 当前材质的爆炸配置 → 可直接写回 JSON 的形态 */
+function explosiveJson(mat: {
+  explosive: { damage: number; radius: number; knockback: number } | null;
+}) {
+  return {
+    damage: mat.explosive?.damage ?? 40,
+    radius: mat.explosive?.radius ?? 120,
+    knockback: mat.explosive?.knockback ?? 12,
+  };
 }
 
 function materialForm(): HTMLElement {
@@ -1285,6 +2014,7 @@ function materialForm(): HTMLElement {
   if (!mat) return h('div', {}, ['未选择材质']);
   const upd = (patch: Record<string, unknown>) => store.updateMaterial(mat.id, patch as never);
   const usage = store.materialUsage(mat.id);
+  const selectionCount = store.selection.filter((id) => !/^(spawn|weapon|joint|part):/.test(id)).length;
 
   // 透明度滑杆（带实时数值显示）
   const opacityVal = h('span', { class: 'ed-slider-val' }, [mat.opacity.toFixed(2)]);
@@ -1339,6 +2069,67 @@ function materialForm(): HTMLElement {
       opacityVal,
     ]),
 
+    // ---- 发光 ----
+    h('h3', { class: 'ed-h3' }, ['发光']),
+    h('label', { class: 'ed-check' }, [
+      checkbox(mat.glow !== null, (v) => {
+        upd(
+          v
+            ? { glow: { color: mat.colorHex, brightness: 1, radius: 18, mode: 'constant' } }
+            : { glow: undefined },
+        );
+      }),
+      '启用发光（在物体背后叠加光晕）',
+    ]),
+    ...(mat.glow
+      ? [
+          h('div', { class: 'ed-row' }, [
+            h('span', { class: 'ed-swatch big', style: `background:${mat.glow.colorHex}` }),
+            colorInput(mat.glow.colorHex, (v) => upd({ glow: { ...glowJson(mat), color: v } })),
+            h('span', { class: 'ed-help', style: 'margin:0' }, ['光晕颜色']),
+          ]),
+          h('div', { class: 'ed-grid2' }, [
+            field('亮度（0~3）', numberInput(mat.glow.brightness, (v) => upd({ glow: { ...glowJson(mat), brightness: Math.max(0, Math.min(3, v)) } }), 0.1)),
+            field('范围（px）', numberInput(mat.glow.radius, (v) => upd({ glow: { ...glowJson(mat), radius: Math.max(1, Math.round(v)) } }), 2)),
+          ]),
+          field('发光方式', selectInput(
+            [
+              { value: 'constant', label: '常亮' },
+              { value: 'pulse', label: '呼吸（缓慢明暗）' },
+              { value: 'flicker', label: '闪烁（不规则闪动）' },
+            ],
+            mat.glow.mode,
+            (v) => upd({ glow: { ...glowJson(mat), mode: v } }),
+          )),
+          h('p', { class: 'ed-help' }, [
+            '发光是叠加混合：亮度越高越亮（>1 会发光过曝），范围是光晕向外扩多远。',
+            '呼吸/闪烁是纯表现，各端相位由物体 id 决定 → 联机时两端一致。',
+          ]),
+        ]
+      : []),
+
+    // ---- 爆炸 ----
+    h('h3', { class: 'ed-h3' }, ['爆炸（被破坏时）']),
+    h('label', { class: 'ed-check' }, [
+      checkbox(mat.explosive !== null, (v) => {
+        upd(v ? { explosive: { damage: 40, radius: 120 } } : { explosive: undefined });
+      }),
+      '启用爆炸（被破坏时原地爆炸，无弹片）',
+    ]),
+    ...(mat.explosive
+      ? [
+          h('div', { class: 'ed-grid2' }, [
+            field('伤害（中心）', numberInput(mat.explosive.damage, (v) => upd({ explosive: { ...explosiveJson(mat), damage: Math.max(0, v) } }), 5)),
+            field('范围（px）', numberInput(mat.explosive.radius, (v) => upd({ explosive: { ...explosiveJson(mat), radius: Math.max(1, Math.round(v)) } }), 10)),
+          ]),
+          field('击退强度', numberInput(mat.explosive.knockback, (v) => upd({ explosive: { ...explosiveJson(mat), knockback: Math.max(0, v) } }), 1)),
+          h('p', { class: 'ed-help' }, [
+            `伤害按距离线性衰减：中心 ${Math.round(mat.explosive.damage)} → 半径边缘 0（范围 ${Math.round(mat.explosive.radius)}px）。`,
+            '爆炸同时会推动周围刚体、并按伤害破坏附近的物体（可燃物连锁爆炸）；不产生弹片。',
+          ]),
+        ]
+      : []),
+
     // ---- 物理 ----
     h('h3', { class: 'ed-h3' }, ['物理']),
     h('label', { class: 'ed-check' }, [checkbox(mat.fixed, (v) => upd({ fixed: v })), '默认固定（静态，不推不落）']),
@@ -1348,16 +2139,30 @@ function materialForm(): HTMLElement {
         : '当前：动态 —— 用此材质新建的物体默认会掉落、可被推动/踢飞。',
       '画布始终显示你正在编辑的那张地图（切换 Tab 不会换掉它）。',
     ]),
+    h('h3', { class: 'ed-h3' }, ['接触伤害']),
+    h('div', { class: 'ed-grid2' }, [
+      field('伤害 / 秒（0 = 无）', numberInput(mat.damagePerSecond, (v) => upd({ damagePerSecond: Math.max(0, v) }))),
+    ]),
+    h('p', { class: 'ed-help' }, [
+      mat.damagePerSecond > 0
+        ? `火柴人贴着这种材质的物体时，每秒掉 ${mat.damagePerSecond} 点血（岩浆/尖刺/毒液池）。`
+        : '0 = 只是普通物体；填了数值就变成"危险物"：贴着它每秒掉这么多血。',
+    ]),
+
     h('h3', { class: 'ed-h3' }, ['测试这个材质']),
     h('p', { class: 'ed-help' }, [
-      '「▶ 测试」：把当前地图的所有物体（含预制件部件）材质换成这个材质，在真实关卡里看观感与破坏手感。',
-      '　· 材质勾了「默认固定」→ 全部物体都变固定，不会掉落（连原本能推动的箱子也钉住）。',
-      '　· 材质是动态 → 除「关卡外壳」（原本静态且不可破坏的地面/边界墙，否则整关会掉出屏幕）',
-      '　　之外，其余物体全部跟随这个材质变成动态 —— 悬空的平台、家具、箱子都会掉下来。',
-      '「样品台」：单独看这个材质在固定/动态样品上的表现（左边悬空不动、右边从空中落下）。',
+      `先在画布上选中物体（当前选中 ${selectionCount} 个），「▶ 测试」只会把它们换成这个材质。`,
+      '没选中时「▶ 测试」= 直接试玩当前地图（不做任何替换）。',
     ]),
     h('div', { class: 'ed-row' }, [
-      button('▶ 测试（重刷整张地图）', () => startPlayTest(), 'primary'),
+      button('▶ 测试（选中对象）', () => startPlayTest(), 'primary'),
+      button('应用到选中对象', () => {
+        const r = store.applyMaterialToSelection();
+        if (!r.ok) {
+          store.message = r.reason ?? '应用失败';
+          store.touch();
+        }
+      }),
       button('样品台测试', () => startPlayTest(true)),
     ]),
     h('div', { class: 'ed-grid2' }, [
@@ -1683,7 +2488,7 @@ function startPlayTest(useMaterialRig = false): void {
   document.body.classList.add('testing');
   try {
     // ▶ 测试 运行"当前 Tab 该测的场景"（testScene），与画布显示的内容（canvasMap）无关：
-    //   地图/动作 Tab → 当前地图草稿；材质 Tab → 当前地图整体重刷成选中材质；
+    //   地图 Tab → 当前地图草稿；材质 Tab → 当前地图整体重刷成选中材质；
     //   预制件 Tab → 预制件工作台；材质 Tab + useMaterialRig → 材质样品台
     const scene = store.testScene(useMaterialRig);
     const map = JSON.parse(JSON.stringify(scene.map));
@@ -1693,7 +2498,6 @@ function startPlayTest(useMaterialRig = false): void {
       map,
       // 用编辑器内的预制件表（含未保存的焊接开关等改动；材质测试时部件材质也一并替换）
       prefabs: JSON.parse(JSON.stringify(scene.prefabs)),
-      actions: JSON.parse(JSON.stringify(actionStore.actions)),
       onExit: () => stopPlayTest(),
     });
     setStatus('测试中：WASD/方向键 移动，W/↑ 跳跃，Esc 返回编辑器');
@@ -1756,6 +2560,16 @@ function onKeyDown(e: KeyboardEvent): void {
     store.duplicateSelected();
     return;
   }
+  if (mod && e.key.toLowerCase() === 'c') {
+    e.preventDefault();
+    store.copySelection();
+    return;
+  }
+  if (mod && e.key.toLowerCase() === 'v') {
+    e.preventDefault();
+    store.pasteClipboard();
+    return;
+  }
   if (mod && e.key.toLowerCase() === 's') {
     e.preventDefault();
     download(store.exportFileName(), store.exportCurrent());
@@ -1765,10 +2579,9 @@ function onKeyDown(e: KeyboardEvent): void {
 
   switch (e.key) {
     case 'Escape':
-      store.tool = 'select';
+      collapsedGroup = null;
+      setTool('select');
       store.ruler = null;
-      store.pendingJointBodyA = null;
-      store.touch();
       return;
     case 'Delete':
     case 'Backspace':
@@ -1806,9 +2619,9 @@ function onKeyDown(e: KeyboardEvent): void {
   const toolKey = e.key.toLowerCase();
   const found = TOOLS.find((t) => t.key.toLowerCase() === toolKey);
   if (found) {
-    store.tool = found.id;
-    store.pendingJointBodyA = null;
-    store.touch();
+    // 快捷键切到几何体/预制件/武器时，二级面板跟着展开
+    collapsedGroup = null;
+    setTool(found.id);
   }
 }
 

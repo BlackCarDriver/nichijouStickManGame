@@ -5,6 +5,7 @@ import (
 	"log"
 	"math/rand"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,6 +41,9 @@ const (
 
 	// 武器掉落点从多高处落下（与客户端 WeaponSpawnerSystem 一致）
 	dropHeight = 240
+	// 掉落物视觉上浮在表面上方这么多（与客户端 PickupSystem.PICKUP_REST_OFFSET 保持一致），
+	// 原地生成的武器要先减掉它，否则标签点正好压在平台上时会陷进实体里
+	pickupRestOffset = 18
 	// 补给维持检查间隔（与 ItemDropSystem 一致）
 	itemTopUpInterval = 2600 * time.Millisecond
 )
@@ -111,10 +115,12 @@ func (c *client) pushDroppable(payload any) {
 
 // playerState 是服务端权威的玩家数值（血量/护盾/击杀/重生）。
 type playerState struct {
-	Seat      int
-	Nick      string
-	Avatar    string
-	Color     int
+	Seat   int
+	Nick   string
+	Avatar string
+	Color  int
+	// Team = 队伍编号（团队战 0/1；混战 -1）
+	Team      int
 	Spawn     int
 	HP        int
 	Shield    int
@@ -152,12 +158,16 @@ type match struct {
 	StartedAt time.Time
 	Over      bool
 
-	// 本局死亡次数（至少一次死亡才会触发"最后一人胜出"结束条件）
+	// 本局模式：ffa（个人混战）/ tdm（红蓝团队战）
+	Mode string
+	// 本局死亡次数（至少一次死亡才会触发回合结束判定）
 	Deaths int
 	// 结束后到下一局开始的时间点
 	NextRoundAt time.Time
 	// 下一局地图（结束后提前选好并展示）
 	NextMap string
+	// 下一局模式（结束后提前选好并在结算弹窗里预告；下一局开局前会按实际人数再校验）
+	NextMode string
 
 	Seats   []string // 下标 = netID（座位号）
 	Players map[int]*playerState
@@ -292,6 +302,119 @@ func (h *Hub) pickMapLocked() string {
 	return pool[rand.Intn(len(pool))]
 }
 
+// pickModeLocked 决定本局模式。
+// 配置 mode=ffa/tdm 固定模式；mode=random（默认）时每局随机二选一。
+// 团队战至少要有 2 名玩家才能分成两队，人不够时本局回退为混战。
+func (h *Hub) pickModeLocked(participants int) string {
+	mode := h.cfg.Mode
+	if mode != modeFFA && mode != modeTDM {
+		if rand.Intn(2) == 0 {
+			mode = modeFFA
+		} else {
+			mode = modeTDM
+		}
+	}
+	if mode == modeTDM && participants < 2 {
+		return modeFFA
+	}
+	return mode
+}
+
+// teamNames 队伍展示名（与客户端颜色对应：0=红队、1=蓝队）。
+var teamNames = [2]string{"红队", "蓝队"}
+
+// modeDisplayName 模式的中文展示名（给结算预告/等待提示用）。
+func modeDisplayName(mode string) string {
+	if mode == modeTDM {
+		return "团队战"
+	}
+	return "混战"
+}
+
+// waitingText 上一局刚结束时的等待提示（提前告知下一局的地图与模式）。
+func waitingText(m *match) string {
+	if m == nil {
+		return "上一局刚结束，下一局即将开始…"
+	}
+	parts := make([]string, 0, 3)
+	if m.NextMap != "" {
+		parts = append(parts, "地图「"+m.NextMap+"」")
+	}
+	if m.NextMode != "" {
+		parts = append(parts, modeDisplayName(m.NextMode))
+	}
+	if len(parts) == 0 {
+		return "上一局刚结束，下一局即将开始…"
+	}
+	return "上一局刚结束，下一局：" + strings.Join(parts, " · ") + "（即将开始…）"
+}
+
+// seatedCountLocked 统计当前对局上了座位的玩家人数（用于预告下一局模式）。
+func (h *Hub) seatedCountLocked(m *match) int {
+	n := 0
+	for seat, p := range m.Players {
+		if p == nil || m.Seats[seat] == "" {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// teamNameOf 取队伍展示名（非法编号返回空串）。
+func teamNameOf(team int) string {
+	if team < 0 || team >= len(teamNames) {
+		return ""
+	}
+	return teamNames[team]
+}
+
+// spawnIndicesByTeam 把地图出生点按 x 排序后对半切开：左半区给 0 队、右半区给 1 队。
+// 这样团队战两支队伍天然从地图两侧开局，不会挤在一起。
+func spawnIndicesByTeam(mf *mapFile) (left, right []int) {
+	idx := make([]int, len(mf.SpawnPoints))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.Slice(idx, func(a, b int) bool {
+		pa, pb := mf.SpawnPoints[idx[a]], mf.SpawnPoints[idx[b]]
+		if pa.X != pb.X {
+			return pa.X < pb.X
+		}
+		return pa.Y < pb.Y
+	})
+	half := (len(idx) + 1) / 2
+	return idx[:half], idx[half:]
+}
+
+// teamSpawnIndex 取某个队伍第 ordinal 个成员的出生点下标（队内循环使用）。
+func teamSpawnIndex(mf *mapFile, team, ordinal int) int {
+	left, right := spawnIndicesByTeam(mf)
+	pool := left
+	if team == 1 {
+		pool = right
+	}
+	if len(pool) == 0 {
+		pool = left
+	}
+	if len(pool) == 0 {
+		return 0
+	}
+	return pool[ordinal%len(pool)]
+}
+
+// teamCountLocked 统计当前对局里某个队伍的人数（含已死亡）。
+func (h *Hub) teamCountLocked(m *match, team int) int {
+	n := 0
+	for seat, p := range m.Players {
+		if p == nil || p.Team != team || m.Seats[seat] == "" {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
 // addSeatLocked 把一个在线玩家加入当前对局。
 // 座位号优先复用空位（离开的人留下的 ""），避免座位号越滚越大。
 func (h *Hub) addSeatLocked(m *match, c *client) int {
@@ -308,9 +431,21 @@ func (h *Hub) addSeatLocked(m *match, c *client) int {
 	} else {
 		m.Seats[seat] = c.nick
 	}
+	// 模式与分边：团队战中途加入的人进人少的那一队
+	team := -1
+	color := seat % 8
+	spawn := seat % len(m.Map.SpawnPoints)
+	if m.Mode == modeTDM {
+		team = 0
+		if h.teamCountLocked(m, 1) < h.teamCountLocked(m, 0) {
+			team = 1
+		}
+		color = team
+		spawn = teamSpawnIndex(m.Map, team, h.teamCountLocked(m, team))
+	}
 	p := &playerState{
-		Seat: seat, Nick: c.nick, Avatar: c.avatar, Color: seat % 8,
-		Spawn: seat % len(m.Map.SpawnPoints),
+		Seat: seat, Nick: c.nick, Avatar: c.avatar, Color: color, Team: team,
+		Spawn: spawn,
 		HP:    maxHP, budget: 1000, budgetAt: time.Now(),
 	}
 	m.Players[seat] = p
@@ -322,7 +457,7 @@ func (h *Hub) addSeatLocked(m *match, c *client) int {
 	join := &playerJoinMsg{
 		T: "player_join",
 		Player: matchPlayer{
-			Nick: p.Nick, Avatar: p.Avatar, NetID: seat, Color: p.Color, Spawn: p.Spawn, Kills: p.Kills,
+			Nick: p.Nick, Avatar: p.Avatar, NetID: seat, Color: p.Color, Team: p.Team, Spawn: p.Spawn, Kills: p.Kills,
 		},
 		Stat: playerStatWire{ID: seat, HP: p.HP, Shield: p.Shield, Dead: p.Dead, Kills: p.Kills},
 	}
@@ -371,6 +506,26 @@ func (h *Hub) startRoundLocked() {
 	h.lastSnap = nil
 	h.lastSnapMatch = m.ID
 
+	// 先数参战人数：团队战至少要 2 人才能分两队，否则本局回退混战
+	participants := 0
+	for _, nick := range h.order {
+		if participants >= h.cfg.MaxPlayers {
+			break
+		}
+		c := h.clients[nick]
+		if c == nil || c.spectate || !c.joined {
+			continue
+		}
+		participants++
+	}
+	// 模式：上一局结束时预告过的就用它（人数不够时回落混战），否则本局现算
+	if m.NextMode != "" && (m.NextMode != modeTDM || participants >= 2) {
+		m.Mode = m.NextMode
+	} else {
+		m.Mode = h.pickModeLocked(participants)
+	}
+	m.NextMode = ""
+
 	for _, nick := range h.order {
 		if len(m.Seats) >= h.cfg.MaxPlayers {
 			break
@@ -381,9 +536,18 @@ func (h *Hub) startRoundLocked() {
 		}
 		seat := len(m.Seats)
 		m.Seats = append(m.Seats, nick)
+		// 团队战：按座位交替分边（0,2,4→红队；1,3,5→蓝队），颜色也直接用队伍色
+		team := -1
+		color := seat % 8
+		spawn := seat % len(mf.SpawnPoints)
+		if m.Mode == modeTDM {
+			team = seat % 2
+			color = team
+			spawn = teamSpawnIndex(mf, team, seat/2)
+		}
 		m.Players[seat] = &playerState{
-			Seat: seat, Nick: nick, Avatar: c.avatar, Color: seat % 8,
-			Spawn: seat % len(mf.SpawnPoints),
+			Seat: seat, Nick: nick, Avatar: c.avatar, Color: color, Team: team,
+			Spawn: spawn,
 			HP:    maxHP, budget: 1000, budgetAt: time.Now(),
 		}
 		c.seat = seat
@@ -396,7 +560,7 @@ func (h *Hub) startRoundLocked() {
 	m.Host = h.pickHostLocked(m)
 
 	h.initDropsLocked(m)
-	log.Printf("[hub] 第 %d 局开始：地图=%s 玩家=%d 掉落=%d", m.ID, m.MapName, len(m.Players), len(m.Drops))
+	log.Printf("[hub] 第 %d 局开始：地图=%s 模式=%s 玩家=%d 掉落=%d", m.ID, m.MapName, m.Mode, len(m.Players), len(m.Drops))
 	for _, c := range h.clients {
 		h.sendToLocked(c, h.matchStartLocked(c))
 	}
@@ -416,7 +580,7 @@ func (h *Hub) matchStartLocked(c *client) *matchStartMsg {
 			continue
 		}
 		players = append(players, matchPlayer{
-			Nick: p.Nick, Avatar: p.Avatar, NetID: seat, Color: p.Color, Spawn: p.Spawn, Kills: p.Kills,
+			Nick: p.Nick, Avatar: p.Avatar, NetID: seat, Color: p.Color, Team: p.Team, Spawn: p.Spawn, Kills: p.Kills,
 		})
 	}
 	sort.Slice(players, func(i, j int) bool { return players[i].NetID < players[j].NetID })
@@ -445,7 +609,7 @@ func (h *Hub) matchStartLocked(c *client) *matchStartMsg {
 		you = c.seat
 	}
 	return &matchStartMsg{
-		T: "match_start", MatchID: m.ID, Map: m.MapName, Players: players, Stats: stats,
+		T: "match_start", MatchID: m.ID, Map: m.MapName, Mode: m.Mode, Players: players, Stats: stats,
 		You: you, Host: m.Host, Drops: drops, Destroyed: destroyed, World: h.worldForKeyLocked(m),
 	}
 }
@@ -482,10 +646,37 @@ func (h *Hub) dropMatchPlayerExLocked(m *match, seat int, countDeath bool) {
 	h.checkRoundEndLocked()
 }
 
-// checkRoundEndLocked 结束条件：至少发生过一次死亡，且只剩一名存活玩家。
+// checkRoundEndLocked 回合结束判定。
+//
+// ffa：至少发生过一次死亡，且只剩一名存活玩家（最后一个站着的人胜出）。
+// tdm：任一支队全灭即结束；如果某支队的座位已经全部离场，也算（不必等到有人死）。
 func (h *Hub) checkRoundEndLocked() {
 	m := h.m
 	if m == nil || m.Over {
+		return
+	}
+	if m.Mode == modeTDM {
+		var alive, seated [2]int
+		for seat, p := range m.Players {
+			if p == nil || p.Team < 0 || p.Team > 1 {
+				continue
+			}
+			nick := m.Seats[seat]
+			if nick == "" {
+				continue
+			}
+			seated[p.Team]++
+			if p.Dead || h.clients[nick] == nil {
+				continue
+			}
+			alive[p.Team]++
+		}
+		// 两支队伍都还有人坐着时，只有全灭才结束；没人坐着（人全走光）直接结束
+		if alive[0] == 0 || alive[1] == 0 {
+			if m.Deaths >= 1 || seated[0] == 0 || seated[1] == 0 {
+				h.endRoundLocked()
+			}
+		}
 		return
 	}
 	alive := 0
@@ -515,13 +706,23 @@ func (h *Hub) endRoundLocked() {
 
 	results := make([]matchResult, 0, len(m.Players))
 	lastAlive := ""
+	var aliveByTeam, killsByTeam, seatedByTeam [2]int
 	for seat, p := range m.Players {
 		if p == nil {
 			continue
 		}
-		results = append(results, matchResult{Nick: p.Nick, NetID: seat, Kills: p.Kills})
+		results = append(results, matchResult{Nick: p.Nick, NetID: seat, Kills: p.Kills, Team: p.Team})
 		if !p.Dead && m.Seats[seat] != "" {
 			lastAlive = p.Nick
+		}
+		if p.Team >= 0 && p.Team < 2 {
+			killsByTeam[p.Team] += p.Kills
+			if m.Seats[seat] != "" {
+				seatedByTeam[p.Team]++
+			}
+			if !p.Dead && m.Seats[seat] != "" {
+				aliveByTeam[p.Team]++
+			}
 		}
 	}
 	sort.Slice(results, func(i, j int) bool {
@@ -530,13 +731,50 @@ func (h *Hub) endRoundLocked() {
 		}
 		return results[i].NetID < results[j].NetID
 	})
+
 	winner := lastAlive
-	if winner == "" && len(results) > 0 {
+	winnerTeam := -1
+	reason := "lastman"
+	if m.Mode == modeTDM {
+		reason = "teamwipe"
+		// 存活多的一队胜；都灭光了就看总击杀，再平就判平局
+		switch {
+		case aliveByTeam[0] != aliveByTeam[1]:
+			if aliveByTeam[0] > aliveByTeam[1] {
+				winnerTeam = 0
+			} else {
+				winnerTeam = 1
+			}
+		case seatedByTeam[0] != seatedByTeam[1]:
+			// 一队人全走光了：还坐着的队取胜
+			if seatedByTeam[0] > seatedByTeam[1] {
+				winnerTeam = 0
+			} else {
+				winnerTeam = 1
+			}
+		case killsByTeam[0] != killsByTeam[1]:
+			if killsByTeam[0] > killsByTeam[1] {
+				winnerTeam = 0
+			} else {
+				winnerTeam = 1
+			}
+		default:
+			winnerTeam = -1
+		}
+		if winnerTeam >= 0 {
+			winner = teamNameOf(winnerTeam)
+		} else {
+			// 平局：不给胜者名，客户端显示“平局”
+			winner = ""
+		}
+	} else if winner == "" && len(results) > 0 {
 		winner = results[0].Nick
 	}
 
 	nextMap := h.pickMapLocked()
 	m.NextMap = nextMap
+	// 下一局模式也提前定好，好让结算弹窗能预告（人数不够 tdm 时会被 pickModeLocked 自动回落）
+	m.NextMode = h.pickModeLocked(h.seatedCountLocked(m))
 	// 先留 resultDelay 秒给"击败镜头"，再弹结算，最后换图重开
 	delaySeconds := h.cfg.ResultDelaySeconds
 	if delaySeconds < 0 {
@@ -545,10 +783,10 @@ func (h *Hub) endRoundLocked() {
 	restartMs := (delaySeconds + h.cfg.RoundEndSeconds) * 1000
 	m.NextRoundAt = time.Now().Add(time.Duration(restartMs) * time.Millisecond)
 
-	log.Printf("[hub] 第 %d 局结束：胜者=%s 死亡=%d 下一张=%s", m.ID, winner, m.Deaths, nextMap)
+	log.Printf("[hub] 第 %d 局结束：模式=%s 胜者=%s(team=%d) 死亡=%d 下一张=%s(%s)", m.ID, m.Mode, winner, winnerTeam, m.Deaths, nextMap, m.NextMode)
 	h.broadcastLocked(&matchEndMsg{
-		T: "match_end", Results: results, Winner: winner, Reason: "lastman",
-		RestartInMs: restartMs, DelayMs: delaySeconds * 1000, NextMap: nextMap,
+		T: "match_end", Results: results, Winner: winner, WinnerTeam: winnerTeam, Mode: m.Mode, Reason: reason,
+		RestartInMs: restartMs, DelayMs: delaySeconds * 1000, NextMap: nextMap, NextMode: m.NextMode,
 	})
 	if h.bridge != nil {
 		if winner != "" {
@@ -574,7 +812,7 @@ func (h *Hub) handleEnter(c *client) {
 	if m == nil {
 		h.startRoundLocked()
 	} else if m.Over {
-		h.sendToLocked(c, &waitingMsg{T: "waiting", Text: "上一局刚结束，下一局即将开始…"})
+		h.sendToLocked(c, &waitingMsg{T: "waiting", Text: waitingText(m)})
 	} else if seat := seatOfMatch(m, c.nick); seat >= 0 {
 		c.seat = seat
 		h.sendToLocked(c, h.matchStartLocked(c))
@@ -664,7 +902,7 @@ func (h *Hub) addClient(c *client) {
 		// 还没按"开始"：只给旁观视角（客户端需要地图/掉落信息来加载场景）
 		h.sendToLocked(c, h.matchStartLocked(c))
 	case m != nil && m.Over:
-		h.sendToLocked(c, &waitingMsg{T: "waiting", Text: "上一局刚结束，下一局即将开始…"})
+		h.sendToLocked(c, &waitingMsg{T: "waiting", Text: waitingText(m)})
 	default:
 		// 没有对局：先建一局（0 座位）给客户端加载，按"开始"后再入座
 		h.startRoundLocked()
@@ -728,7 +966,7 @@ func (h *Hub) initDropsLocked(m *match) {
 	for i, cfg := range m.Map.Weapons {
 		st := &weaponPoint{cfg: cfg, index: i, tag: "wspawn:" + itoa(i)}
 		m.points = append(m.points, st)
-		h.spawnPointWeaponLocked(m, st)
+		h.spawnPointDropLocked(m, st)
 	}
 	for _, it := range m.Map.Items {
 		if _, ok := h.data.items[it.Type]; !ok {
@@ -738,8 +976,9 @@ func (h *Hub) initDropsLocked(m *match) {
 			Kind: "item", ItemID: it.Type, X: it.X, Y: it.Y, Falling: false,
 		}, point: -1})
 	}
-	h.topUpItemsLocked(m)
+	// 天上掉补给也要显式开启 autoDrop（与武器一致；默认只有 map.items[] / 投放点）
 	if m.Map.AutoDrop != nil && m.Map.AutoDrop.Enabled {
+		h.topUpItemsLocked(m)
 		initial := m.Map.AutoDrop.Initial
 		if initial <= 0 {
 			initial = 3
@@ -758,43 +997,69 @@ func (h *Hub) addDropLocked(m *match, d dropState) *dropState {
 	return &d
 }
 
-func (h *Hub) spawnPointWeaponLocked(m *match, st *weaponPoint) bool {
-	weaponID := h.pickWeaponLocked(st.cfg)
-	if weaponID == "" {
-		log.Printf("[hub] 掉落点 #%d 无法确定武器", st.index)
+// spawnPointDropLocked 在投放点生成内容：武器或补给道具（医疗包/防弹衣）。
+func (h *Hub) spawnPointDropLocked(m *match, st *weaponPoint) bool {
+	kind, id := h.pickDropLocked(st.cfg)
+	if id == "" {
+		log.Printf("[hub] 投放点 #%d 无法确定内容", st.index)
 		return false
 	}
-	d := dropState{
-		dropItem: dropItem{
-			Kind: "weapon", WeaponID: weaponID, Ammo: h.data.weapons[weaponID].Ammo,
-			X: st.cfg.X, Y: max(24, st.cfg.Y-dropHeight), Falling: true, Tag: st.tag,
-		},
-		point: st.index,
+	// 默认直接出现在作者放置的位置（Falling=false）：
+	// 从天上掉会被屋顶/门框挡住，最后停在"门上面"而不是刷新点里。
+	// 需要从天而降观感时，在地图数据里给该点加 "fromSky": true。
+	fromSky := st.cfg.FromSky
+	y := st.cfg.Y - pickupRestOffset
+	if fromSky {
+		y = max(24, st.cfg.Y-dropHeight)
 	}
-	h.addDropLocked(m, d)
+	item := dropItem{Kind: kind, X: st.cfg.X, Y: y, Falling: fromSky, Tag: st.tag}
+	if kind == "weapon" {
+		item.WeaponID = id
+		item.Ammo = h.data.weapons[id].Ammo
+	} else {
+		item.ItemID = id
+	}
+	h.addDropLocked(m, dropState{dropItem: item, point: st.index})
 	st.waiting = false
 	st.timer = 0
 	return true
 }
 
-func (h *Hub) pickWeaponLocked(cfg mapWeaponSpawn) string {
+// pickDropLocked 决定这个投放点这次刷什么：返回 ("weapon"|"item", id)。
+// 规则必须与客户端 src/world/WeaponSpawnerSystem.pickContent 一致。
+func (h *Hub) pickDropLocked(cfg mapWeaponSpawn) (string, string) {
 	mode := cfg.Mode
 	if mode == "" {
 		mode = "fixed"
 	}
 	if mode == "fixed" {
+		// 显式道具优先；否则 weapon/type（写道具 id 也认）
+		if cfg.Item != "" {
+			if _, ok := h.data.items[cfg.Item]; ok {
+				return "item", cfg.Item
+			}
+			return "", ""
+		}
 		id := cfg.Weapon
 		if id == "" {
 			id = cfg.Type
 		}
 		if h.data.hasWeapon(id) {
-			return id
+			return "weapon", id
 		}
-		return ""
+		if _, ok := h.data.items[id]; ok {
+			return "item", id
+		}
+		return "", ""
 	}
+	// 随机：候选池里武器/道具都可以有
 	pool := make([]string, 0, len(cfg.Pool))
 	for _, id := range cfg.Pool {
 		if h.data.hasWeapon(id) {
+			pool = append(pool, id)
+			continue
+		}
+		if _, ok := h.data.items[id]; ok {
 			pool = append(pool, id)
 		}
 	}
@@ -802,9 +1067,13 @@ func (h *Hub) pickWeaponLocked(cfg mapWeaponSpawn) string {
 		pool = h.data.weaponIDs()
 	}
 	if len(pool) == 0 {
-		return ""
+		return "", ""
 	}
-	return pool[rand.Intn(len(pool))]
+	picked := pool[rand.Intn(len(pool))]
+	if h.data.hasWeapon(picked) {
+		return "weapon", picked
+	}
+	return "item", picked
 }
 
 func (h *Hub) weaponDropCountLocked(m *match) int {
@@ -913,15 +1182,21 @@ func (h *Hub) tickDropsLocked(m *match, dt time.Duration) {
 		st.timer += dt
 		if st.timer >= time.Duration(st.cfg.RespawnMs)*time.Millisecond {
 			st.timer = 0
-			h.spawnPointWeaponLocked(m, st)
+			h.spawnPointDropLocked(m, st)
 		}
 	}
 
-	// 补给维持
-	m.itemTimer += dt
-	if m.itemTimer >= itemTopUpInterval {
-		m.itemTimer = 0
-		h.topUpItemsLocked(m)
+	// 补给维持（只有开启 autoDrop 才天上掉补给，与武器一致）
+	if m.Map.AutoDrop != nil && m.Map.AutoDrop.Enabled {
+		m.itemTimer += dt
+		interval := itemTopUpInterval
+		if m.Map.AutoDrop.IntervalMs > 0 {
+			interval = time.Duration(m.Map.AutoDrop.IntervalMs) * time.Millisecond
+		}
+		if m.itemTimer >= interval {
+			m.itemTimer = 0
+			h.topUpItemsLocked(m)
+		}
 	}
 
 	// 全局空投
@@ -1046,6 +1321,13 @@ func (h *Hub) handleDamage(c *client, msg damageMsg) {
 	// 环境伤害（摔落等）只允许"自己上报自己"，避免拿它给别人刷伤害
 	if msg.Kind == "env" && msg.Target != c.seat {
 		return
+	}
+	// 团队战：友军无伤害（服务端权威兜底，防住客户端漏过滤/作弊）
+	// 自伤（贴脸爆炸/摔落）不受影响。
+	if m.Mode == modeTDM && src >= 0 && src != msg.Target {
+		if shooter := m.Players[src]; shooter != nil && shooter.Team >= 0 && shooter.Team == target.Team {
+			return
+		}
 	}
 	// 允许自伤（摔落 / 贴脸爆炸），但不给击杀计数
 	now := time.Now()

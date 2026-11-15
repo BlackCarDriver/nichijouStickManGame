@@ -9,8 +9,10 @@ import { AudioSystem } from '../audio/AudioSystem';
 import { getDefaultMap, getPrefabTable, getMapByName } from '../map/MapRegistry';
 import type { PrefabData } from '../map/PrefabFormat';
 import type { MapData } from '../map/MapFormat';
-import type { ActionClip } from '../editor/ActionFormat';
-import { buildMap, syncCompoundVisuals } from '../map/MapLoader';
+import { buildMap, collectMapWeapons, syncCompoundVisuals } from '../map/MapLoader';
+import { syncVisualMasks } from '../map/ShapeTexture';
+import { updateMaterialGlows } from '../map/MaterialGlow';
+import { updateObjectLabels } from '../map/ObjectLabel';
 import type { MapObjectRuntime } from '../map/MapLoader';
 import type { DamageInfo } from '../combat/DamageInfo';
 import { buildThrownBullet } from '../combat/WeaponSystem';
@@ -27,6 +29,7 @@ import { FragmentSystem } from '../world/FragmentSystem';
 import { ShrapnelSystem } from '../world/ShrapnelSystem';
 import { WeaponSpawnerSystem } from '../world/WeaponSpawnerSystem';
 import { ImpactDamageSystem } from '../world/ImpactDamageSystem';
+import { HazardSystem } from '../world/HazardSystem';
 import { DamageSystem } from '../combat/DamageSystem';
 import { ProjectileSystem } from '../combat/ProjectileSystem';
 import { WeaponSystem } from '../combat/WeaponSystem';
@@ -40,7 +43,7 @@ import { getFakeProfiles } from '../config/playerProfiles';
 import { DamageNumbers } from '../ui/DamageNumbers';
 import { SlashTrail } from '../fx/SlashTrail';
 import { OnlineMatch } from '../net/OnlineMatch';
-import type { MatchContext, MatchPlayer } from '../net/protocol';
+import type { MatchContext, MatchMode, MatchPlayer } from '../net/protocol';
 import { emptyInput } from '../core/InputCommand';
 import type { PlayerProfile } from '../config/playerProfiles';
 import { OffscreenIndicators } from '../ui/OffscreenIndicators';
@@ -89,8 +92,6 @@ export interface GameSceneData {
   map?: MapData;
   /** 预制件表；编辑器测试时传入"含未保存草稿"的表，不传则读 data/prefabs */
   prefabs?: Record<string, PrefabData>;
-  /** 编辑器 Play Test 传入的动作资源 */
-  actions?: ActionClip[];
   /** 返回编辑器等外部回调（Esc 键触发） */
   onExit?: () => void;
   /** 联机对局：由 RoomController 在 match_start 时传入 */
@@ -134,6 +135,10 @@ export class GameScene extends Phaser.Scene {
   /** netId → Player（联机时玩家来自 roster，而非地图出生点数量） */
   private onlinePlayers = new Map<number, Player>();
   private onlineNicks = new Map<number, string>();
+  /** netId → 队伍编号（团队战 0/1；混战为空） */
+  private onlineTeams = new Map<number, number>();
+  /** 本局模式（团队战用于友伤/比分/结算文案） */
+  private matchMode: MatchMode = 'ffa';
   private offscreen: OffscreenIndicators | null = null;
   /** netId → 聊天室头像地址 / 已生成的圆形头像贴图 key */
   /** netId → 头像 URL（初始 roster + 中途加入的玩家） */
@@ -149,7 +154,6 @@ export class GameScene extends Phaser.Scene {
   private oneWayBodies: MatterJS.BodyType[] = [];
   private mapData!: MapData;
   private prefabTable!: Record<string, PrefabData>;
-  private actionClips: ActionClip[] = [];
   private onExit?: () => void;
 
   // ---- 伤害 / 破坏 / 表现 ----
@@ -177,6 +181,21 @@ export class GameScene extends Phaser.Scene {
   private fragments!: FragmentSystem;
   private shrapnel!: ShrapnelSystem;
   private impactDamage!: ImpactDamageSystem;
+  /** 接触伤害（材质 damagePerSecond：岩浆/尖刺等） */
+  private hazard!: HazardSystem;
+  /** 材质爆炸：待处理队列（用迭代而不是递归，避免长连锁爆栈） */
+  private readonly pendingExplosions: Array<{
+    id: string;
+    x: number;
+    y: number;
+    damage: number;
+    radius: number;
+    knockback: number;
+  }> = [];
+  /** 已经爆过的物体 id（每个只爆一次，防止连锁循环） */
+  private readonly explodedObjects = new Set<string>();
+  /** 正在冲洗爆炸队列（防重入） */
+  private flushingExplosions = false;
 
   /** 首次用户手势时启动 AudioContext（浏览器自动播放策略） */
   private readonly unlockAudio = (): void => {
@@ -204,8 +223,10 @@ export class GameScene extends Phaser.Scene {
 
   init(data: GameSceneData = {}): void {
     this.onlineData = data.online ?? null;
+    this.matchMode = data.online?.mode ?? 'ffa';
     this.onlinePlayers = new Map();
     this.onlineNicks = new Map();
+    this.onlineTeams = new Map();
     this.avatarSources = new Map();
     this.avatarUrls = new Map();
     this.avatarCircleKeys = new Map();
@@ -213,7 +234,6 @@ export class GameScene extends Phaser.Scene {
       ? getMapByName(data.online.map) ?? getDefaultMap()
       : data.map ?? GameScene.mapFromUrl() ?? getDefaultMap();
     this.prefabTable = data.prefabs ?? getPrefabTable();
-    this.actionClips = data.actions ?? [];
     this.onExit = data.onExit;
     this.players = [];
     this.mapObjects = [];
@@ -252,16 +272,17 @@ export class GameScene extends Phaser.Scene {
       const roster = [...this.onlineData.players].sort((a, b) => a.netId - b.netId);
       this.players = roster.map((entry) => {
         const point = spawn[entry.spawn % spawn.length];
-        const player = new Player(this, point.x, point.y, playerColor(entry.color), this.actionClips);
+        const player = new Player(this, point.x, point.y, playerColor(entry.color));
         this.onlinePlayers.set(entry.netId, player);
         this.onlineNicks.set(entry.netId, entry.nick);
+        if (entry.team >= 0) this.onlineTeams.set(entry.netId, entry.team);
         return player;
       });
     } else {
       // 单机双人沙盒：只取前两个出生点（地图现在为多人乱斗准备了更多出生点）
       this.players = spawn
         .slice(0, 2)
-        .map((p, i) => new Player(this, p.x, p.y, playerColor(i), this.actionClips));
+        .map((p, i) => new Player(this, p.x, p.y, playerColor(i)));
     }
     const localPlayer =
       this.onlineData && this.onlineData.you >= 0 ? this.onlinePlayers.get(this.onlineData.you) : undefined;
@@ -308,6 +329,8 @@ export class GameScene extends Phaser.Scene {
     this.sights = new AimSightSystem(this);
     // ---- 手榴弹（背包道具）----
     this.grenades = new GrenadeSystem(this, this.projectileSystem);
+    // ---- 团队战规则（友军无伤害 + 子弹/近战穿过队友）----
+    this.applyTeamRules();
 
     // ---- 掉落 / 碎片 ----
     this.pickups = new PickupSystem(this, this.bodyToPlayer, this.fx);
@@ -316,7 +339,8 @@ export class GameScene extends Phaser.Scene {
       // 补给道具（医疗包/防弹衣）：地图固定点 + 维持数量
       this.itemDrops = new ItemDropSystem(this, this.pickups, this.mapData);
       // 武器掉落点（固定/随机武器，可配刷新）
-      this.weaponSpawner = new WeaponSpawnerSystem(this, this.pickups, this.mapData);
+      // 武器掉落点 = 地图自带 + 预制件自带（预制件里的坐标已按实例旋转/翻转展开）
+      this.weaponSpawner = new WeaponSpawnerSystem(this, this.pickups, collectMapWeapons(this.mapData, this.prefabTable));
     }
     this.fragments = new FragmentSystem(this);
     // 爆炸破片（手榴弹/火箭炮）：真刚体 + 命中伤害
@@ -329,6 +353,7 @@ export class GameScene extends Phaser.Scene {
     );
     this.explosion.attachShrapnel(this.shrapnel);
     this.impactDamage = new ImpactDamageSystem(this, this.damageSystem, this.worldRegistry);
+    this.hazard = new HazardSystem(this, this.bodyToPlayer, this.worldRegistry);
 
     this.damageNumbers = new DamageNumbers(this);
     this.slashTrail = new SlashTrail(this);
@@ -337,6 +362,8 @@ export class GameScene extends Phaser.Scene {
     // 单机用假资料占位；联机用服务端下发的房间玩家昵称
     this.hud.bind(this.players, this.profiles());
     this.hud.bindKills(this.kills);
+    // 团队战：底部队伍比分（玩家 → 队伍 由 roster 决定）
+    this.hud.setTeams(this.matchMode, (player) => this.teamOfNetId(this.netIdOfEntity(player)));
     // 出生空手：所有武器一律靠捡（天降武器 + 场上掉落物）
 
     const cam = this.cameras.main;
@@ -353,6 +380,9 @@ export class GameScene extends Phaser.Scene {
     this.audio = new AudioSystem();
     this.kills.clear();
     this.physicsFrozen = false;
+    this.pendingExplosions.length = 0;
+    this.explodedObjects.clear();
+    this.flushingExplosions = false;
 
     // AudioContext 必须在用户手势后才能启动
     this.input.on('pointerdown', this.unlockAudio);
@@ -456,7 +486,7 @@ export class GameScene extends Phaser.Scene {
   private spawnNetPlayer(entry: MatchPlayer, stat: { hp: number; shield: number; dead: boolean; kills: number }): void {
     if (this.onlinePlayers.has(entry.netId)) return;
     const spawn = this.mapData.spawnPoints[entry.spawn % this.mapData.spawnPoints.length];
-    const player = new Player(this, spawn.x, spawn.y, playerColor(entry.color), this.actionClips);
+    const player = new Player(this, spawn.x, spawn.y, playerColor(entry.color));
     player.netControlled = true;
     player.autoRespawn = false;
     // 摔落伤害由"自己"检测（房主不再替别人算）
@@ -465,6 +495,7 @@ export class GameScene extends Phaser.Scene {
     this.players.push(player);
     this.onlinePlayers.set(entry.netId, player);
     this.onlineNicks.set(entry.netId, entry.nick);
+    if (entry.team >= 0) this.onlineTeams.set(entry.netId, entry.team);
     if (entry.avatar) {
       this.avatarSources.set(entry.netId, entry.avatar);
       this.loadAvatars();
@@ -493,6 +524,40 @@ export class GameScene extends Phaser.Scene {
     return -1;
   }
 
+  /** 某个座位的队伍编号（团队战 0/1；混战/未知 -1） */
+  private teamOfNetId(netId: number): number {
+    return this.onlineTeams.get(netId) ?? -1;
+  }
+
+  /**
+   * 团队战规则注入：友军完全无伤害，且子弹/出拳/刺击/光束穿过友军。
+   *
+   * 服务端 `handleDamage` 会做同样的仲裁（防作弊 / 防备客户端漏判），
+   * 这里只是让本地表现与服务端一致：不飘伤害数字、不挡队友的枪线。
+   */
+  private applyTeamRules(): void {
+    if (!this.onlineData || this.matchMode !== 'tdm') return;
+    // 伤害里的 sourceId 是**实体 id**（player.id），不是物理 body id，所以按实体 id 反查座位号
+    const netIdOfEntityId = (entityId: number): number => {
+      for (const [netId, p] of this.onlinePlayers) {
+        if (p.id === entityId) return netId;
+      }
+      return -1;
+    };
+    const friendly = (sourceNet: number, targetNet: number): boolean => {
+      if (sourceNet < 0 || targetNet < 0 || sourceNet === targetNet) return false;
+      const team = this.teamOfNetId(sourceNet);
+      return team >= 0 && team === this.teamOfNetId(targetNet);
+    };
+    this.damageSystem.setAllyFilter((sourceId, target) =>
+      friendly(netIdOfEntityId(sourceId), this.netIdOfEntity(target)),
+    );
+    this.projectileSystem.passThroughTarget = (ownerId, target) =>
+      friendly(netIdOfEntityId(ownerId), this.netIdOfEntity(target));
+    this.weaponSystem.friendlyOf = (ownerId, target) =>
+      friendly(netIdOfEntityId(ownerId), this.netIdOfEntity(target));
+  }
+
   /** 有玩家退出后重建 HUD（OnlineMatch 已销毁对应 Player） */
   private onRosterChanged(): void {
     const entries = [...this.onlinePlayers.entries()].sort((a, b) => a[0] - b[0]);
@@ -503,6 +568,11 @@ export class GameScene extends Phaser.Scene {
       }
     }
     this.players = entries.map(([, p]) => p);
+    // 清掉已离场玩家的队伍信息（否则比分/友伤判定会拿旧数据）
+    const live = new Set(entries.map(([netId]) => netId));
+    for (const netId of [...this.onlineTeams.keys()]) {
+      if (!live.has(netId)) this.onlineTeams.delete(netId);
+    }
     if (this.cameraTarget && !entries.some(([, p]) => p === this.cameraTarget)) {
       this.cameraTarget = this.players[0] ?? null;
       if (this.cameraTarget) this.cameraRig?.snapTo(this.cameraTarget.container.x, this.cameraTarget.container.y);
@@ -519,9 +589,11 @@ export class GameScene extends Phaser.Scene {
     };
     // 物体被破坏 → 炸出碎片
     const onObjectDestroyed = (runtime: MapObjectRuntime, center: { x: number; y: number }): void => {
-      const colorHex = MATERIALS[runtime.material]?.colorHex ?? '#ffffff';
-      const pieces = runtime.material === 'cardboard' ? 4 : 6;
-      this.fragments.burst(center.x, center.y, colorHex, pieces);
+      const mat = MATERIALS[runtime.material];
+      const colorHex = mat?.colorHex ?? '#ffffff';
+      this.spawnDestructionFragments(runtime, center, colorHex);
+      // 爆炸材质：被破坏时原地爆炸（范围伤害 + 击退 + 视觉，无弹片）
+      if (mat?.explosive) this.queueMaterialExplosion(runtime.id, center, mat.explosive);
     };
     // 弹药耗尽 / 投掷出去 → 武器直接消失（不掉落在地上）。
     // 武器补给完全交给天降武器（DropSystem）。
@@ -630,6 +702,11 @@ export class GameScene extends Phaser.Scene {
       // 伤害气泡用"本次攻击的伤害值"（incoming），而不是被剩余血量截断后的 amount
       this.damageNumbers.show(player, incoming, { crit: critical });
     };
+    // 接触伤害（岩浆/尖刺等）：每秒汇总一个数字，避免 4 次/秒刷屏
+    const onHazardDamaged = (player: Player, amount: number): void => {
+      this.damageNumbers.show(player, amount);
+    };
+
     // 死亡 → 音效 + 击杀计数（记录凶手）+ 死亡回放（被谁/用什么击败 + 观战镜头）
     const onPlayerDied = (victim: Player, killerId?: number): void => {
       this.audio.play('death');
@@ -652,6 +729,7 @@ export class GameScene extends Phaser.Scene {
     this.events.on('player-hit', onPlayerHit);
     this.events.on('weapon-recoil', onWeaponRecoil);
     this.events.on('player-damaged', onPlayerDamaged);
+    this.events.on('hazard-damaged', onHazardDamaged);
     this.events.on('player-died', onPlayerDied);
     this.events.on('player-respawn', onPlayerRespawn);
     this.events.on('sfx', onSfx);
@@ -670,6 +748,7 @@ export class GameScene extends Phaser.Scene {
       this.events.off('player-hit', onPlayerHit);
       this.events.off('weapon-recoil', onWeaponRecoil);
       this.events.off('player-damaged', onPlayerDamaged);
+      this.events.off('hazard-damaged', onHazardDamaged);
       this.events.off('player-died', onPlayerDied);
       this.events.off('player-respawn', onPlayerRespawn);
       this.events.off('sfx', onSfx);
@@ -723,6 +802,7 @@ export class GameScene extends Phaser.Scene {
       ['shrapnel', () => this.shrapnel.destroy()],
       ['weaponSpawner', () => this.weaponSpawner?.destroy()],
       ['impactDamage', () => this.impactDamage.destroy()],
+      ['hazard', () => this.hazard.destroy()],
       ['weapon', () => this.weaponSystem.destroy()],
       ['fx', () => this.fx.destroy()],
       ['damageNumbers', () => this.damageNumbers.destroy()],
@@ -793,6 +873,7 @@ export class GameScene extends Phaser.Scene {
     // 每帧检测自动拾取（空手路过武器 / 手榴弹进背包）
     this.pickups.tryPickup(EMPTY_PRESSED);
     this.pickups.update(delta);
+    this.hazard.update(delta);
     this.drops?.update(delta);
     this.itemDrops?.update(delta);
     this.fragments.update(delta);
@@ -800,6 +881,9 @@ export class GameScene extends Phaser.Scene {
     this.weaponSpawner?.update(delta);
     this.updateOneWayCollisions();
     syncCompoundVisuals(this.mapObjects);
+    syncVisualMasks(this.mapObjects);
+    updateMaterialGlows(this.mapObjects, this.time.now);
+    updateObjectLabels(this.mapObjects);
     this.updateCameraTarget(cmd1, cmd2);
     if (this.cameraTarget && this.cameraRig) {
       this.cameraRig.update(this.cameraTarget, delta);
@@ -882,6 +966,102 @@ export class GameScene extends Phaser.Scene {
     while (this.previewedHitOrder.length > 256) {
       const old = this.previewedHitOrder.shift();
       if (old !== undefined) this.previewedHits.delete(old);
+    }
+  }
+
+  /**
+   * 破坏碎片：数量/散布/大小都按**物体体积**缩放。
+   *
+   * 用 sqrt(面积) 当"线性尺寸"来算（而不是直接用量）：面积差 4 倍时碎块数只差 2 倍，
+   * 否则一个 80×80 的箱子和 2400 宽的地面会差出几十倍。经验值：
+   *   60×60   → 6 块
+   *   120×120 → 12 块
+   *   300×16  → 7 块
+   *   大面积  → 封顶 16 块
+   * 碎片尺寸也随线性尺寸放大一点，大物体的碎块不会像沙子。
+   * 总量由 FragmentSystem 的 MAX_FRAGMENTS 兜底（连锁爆炸不会打崩帧率）。
+   */
+  private spawnDestructionFragments(
+    runtime: MapObjectRuntime,
+    center: { x: number; y: number },
+    colorHex: string,
+  ): void {
+    // 面积优先取刚体（多边形/复合体都是真实面积），没有刚体时退回包围盒
+    let area = runtime.body ? Math.abs(runtime.body.area) : 0;
+    if (!Number.isFinite(area) || area <= 0) {
+      const b = runtime.body?.bounds;
+      area = b ? Math.max(1, (b.max.x - b.min.x) * (b.max.y - b.min.y)) : 2500;
+    }
+    const linear = Math.sqrt(Math.max(1, area));
+    const pieces = Phaser.Math.Clamp(Math.round(linear / 10), 3, 16);
+    const spread = Phaser.Math.Clamp(linear * 0.35, 18, 90);
+    const sizeScale = Phaser.Math.Clamp(linear / 90, 0.7, 2.2);
+    this.fragments.burst(center.x, center.y, colorHex, pieces, spread, sizeScale);
+  }
+
+  /**
+   * 材质爆炸（物体被破坏时的自爆）。
+   *
+   * 设计要点：
+   * - **无弹片**：只做范围伤害 + 击退 + 视觉（弹片是手榴弹/火箭筒专属）。
+   * - **不递归**：连锁爆炸用队列迭代处理，每个物体只爆一次（`explodedObjects`）。
+   * - **联机**：爆炸本身在所有客户端都会跑（破坏事件是广播的），地图物体伤害/击退
+   *   各自本地模拟即可；但"玩家伤害"必须由**各自客户端为自己的角色上报**
+   *   （材质爆炸没有攻击者，服务端只接受 env 自伤），所以联机时跳过 explode() 的玩家结算。
+   */
+  private queueMaterialExplosion(
+    runtimeId: string,
+    center: { x: number; y: number },
+    cfg: { damage: number; radius: number; knockback: number },
+  ): void {
+    if (this.explodedObjects.has(runtimeId)) return;
+    this.explodedObjects.add(runtimeId);
+    this.pendingExplosions.push({
+      id: runtimeId,
+      x: center.x,
+      y: center.y,
+      damage: cfg.damage,
+      radius: cfg.radius,
+      knockback: cfg.knockback,
+    });
+    this.flushMaterialExplosions();
+  }
+
+  private flushMaterialExplosions(): void {
+    if (this.flushingExplosions) return;
+    this.flushingExplosions = true;
+    try {
+      // 上限只是兜底：单帧最多处理 64 次连锁（正常地图远达不到）
+      let guard = 0;
+      while (this.pendingExplosions.length > 0 && guard++ < 64) {
+        const e = this.pendingExplosions.shift()!;
+        this.explosion.explode({
+          x: e.x,
+          y: e.y,
+          radius: e.radius,
+          damage: e.damage,
+          selfDamage: true,
+          knockback: e.knockback,
+          ownerId: -1,
+          sourceId: -1,
+          // 不传 shrapnel：材质爆炸没有破片
+          skipPlayerDamage: this.online !== null,
+        });
+
+        // 联机：没有攻击者 → 每个客户端为自己的角色上报环境伤害
+        if (this.online) {
+          const local = this.online.localPlayer;
+          if (local && !local.health.isDead) {
+            const dist = Phaser.Math.Distance.Between(e.x, e.y, local.container.x, local.container.y);
+            if (dist <= e.radius) {
+              const falloff = 1 - dist / e.radius;
+              local.envDamageReporter?.(e.damage * falloff, local);
+            }
+          }
+        }
+      }
+    } finally {
+      this.flushingExplosions = false;
     }
   }
 
@@ -1040,10 +1220,14 @@ export class GameScene extends Phaser.Scene {
     this.projectileSystem.update(delta);
     this.pickups.tryPickup(EMPTY_PRESSED);
     this.pickups.update(delta);
+    this.hazard.update(delta);
     this.fragments.update(delta);
     this.shrapnel.update(delta);
     this.updateOneWayCollisions();
     syncCompoundVisuals(this.mapObjects);
+    syncVisualMasks(this.mapObjects);
+    updateMaterialGlows(this.mapObjects, this.time.now);
+    updateObjectLabels(this.mapObjects);
 
     // 镜头：活着跟本地玩家；阵亡/旁观跟随击败自己的人，其次第一个存活玩家
     const target = this.resolveOnlineCamera(local);

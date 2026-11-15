@@ -284,14 +284,30 @@ async function main() {
 
   a.send({ t: 'dmg', target: seatB, src: seatA, amount: 200, kind: 'bullet', crit: false, attack: 2, ignoreInvuln: true });
   const end = await a.wait('match_end', undefined, 4000);
-  check('最后一死触发本局结束', end.winner === `smokeA_${tag}`, JSON.stringify({ winner: end.winner, results: end.results }));
+  // 模式随机：混战看胜者昵称，团队战看胜方队伍（A 在 end.results 里的 team）
+  const aTeam = end.results?.find((r) => r.netId === seatA)?.team ?? -1;
+  check(
+    '最后一死触发本局结束',
+    end.mode === 'tdm' ? aTeam >= 0 && end.winnerTeam === aTeam : end.winner === `smokeA_${tag}`,
+    JSON.stringify({ mode: end.mode, winner: end.winner, winnerTeam: end.winnerTeam, results: end.results }),
+  );
   check('结算带下一张地图与倒计时', typeof end.nextMap === 'string' && end.restartInMs > 0, JSON.stringify({ nextMap: end.nextMap, ms: end.restartInMs }));
+  check(
+    '结算带下一局模式（预告用）',
+    end.nextMode === 'ffa' || end.nextMode === 'tdm',
+    JSON.stringify({ nextMode: end.nextMode }),
+  );
   check(
     '结算弹窗带延迟（先看击败镜头）',
     typeof end.delayMs === 'number' && end.delayMs >= 0 && end.restartInMs > end.delayMs,
     JSON.stringify({ delayMs: end.delayMs, restartInMs: end.restartInMs }),
   );
-  check('B 也收到结算', (await b.wait('match_end')).winner === `smokeA_${tag}`);
+  const endB = await b.wait('match_end');
+  check(
+    'B 也收到结算',
+    end.mode === 'tdm' ? endB.winnerTeam === aTeam : endB.winner === `smokeA_${tag}`,
+    JSON.stringify({ mode: end.mode, winner: endB.winner, winnerTeam: endB.winnerTeam }),
+  );
 
   // 结算有 4s 延迟 + 4s 展示，下一局至少 8s 后才开始
   const nextA = await a.wait('match_start', (m) => m.matchId !== startB1.matchId, 18000);
@@ -315,7 +331,12 @@ async function main() {
   const left = await b.wait('player_left', (m) => m.nick === `smokeA_${tag}`, 4000);
   check('离开立即广播 player_left（不再等宽限期）', left.id === seatA2);
   const endByLeave = await b.wait('match_end', undefined, 4000);
-  check('离开视为死亡：只剩一人立即结算', endByLeave.winner === `smokeB_${tag}`, JSON.stringify(endByLeave.results));
+  const bTeam = endByLeave.results?.find((r) => r.nick === `smokeB_${tag}`)?.team ?? -1;
+  check(
+    '离开视为死亡：只剩一人立即结算',
+    endByLeave.mode === 'tdm' ? bTeam >= 0 && endByLeave.winnerTeam === bTeam : endByLeave.winner === `smokeB_${tag}`,
+    JSON.stringify({ mode: endByLeave.mode, winner: endByLeave.winner, winnerTeam: endByLeave.winnerTeam, results: endByLeave.results }),
+  );
 
   // 重进：下一局作为全新玩家加入（满血 / 未阵亡 / 击杀归零）
   const a3 = await new Player(`smokeA_${tag}`).connect();

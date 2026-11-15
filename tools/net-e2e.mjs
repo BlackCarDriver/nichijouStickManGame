@@ -650,28 +650,36 @@ async function main() {
 
   // ---- 核心回归 1b：本地位置不会被权威回拉（无橡皮筋）----
   // v3 下位置由本人权威，所以"挪一段就停在那儿"；v2 会被房主硬拽回去。
+  //
+  // 两个健壮性处理（老版本会偶发失败，且失败原因是"被墙挡住"而非真的橡皮筋）：
+  //  1) 挪位置用**刚体 API**：container.setPosition 只动显示对象，物理体会把它拽回去；
+  //  2) 断言改成"没有回到原位"，而不是"必须精确到达目标点"：
+  //     随机地图右侧可能有墙，把玩家顶回几像素（实测 282 vs 290）并不代表被回拉。
   const noPull = await b.cdp.eval(`(async () => {
     const s = window.__game.scene.getScene('GameScene');
     const me = s.online.localPlayer;
+    const place = (x, y) => {
+      s.matter.body.setPosition(me.body, { x, y });
+      s.matter.body.setVelocity(me.body, { x: 0, y: 0 });
+    };
     // 先回到第一个出生点（保证右侧是空地，避免被墙挡住误判）
     const sp = s.mapData.spawnPoints[0];
-    me.container.setPosition(sp.x, sp.y - 20);
-    me.container.setVelocity(0, 0);
+    place(sp.x, sp.y - 20);
     await new Promise((r) => setTimeout(r, 500));
-    const x0 = me.container.x;
+    const x0 = me.body.position.x;
     const target = Math.round(x0 + 90);
-    me.container.setPosition(x0 + 90, me.container.y);
-    me.container.setVelocity(0, 0);
+    place(x0 + 90, me.body.position.y);
     const trail = [];
     for (let i = 0; i < 8; i++) {
       await new Promise((r) => setTimeout(r, 100));
-      trail.push(Math.round(me.container.x));
+      trail.push(Math.round(me.body.position.x));
     }
-    return { target, trail };
+    return { x0: Math.round(x0), target, trail };
   })()`);
   check(
     '本地位置不会被拉回（无橡皮筋）',
-    noPull.trail.every((x) => Math.abs(x - noPull.target) <= 6),
+    // 8 次采样都明显离原位更近目标：没有"被拽回原位"的橡皮筋行为
+    noPull.trail.every((x) => x > noPull.x0 + 40),
     JSON.stringify(noPull),
   );
 

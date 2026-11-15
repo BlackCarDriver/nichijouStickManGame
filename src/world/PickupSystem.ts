@@ -78,6 +78,15 @@ export interface PickupSpawnOptions {
  * - 防弹衣：**护盾未满**时靠近 → 自动拾取并获得护盾
  * - 不需要按键，也不占用武器槽
  */
+/**
+ * 掉落物"浮在地面上方"的偏移量（px）。
+ *
+ * 地面物品的视觉位置是 `surfaceY - REST_OFFSET`，所以**地图里标记的点应当被理解为
+ * "物品站在这个面上"**：直接在该点生成时必须先减去这个偏移，
+ * 否则物品会陷进地面/平台里（半埋、且拾取判定会变差）。
+ */
+export const PICKUP_REST_OFFSET = 18;
+
 export class PickupSystem {
   private readonly scene: Phaser.Scene;
   private readonly bodyToPlayer: Map<number, Player>;
@@ -101,7 +110,7 @@ export class PickupSystem {
   /** 掉落物下落重力（px/秒²） */
   private static readonly FALL_GRAVITY = 900;
   /** 落地后浮在地面上方的高度（视觉不贴地） */
-  private static readonly REST_OFFSET = 18;
+  private static readonly REST_OFFSET = PICKUP_REST_OFFSET;
   /** 支撑检测距离：脚下没有东西就继续下落 */
   private static readonly SUPPORT_PROBE = 22;
 

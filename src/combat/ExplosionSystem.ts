@@ -30,6 +30,12 @@ export interface ExplosionRequest {
   ignoreInvuln?: boolean;
   /** 破片配置（不填 = 不弹破片） */
   shrapnel?: ShrapnelConfig;
+  /**
+   * 跳过玩家伤害（可选）。
+   * 用于"没有攻击者"的爆炸（材质自爆）：联机时玩家伤害由各自客户端上报环境伤害，
+   * 这里再算一遍会造成重复预览/双倍数字。
+   */
+  skipPlayerDamage?: boolean;
 }
 
 /**
@@ -92,7 +98,7 @@ export class ExplosionSystem {
     }
 
     // ---- 玩家 ----
-    for (const player of this.bodyToPlayer.values()) {
+    if (!req.skipPlayerDamage) for (const player of this.bodyToPlayer.values()) {
       if (player.health.isDead) continue;
       if (!req.selfDamage && player.id === req.ownerId) continue;
       const dist = Phaser.Math.Distance.Between(x, y, player.container.x, player.container.y);

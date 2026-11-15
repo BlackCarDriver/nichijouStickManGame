@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "id": "ads",
+  "name": "广告牌",
+  "anchor": "center",
+  "bodyMode": "loose",
+  "parts": [
+    {
+      "type": "rect",
+      "x": 72,
+      "y": -192,
+      "w": 24,
+      "h": 24,
+      "material": "wood"
+    },
+    {
+      "type": "rect",
+      "x": 78,
+      "y": -162,
+      "w": 12,
+      "h": 36,
+      "material": "wood_2"
+    },
+    {
+      "type": "rect",
+      "x": 78,
+      "y": -120,
+      "w": 12,
+      "h": 48,
+      "material": "wood_2"
+    },
+    {
+      "type": "rect",
+      "x": -42,
+      "y": -66,
+      "w": 252,
+      "h": 60,
+      "material": "wood_2",
+      "label": {
+        "text": "招募地图制作志愿者",
+        "size": 25,
+        "color": "#a9a9a9"
+      }
+    }
+  ],
+  "joints": [
+    {
+      "bodyA": 0,
+      "anchor": {
+        "x": 84.06015036737801,
+        "y": -164.9132005766507
+      },
+      "noCollide": true,
+      "bodyB": 1
+    },
+    {
+      "bodyA": 1,
+      "anchor": {
+        "x": 84.06015036737801,
+        "y": -123.60023002129628
+      },
+      "noCollide": true,
+      "bodyB": 2
+    },
+    {
+      "bodyA": 2,
+      "anchor": {
+        "x": 84.06015036737801,
+        "y": -68.96049477066629
+      },
+      "noCollide": true,
+      "bodyB": 3
+    }
+  ]
+}

@@ -11,7 +11,6 @@ import {
   upVec,
 } from './StickmanRig';
 import type { Vec2 } from './StickmanRig';
-import type { ActionPose } from '../editor/ActionFormat';
 
 /** 火柴人姿势状态（动画状态机） */
 export type StickmanPose = 'idle' | 'walk' | 'jump' | 'fall' | 'hit' | 'crouch';
@@ -43,8 +42,6 @@ export interface StickmanDrawOptions {
   facing?: 1 | -1;
   /** 是否倒着走（面向与移动方向相反 → 步态反向 + 身体后仰） */
   backward?: boolean;
-  /** 运行时动作编辑器生成的姿态；存在时优先于内置动作分支 */
-  actionPose?: ActionPose;
   /** 攻击动作类型 */
   attackKind?: 'stab' | 'thrust' | 'kick' | 'slash' | 'punch' | null;
   /** 攻击动作进度 0→1 */
@@ -103,10 +100,6 @@ export class StickmanRenderer {
    * 每次 draw() 开头重置，瞄准时写入。
    */
   static lastAimHand: Vec2 | null = null;
-  /** 动作姿态下的双手握杆中心，供长矛等双手武器使用 */
-  static lastWeaponHand: Vec2 | null = null;
-  /** 双手动作下的长矛世界方向 */
-  static lastWeaponAim: number | null = null;
   /** 本帧头部圆心（visual 局部坐标），供头像贴图/昵称定位 */
   static lastHead: Vec2 | null = null;
 
@@ -116,15 +109,8 @@ export class StickmanRenderer {
   static draw(g: Phaser.GameObjects.Graphics, o: StickmanDrawOptions): void {
     g.clear();
     this.lastAimHand = null;
-    this.lastWeaponHand = null;
-    this.lastWeaponAim = null;
     this.lastHead = null;
     const speedPxPerSec = Math.abs(o.velocityX) * 60;
-
-    if (o.actionPose) {
-      this.drawActionPose(g, o, o.actionPose);
-      return;
-    }
 
     // 攻击动作优先（短暂覆盖行走/站立姿势）
     const progress = o.attackProgress ?? 0;
@@ -277,55 +263,6 @@ export class StickmanRenderer {
     // 收势：从 1 缓回 0
     const t = (p - strikeEnd) / Math.max(0.01, 1 - strikeEnd);
     return 1 - Math.pow(t, 0.6);
-  }
-
-  private static drawActionPose(g: Phaser.GameObjects.Graphics, o: StickmanDrawOptions, pose: ActionPose): void {
-    const hip = { x: pose.rootX, y: pose.rootY };
-    const footL = { x: hip.x + pose.footLX, y: hip.y + pose.footLY };
-    const footR = { x: hip.x + pose.footRX, y: hip.y + pose.footRY };
-    this.drawLegIK(g, o.color, hip, footL, { x: pose.kneeLHintX, y: pose.kneeLHintY });
-    this.drawLegIK(g, o.color, hip, footR, { x: pose.kneeRHintX, y: pose.kneeRHintY });
-
-    const shoulder = this.drawTorso(g, o.color, hip, pose.torsoTilt, pose.torsoTwist);
-    this.drawHead(g, o.color, shoulder, pose.headTilt, pose.headOffsetY);
-
-    const frontRoot = { x: shoulder.x + this.SHOULDER_W, y: shoulder.y + this.SHOULDER_DY };
-    const backRoot = { x: shoulder.x - this.SHOULDER_W, y: shoulder.y + this.SHOULDER_DY };
-    const front = this.drawArmPose(g, o, frontRoot, pose.armFrontShoulder, pose.armFrontElbow);
-    const back = this.drawArmPose(g, o, backRoot, pose.armBackShoulder, pose.armBackElbow);
-    this.lastAimHand = { x: front.end.x, y: front.end.y };
-    this.lastWeaponHand = {
-      x: (front.end.x + back.end.x) * 0.5,
-      y: (front.end.y + back.end.y) * 0.5,
-    };
-    const localAim = Math.atan2(front.end.y - back.end.y, front.end.x - back.end.x);
-    const facing = o.facing ?? 1;
-    this.lastWeaponAim = Math.atan2(Math.sin(localAim), facing * Math.cos(localAim));
-  }
-
-  private static drawArmPose(
-    g: Phaser.GameObjects.Graphics,
-    o: StickmanDrawOptions,
-    root: Vec2,
-    shoulderAngle: number,
-    elbowBendDeg: number,
-  ): { joint: Vec2; end: Vec2 } {
-    const chain = chain2(
-      root.x,
-      root.y,
-      shoulderAngle,
-      RIG_BONES.UPPER_ARM,
-      elbowBendDeg,
-      RIG_BONES.FOREARM,
-      1,
-      'down',
-    );
-    g.lineStyle(this.W_ARM, o.color, 1);
-    g.lineBetween(root.x, root.y, chain.joint.x, chain.joint.y);
-    g.lineBetween(chain.joint.x, chain.joint.y, chain.end.x, chain.end.y);
-    g.fillStyle(o.color, 1);
-    g.fillCircle(chain.joint.x, chain.joint.y, 2.1);
-    return chain;
   }
 
   /**

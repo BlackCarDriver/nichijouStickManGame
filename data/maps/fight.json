@@ -9,32 +9,24 @@
       "y": 1071
     },
     {
-      "x": 640,
-      "y": 1071
+      "x": 650.3403703536208,
+      "y": 1083.9254629420261
     },
     {
-      "x": 1200,
-      "y": 1071
+      "x": 383.7440738898299,
+      "y": 1074.679444017333
     },
     {
-      "x": 270,
-      "y": 811
+      "x": 1701.8397220086667,
+      "y": 1082.4347217825493
     },
     {
-      "x": 460,
-      "y": 811
+      "x": 1981.977592249229,
+      "y": 1090.1899995477647
     },
     {
-      "x": 1570,
-      "y": 811
-    },
-    {
-      "x": 1770,
-      "y": 811
-    },
-    {
-      "x": 970,
-      "y": 371
+      "x": 2234.110275730158,
+      "y": 1076.730276634628
     }
   ],
   "weaponDropZones": [
@@ -49,10 +41,10 @@
     {
       "id": "ground",
       "type": "rect",
-      "x": 0,
+      "x": 40,
       "y": 1120,
-      "w": 2400,
-      "h": 80,
+      "w": 920,
+      "h": 40,
       "material": "ground"
     },
     {
@@ -76,7 +68,7 @@
     {
       "type": "rect",
       "x": 240,
-      "y": 860,
+      "y": 900,
       "w": 620,
       "h": 20,
       "material": "ground",
@@ -85,18 +77,19 @@
     },
     {
       "type": "rect",
-      "x": 660,
-      "y": 640,
-      "w": 1120,
-      "h": 40,
+      "x": 880,
+      "y": 740,
+      "w": 740,
+      "h": 20,
       "material": "ground",
       "id": "o2",
-      "oneWay": true
+      "oneWay": true,
+      "angle": 0
     },
     {
       "type": "rect",
-      "x": 1540,
-      "y": 860,
+      "x": 1600,
+      "y": 920,
       "w": 660,
       "h": 20,
       "material": "ground",
@@ -104,102 +97,72 @@
       "oneWay": true
     },
     {
+      "id": "o31",
       "type": "rect",
-      "x": 940,
-      "y": 420,
-      "w": 600,
+      "x": 1440,
+      "y": 1120,
+      "w": 920,
+      "h": 40,
+      "material": "ground"
+    },
+    {
+      "type": "rect",
+      "x": 40,
+      "y": 1160,
+      "w": 2340,
+      "h": 40,
+      "material": "hotGround",
+      "id": "o32"
+    },
+    {
+      "type": "rect",
+      "x": 1220,
+      "y": 240,
+      "w": 20,
+      "h": 500,
+      "material": "ground",
+      "id": "o33"
+    },
+    {
+      "type": "rect",
+      "x": 1140,
+      "y": 380,
+      "w": 180,
       "h": 20,
       "material": "ground",
-      "id": "o4",
-      "oneWay": true
+      "id": "o35"
     },
     {
       "type": "rect",
-      "x": 920,
-      "y": 460,
-      "w": 100,
-      "h": 180,
-      "material": "wood",
-      "id": "o5"
+      "x": 1200,
+      "y": 1080,
+      "w": 20,
+      "h": 80,
+      "material": "wood_2",
+      "id": "o36",
+      "layer": "decor"
     },
     {
       "type": "rect",
-      "x": 1480,
-      "y": 460,
-      "w": 100,
-      "h": 180,
-      "material": "wood",
-      "id": "o6"
-    },
-    {
-      "type": "rect",
-      "x": 1130,
-      "y": 280,
-      "w": 200,
-      "h": 140,
-      "material": "ice",
-      "id": "o7"
-    },
-    {
-      "type": "polygon",
-      "x": 1240,
-      "y": 600,
+      "x": 1140,
+      "y": 1040,
+      "w": 140,
+      "h": 40,
       "material": "wood_2",
-      "id": "o9",
-      "vertices": [
-        {
-          "x": -13.33333333333316,
-          "y": -79.9999999999999
-        },
-        {
-          "x": 246.66666666666643,
-          "y": 39.99999999999989
-        },
-        {
-          "x": -233.33333333333326,
-          "y": 40
-        }
-      ]
-    },
-    {
-      "type": "circle",
-      "x": 1420,
-      "y": 560,
-      "radius": 40,
-      "material": "wood_2",
-      "id": "o10"
-    },
-    {
-      "type": "circle",
-      "x": 1060,
-      "y": 560,
-      "radius": 40,
-      "material": "wood_2",
-      "id": "o11"
-    },
-    {
-      "type": "circle",
-      "x": 1120,
-      "y": 520,
-      "radius": 40,
-      "material": "wood_2",
-      "id": "o12"
-    },
-    {
-      "type": "circle",
-      "x": 1340,
-      "y": 540,
-      "radius": 30,
-      "material": "wood_2",
-      "id": "o13"
+      "id": "o37",
+      "label": {
+        "text": "冷兵器混战"
+      },
+      "oneWay": false,
+      "layer": "decor"
     }
   ],
   "prefabs": [
     {
       "id": "p1",
       "ref": "boxs",
-      "x": 960,
-      "y": 1000
+      "x": 1320,
+      "y": 620
     },
     {
       "id": "p2",
@@ -212,60 +175,165 @@
       "ref": "table_wood",
       "x": 760,
       "y": 1080
+    },
+    {
+      "id": "p25",
+      "ref": "table_wood",
+      "x": 400,
+      "y": 860
+    },
+    {
+      "id": "p26",
+      "ref": "table_wood",
+      "x": 660,
+      "y": 860
+    },
+    {
+      "id": "p27",
+      "ref": "table_wood",
+      "x": 1740,
+      "y": 880
+    },
+    {
+      "id": "p28",
+      "ref": "table_wood",
+      "x": 2120,
+      "y": 880
+    },
+    {
+      "id": "p29",
+      "ref": "table_wood",
+      "x": 1580,
+      "y": 1080
+    },
+    {
+      "id": "p30",
+      "ref": "table_wood",
+      "x": 1860,
+      "y": 1080
+    },
+    {
+      "id": "p34",
+      "ref": "boxs",
+      "x": 980,
+      "y": 620
+    },
+    {
+      "id": "p4",
+      "ref": "ads",
+      "x": 1140,
+      "y": 940
     }
   ],
   "joints": [],
   "weapons": [
     {
-      "x": 242.62253795619654,
-      "y": 129.40092554748367,
+      "x": 395.6484257709935,
+      "y": 823.127963055085,
       "mode": "fixed",
-      "pool": [
-        "spear"
-      ],
+      "weapon": "spear",
       "respawnMs": 10000,
-      "maxRespawns": 0,
-      "weapon": "spear"
+      "maxRespawns": 100,
+      "fromSky": false
     },
     {
-      "x": 860,
-      "y": 140,
+      "x": 555.2434255448761,
+      "y": 1044.7651849506929,
+      "mode": "fixed",
+      "weapon": "spear",
+      "respawnMs": 10000,
+      "maxRespawns": 100,
+      "fromSky": false
+    },
+    {
+      "x": 663.817314257896,
+      "y": 827.6174075246536,
+      "mode": "fixed",
+      "weapon": "spear",
+      "respawnMs": 10000,
+      "maxRespawns": 100,
+      "fromSky": false
+    },
+    {
+      "x": 766.5402770868632,
+      "y": 1044.084444243451,
+      "mode": "fixed",
+      "weapon": "spear",
+      "respawnMs": 10000,
+      "maxRespawns": 100,
+      "fromSky": false
+    },
+    {
+      "x": 1580,
+      "y": 1040,
+      "mode": "fixed",
+      "weapon": "dagger",
+      "respawnMs": 5000,
+      "maxRespawns": 100
+    },
+    {
+      "x": 1861.0943514289286,
+      "y": 1041.9043518811636,
+      "mode": "fixed",
+      "weapon": "dagger",
+      "respawnMs": 5000,
+      "maxRespawns": 100
+    },
+    {
+      "x": 1738.9142590666409,
+      "y": 842.1714818667191,
+      "mode": "fixed",
+      "weapon": "dagger",
+      "respawnMs": 5000,
+      "maxRespawns": 100
+    },
+    {
+      "x": 2115.657036266563,
+      "y": 841.4907411594771,
+      "mode": "fixed",
+      "weapon": "dagger",
+      "respawnMs": 5000,
+      "maxRespawns": 100
+    },
+    {
+      "x": 1228.3466900172862,
+      "y": 214.17334500864297,
       "mode": "fixed",
       "weapon": "ak47",
       "respawnMs": 10000,
-      "maxRespawns": 0
+      "maxRespawns": 10
     },
     {
-      "x": 1100,
-      "y": 140,
-      "mode": "fixed",
-      "weapon": "shotgun",
-      "respawnMs": 10000,
-      "maxRespawns": 0
-    },
-    {
-      "x": 380,
-      "y": 140,
+      "x": 120,
+      "y": 60,
       "mode": "fixed",
       "weapon": "grenade",
       "respawnMs": 10000,
       "maxRespawns": 0
     },
     {
-      "x": 1300,
-      "y": 140,
+      "x": 2308.3806245581136,
+      "y": 59.829017445970976,
       "mode": "fixed",
-      "weapon": "rocket",
+      "weapon": "grenade",
       "respawnMs": 10000,
       "maxRespawns": 0
     },
     {
-      "x": 1235.0816919707975,
-      "y": 360.1089226277302,
+      "x": 540,
+      "y": 40,
       "mode": "fixed",
-      "weapon": "lightsaber",
-      "respawnMs": 10000,
-      "maxRespawns": 0
+      "item": "armor",
+      "respawnMs": 30000,
+      "maxRespawns": 10
+    },
+    {
+      "x": 2015.538476052844,
+      "y": 29.205815034142915,
+      "mode": "fixed",
+      "item": "armor",
+      "respawnMs": 30000,
+      "maxRespawns": 10
     }
   ]
 }

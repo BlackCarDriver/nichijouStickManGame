@@ -17,7 +17,10 @@ export interface ItemJson {
   heal?: number;
   /** shield：增加的护盾值 */
   shield?: number;
-  /** 地图上维持的数量（不足时从天空补；0/不填 = 不自动投放，只能靠地图固定点） */
+  /**
+   * 天上掉补给的维持数量（与武器 `autoDrop` 同一套规则）：
+   * **只有地图开启 `autoDrop.enabled` 时才生效**；默认关闭 → 只能靠投放点/固定点
+   */
   maintain?: number;
   /** 拾取半径（px） */
   pickupRadius?: number;

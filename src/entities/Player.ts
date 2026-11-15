@@ -3,6 +3,7 @@ import { Entity } from '../core/Entity';
 import type { InputCommand } from '../core/InputCommand';
 import { StickmanRenderer } from '../render/StickmanRenderer';
 import { TEXT_RESOLUTION } from '../config/display';
+import { WORLD_GRAVITY_Y } from '../config/physics';
 import type { StickmanPose } from '../render/StickmanRenderer';
 import { GameFeel } from '../feel/GameFeel';
 import { COLLISION_CATEGORY, PLAYER_MASK_ALL } from '../core/CollisionCategories';
@@ -13,8 +14,6 @@ import { getWeapon } from '../combat/WeaponFormat';
 import { parseColor } from '../config/materials';
 import type { HeldWeapon } from '../combat/WeaponFormat';
 import type { SuperModeConfig } from '../combat/WeaponFormat';
-import type { ActionClip, ActionPose } from '../editor/ActionFormat';
-import { sampleAction } from '../editor/ActionFormat';
 import { drawHeldWeapon, drawWeaponGlow } from '../render/WeaponRenderer';
 import { raycast, getWorldBodies } from '../combat/Raycast';
 
@@ -221,15 +220,9 @@ export class Player extends Entity {
    * 武器从这里画、子弹从这里出，保证"枪口 = 子弹起点"。
    */
   private handLocal = { x: 0, y: StickmanRenderer.SHOULDER_Y };
-  /** 双手武器的握杆中心（长矛使用），普通武器仍使用前手 */
-  private weaponHandLocal = { x: 0, y: StickmanRenderer.SHOULDER_Y };
-  private weaponAimOverride: number | null = null;
 
   // ---- 攻击动作（刺击/踢）----
   private attackKind: 'stab' | 'thrust' | 'kick' | 'slash' | 'punch' | null = null;
-  private actionId: string | null = null;
-  private actionStartMs = 0;
-  private readonly actionClips: Map<string, ActionClip>;
   private attackTimer = 0;
   private attackDuration = 1;
 
@@ -338,10 +331,9 @@ export class Player extends Entity {
   private static readonly LAND_IMPACT_DURATION = 220;
   private static readonly JUMP_ANTICIPATION_DURATION = 100;
 
-  constructor(scene: Phaser.Scene, x: number, y: number, color: number, actionClips: ActionClip[] = []) {
+  constructor(scene: Phaser.Scene, x: number, y: number, color: number) {
     super();
     this.scene = scene;
-    this.actionClips = new Map(actionClips.map((clip) => [clip.id, clip]));
     this.color = color;
     this.spawnX = x;
     this.spawnY = y;
@@ -559,6 +551,26 @@ export class Player extends Entity {
 
     if (this.health.isDead) this.die();
     return hpApplied;
+  }
+
+  /**
+   * 持续接触伤害（危险材质：岩浆/尖刺等）。
+   *
+   * 与 `applyDamage` 的区别：**不走受击反馈**（不触发顿帧/震屏/伤害数字/受击姿势），
+   * 只安静地掉血 —— 否则贴着岩浆时每秒 4 次的震屏和姿势抖动会把人晃晕。
+   * 数字由 HazardSystem 每秒汇总弹一次。
+   */
+  applyHazardDamage(amount: number): number {
+    if (this.netControlled) return 0;
+    if (this.health.isDead || amount <= 0) return 0;
+    const outcome = this.health.applyDamage(amount, true);
+    if (outcome.hp <= 0 && outcome.shield <= 0) return 0;
+    this.lastHitKind = 'env';
+    if (outcome.shield > 0) {
+      this.scene.events.emit('player-shielded', this, outcome.shield, 'env');
+    }
+    if (this.health.isDead) this.die();
+    return outcome.hp;
   }
 
   /**
@@ -951,11 +963,8 @@ export class Player extends Entity {
   setAttack(
     kind: 'stab' | 'thrust' | 'kick' | 'slash' | 'punch',
     durationMs: number,
-    actionId?: string,
   ): void {
     this.attackKind = kind;
-    this.actionId = actionId ?? (this.heldWeapon?.id === 'spear' && kind === 'thrust' ? 'spear_thrust' : null);
-    this.actionStartMs = this.scene.time.now;
     this.attackTimer = durationMs;
     this.attackDuration = Math.max(1, durationMs);
   }
@@ -1148,7 +1157,7 @@ export class Player extends Entity {
     }
     // 非对称重力：下落时用 force 施加额外重力（交给引擎积分）
     if (this.body.velocity.y > 0) {
-      const extraGravityRatio = 1.6 * 0.001 * (PLAYER_CONFIG.fallGravityMultiplier - 1);
+      const extraGravityRatio = WORLD_GRAVITY_Y * 0.001 * (PLAYER_CONFIG.fallGravityMultiplier - 1);
       this.body.force.y += this.body.mass * extraGravityRatio;
     }
 
@@ -1304,7 +1313,6 @@ export class Player extends Entity {
       this.attackTimer = Math.max(0, this.attackTimer - deltaMs);
       if (this.attackTimer === 0) {
         this.attackKind = null;
-        this.actionId = null;
       }
     }
     if (this.recoilClimbDeg > 0) {
@@ -1348,7 +1356,6 @@ export class Player extends Entity {
       this.attackTimer = Math.max(0, this.attackTimer - deltaMs);
       if (this.attackTimer === 0) {
         this.attackKind = null;
-        this.actionId = null;
       }
     }
 
@@ -1405,23 +1412,6 @@ export class Player extends Entity {
     }
   }
 
-  private actionPoseForRender(): ActionPose | undefined {
-    let id = this.actionId;
-    if (!id && this.attack === null && this.pose === 'idle') {
-      if (!this.heldWeapon) id = 'unarmed_idle';
-      else if (getWeapon(this.heldWeapon.id)?.visual.style === 'spear') id = 'spear_idle';
-    }
-    if (!id) return undefined;
-    const clip = this.actionClips.get(id);
-    if (!clip) return undefined;
-    const elapsed = id.endsWith('_idle')
-      ? clip.loop
-        ? this.scene.time.now
-        : 0
-      : this.scene.time.now - this.actionStartMs;
-    return sampleAction(clip, Math.max(0, elapsed));
-  }
-
   private draw(): void {
     // 平滑逼近目标：斜坡上 grounded 可能抖动（目标在 0↔24px 间跳），
     // 直接赋值会导致视觉剧烈跳动（屏闪），所以做指数平滑。
@@ -1458,7 +1448,6 @@ export class Player extends Entity {
       facing: this.facing,
       attackKind: this.attack,
       attackProgress: this.attackProgress,
-      actionPose: this.actionPoseForRender(),
     });
 
     // 手部位置：渲染器在瞄准时输出；空手时用肩根近似
@@ -1466,8 +1455,6 @@ export class Player extends Entity {
       x: this.facing * StickmanRenderer.SHOULDER_W,
       y: StickmanRenderer.SHOULDER_Y + StickmanRenderer.SHOULDER_DY + StickmanRenderer.ARM_REACH,
     };
-    this.weaponHandLocal = StickmanRenderer.lastWeaponHand ?? this.handLocal;
-    this.weaponAimOverride = StickmanRenderer.lastWeaponAim;
 
     // 头顶装饰（头像/昵称/聊天气泡）：跟着本帧头部位置
     this.syncHeadDecor();
@@ -1514,21 +1501,15 @@ export class Player extends Entity {
         const held = this.heldWeapon;
         const isMelee = held ? getWeapon(held.id)?.attackMode === 'melee' : false;
         const thrust = Math.sin(this.attackProgress * Math.PI) * (isMelee ? 16 : 4);
-        const weaponHand = visual.style === 'spear' ? this.weaponHandLocal : this.handLocal;
-        const weaponAim =
-          visual.style === 'spear' && this.weaponAimOverride !== null
-            ? this.weaponAimOverride
-            : this.renderAim + this.slashOffset;
-        const weaponThrust = visual.style === 'spear' ? 0 : thrust;
         drawHeldWeapon(this.graphics, {
           visual,
           facing: this.facing,
-          aim: weaponAim,
+          aim: this.renderAim + this.slashOffset,
           // 光刀的颜色跟随持有者（红火柴人 → 红光刃）
           colorOverride: visual.style === 'lightsaber' ? this.color : undefined,
           hand: {
-            x: weaponHand.x + this.facing * Math.cos(this.aimAngle) * weaponThrust,
-            y: weaponHand.y + Math.sin(this.aimAngle) * weaponThrust,
+            x: this.handLocal.x + this.facing * Math.cos(this.aimAngle) * thrust,
+            y: this.handLocal.y + Math.sin(this.aimAngle) * thrust,
           },
         });
       }

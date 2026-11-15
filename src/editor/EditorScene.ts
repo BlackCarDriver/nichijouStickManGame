@@ -10,20 +10,19 @@ import Phaser from 'phaser';
 import { buildMap, destroyMapRuntime } from '../map/MapLoader';
 import type { MapObjectRuntime } from '../map/MapLoader';
 import { ensureMaterialTextures, preloadMaterialTextures } from '../map/TextureLoader';
+import { syncVisualMasks } from '../map/ShapeTexture';
+import { getItem } from '../world/ItemFormat';
+import { updateMaterialGlows } from '../map/MaterialGlow';
+import { updateObjectLabels } from '../map/ObjectLabel';
 import type { MapObject, MapObjectCircle, MapObjectPolygon, MapObjectRect } from '../map/MapFormat';
 import { MATERIALS } from '../config/materials';
 import { PLAYER_CONFIG } from '../entities/Player';
-import { RIG_BONES, chain2, solveLegIKWithHint, upVec } from '../render/StickmanRig';
 import { StickmanRenderer } from '../render/StickmanRenderer';
 import { editorStore, PREFAB_RIG } from './EditorStore';
 import type { EditorTab, ToolKind } from './EditorStore';
 import { jumpMetrics, objectCenter, type Vec } from './geometry';
 import { centroidOf, currentVertices, nearestEdge } from './polygonEdit';
 import { setStatus } from './status';
-import { actionStore } from './ActionStore';
-import type { ActionPose, ActionWeapon } from './ActionFormat';
-import { getWeapon } from '../combat/WeaponFormat';
-import { drawHeldWeapon } from '../render/WeaponRenderer';
 
 /** 地图 Tab 中对象的 gizmo 操作（改大小 / 旋转） */
 interface MapGizmoDrag {
@@ -54,7 +53,11 @@ type PrefabDrag =
   | { kind: 'rotate'; index: number; center: Vec };
 
 interface DragState {
-  kind: 'move' | 'create' | 'ruler';
+  kind: 'move' | 'create' | 'ruler' | 'marquee' | 'refmove';
+  /** refmove：被拖动的参考火柴人下标 */
+  refIndex?: number;
+  /** refmove：按下点到火柴人的偏移（避免拖动瞬间吸附到指针） */
+  refOffset?: Vec;
   start: Vec;
   current: Vec;
   /** create 工具类型 */
@@ -65,14 +68,16 @@ interface DragState {
 
 const SPAWN_COLORS = [0xe74c3c, 0x3498db, 0x2ecc71, 0xf1c40f];
 
-interface ActionDrag {
-  handle: 'hip' | 'shoulder' | 'frontElbow' | 'frontHand' | 'backElbow' | 'backHand' | 'footL' | 'footR' | 'kneeL' | 'kneeR';
-}
-
 export class EditorScene extends Phaser.Scene {
   private runtime: MapObjectRuntime[] = [];
   private gridGfx!: Phaser.GameObjects.Graphics;
   private overlay!: Phaser.GameObjects.Graphics;
+  /** 尺子读数标签（屏幕尺寸恒定的世界空间文本） */
+  private rulerLabel!: Phaser.GameObjects.Text;
+  /** 空投区域区间标签（按区域数量按需创建/复用） */
+  private zoneLabels: Phaser.GameObjects.Text[] = [];
+  /** 参考火柴人的绘制对象（每个火柴人一个 Graphics） */
+  private refUserGfx: Phaser.GameObjects.Graphics[] = [];
   private unsubscribe?: () => void;
   private rebuildQueued = false;
   private drag: DragState | null = null;
@@ -81,6 +86,18 @@ export class EditorScene extends Phaser.Scene {
   private suppressRebuild = false;
   /** 预制件工作台的鼠标操作状态 */
   private prefabDrag: PrefabDrag | null = null;
+  /** 预制件内部关节的拖动（锚点 / A 端 / B 端） */
+  private prefabJointDrag: { index: number; side: 'a' | 'b' | 'anchor' } | null = null;
+  /** 拖动端点时指针当前指到的部件（松手才真正改连接） */
+  private prefabJointHoverPart: number | null = null;
+  /** 拖动端点时的鼠标世界位置（端点跟手） */
+  private prefabJointDragPos: Vec | null = null;
+  /** 鼠标悬停的关节（用于高亮） */
+  private prefabJointHover: number | null = null;
+  /** 预制件武器掉落点的拖动 */
+  private prefabWeaponDrag: { index: number; offset: Vec } | null = null;
+  /** 关节编号标签（按需创建/复用） */
+  private prefabJointLabels: Phaser.GameObjects.Text[] = [];
   /** 多边形顶点拖动状态 */
   private vertexDrag: { index: number } | null = null;
   /** 地图 Tab 的 gizmo 拖动状态 */
@@ -95,8 +112,6 @@ export class EditorScene extends Phaser.Scene {
   private refGuide!: Phaser.GameObjects.Graphics;
   private lastNotify = 0;
   private lastTab: EditorTab = 'map';
-  /** 动作编辑画布中的当前关节拖动 */
-  private actionDrag: ActionDrag | null = null;
 
   constructor() {
     super('EditorScene');
@@ -118,6 +133,18 @@ export class EditorScene extends Phaser.Scene {
     this.refGuide = this.add.graphics().setDepth(400);
     this.refFigure = this.add.graphics().setDepth(401);
     this.overlay = this.add.graphics().setDepth(1000);
+    this.rulerLabel = this.add
+      .text(0, 0, '', {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: '12px',
+        color: '#e8f4ff',
+        backgroundColor: '#0b0b14',
+        padding: { x: 5, y: 2 },
+      })
+      .setDepth(2000)
+      .setAlpha(0.92)
+      .setOrigin(0, 1)
+      .setVisible(false);
     this.cameras.main.setBackgroundColor('#15151f');
 
     this.setupInput();
@@ -157,19 +184,34 @@ export class EditorScene extends Phaser.Scene {
   }
 
   /** 每帧最多重建一次（在 update 早期处理） */
-  update(_time?: number, delta = 0): void {
-    actionStore.tick(delta);
+  update(_time?: number): void {
+    // 贴图版圆/多边形的蒙版跟随视觉（拖动/旋转/焊接体都靠它；数量很少，开销可忽略）
+    syncVisualMasks(this.runtime);
+    // 材质发光：跟随物体 + 呼吸/闪烁（编辑器里也实时可见）
+    updateMaterialGlows(this.runtime, this.time.now);
+    updateObjectLabels(this.runtime);
     // 兜底：鼠标已松开但拖动状态残留（例如在画布外松开、窗口失焦）
-    if ((this.prefabDrag || this.vertexDrag || this.mapGizmoDrag || this.drag) && !this.input.activePointer.isDown) {
+    if (
+      (this.prefabDrag ||
+        this.prefabJointDrag ||
+        this.prefabWeaponDrag ||
+        this.vertexDrag ||
+        this.mapGizmoDrag ||
+        this.drag) &&
+      !this.input.activePointer.isDown
+    ) {
       this.onPointerUp();
     }
-    if (!this.prefabDrag && !this.vertexDrag && !this.mapGizmoDrag && !this.drag && !this.panning) {
+    if (
+      !this.prefabDrag &&
+      !this.prefabJointDrag &&
+      !this.prefabWeaponDrag &&
+      !this.vertexDrag &&
+      !this.mapGizmoDrag &&
+      !this.drag &&
+      !this.panning
+    ) {
       this.updateHoverCursor();
-    }
-    if (editorStore.tab === 'action') {
-      this.drawReferenceFigure();
-      this.drawOverlay();
-      return;
     }
     if (!this.rebuildQueued) return;
     this.rebuildQueued = false;
@@ -193,14 +235,290 @@ export class EditorScene extends Phaser.Scene {
         else if (Math.hypot(p.x - giz.rotate.x, p.y - giz.rotate.y) <= hs) cursor = 'grab';
       }
     } else if (store.tab === 'prefab') {
+      // 内部关节手柄优先（可直接拖到别的部件上改连接）
+      const jointHit = this.prefabJointHandleAt(p);
+      if (jointHit) cursor = 'grab';
+      const hover = jointHit?.index ?? null;
+      if (hover !== this.prefabJointHover) {
+        this.prefabJointHover = hover;
+        this.drawOverlay();
+      }
       const idx = store.selectedPartIndex();
       const b = idx === null ? null : store.partWorldBounds(idx);
-      if (b) {
+      if (b && !jointHit) {
         if (Math.hypot(p.x - b.maxX, p.y - b.maxY) <= hs) cursor = 'nwse-resize';
         else if (Math.hypot(p.x - (b.minX + b.maxX) / 2, p.y - b.minY - 30 / z) <= hs) cursor = 'grab';
       }
     }
     if (canvas.style.cursor !== cursor) canvas.style.cursor = cursor;
+  }
+
+  // ---------------- 预制件内部关节：绘制 / 拖动 ----------------
+
+  /** 关节端点手柄离锚点的距离（世界单位，按缩放换算，保证屏幕上恒定） */
+  private jointKnobDistance(): number {
+    return 30 / this.cameras.main.zoom;
+  }
+
+  /**
+   * 关节的两条"手臂"端点：从锚点朝两端部件的方向伸出固定距离。
+   *
+   * 端点故意**不放在部件中心**：部件中心同时也是拖动/选择部件的抓取点，
+   * 叠在一起会让"想拖部件"变成"拖关节端点"。
+   */
+  private prefabJointKnob(index: number): { a: Vec; b: Vec; worldEnd: boolean } | null {
+    const store = editorStore;
+    const world = store.prefabJointWorld(index);
+    if (!world) return null;
+    const dist = this.jointKnobDistance();
+    const along = (from: Vec, to: Vec): Vec => {
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-6) return { x: from.x, y: from.y - dist };
+      const step = Math.min(dist, Math.max(10, len * 0.75));
+      return { x: from.x + (dx / len) * step, y: from.y + (dy / len) * step };
+    };
+    return {
+      a: world.a ? along(world.anchor, world.a) : { x: world.anchor.x - dist, y: world.anchor.y },
+      b: world.b ? along(world.anchor, world.b) : { x: world.anchor.x, y: world.anchor.y - dist },
+      worldEnd: !world.b,
+    };
+  }
+
+  /**
+   * 命中关节手柄。
+   *
+   * 端点（A/B 小圆点）只对**当前高亮的那条关节**显示与命中：链节很密，8 条关节的
+   * 端点全画出来会互相叠在一起（44px 一节、缩到 0.5 倍时按钮比链节还大），
+   * 谁也别想点准。所以交互是：鼠标移到锚点 → 该关节高亮并露出两个端点 → 把端点拖到
+   * 别的部件上改连接。
+   */
+  private prefabJointHandleAt(p: Vec): { index: number; side: 'a' | 'b' | 'anchor' } | null {
+    const store = editorStore;
+    const z = this.cameras.main.zoom;
+    const knobR = 11 / z;
+    const anchorR = 9 / z;
+
+    // 1) 已高亮的关节：先判它的两个端点（拖到一半也不会因为掠过别的锚点而丢焦点）
+    const hot = this.prefabJointHover ?? this.prefabJointDrag?.index ?? null;
+    if (hot !== null) {
+      const knobs = this.prefabJointKnob(hot);
+      if (knobs) {
+        if (Math.hypot(p.x - knobs.a.x, p.y - knobs.a.y) <= knobR) return { index: hot, side: 'a' };
+        if (Math.hypot(p.x - knobs.b.x, p.y - knobs.b.y) <= knobR) return { index: hot, side: 'b' };
+      }
+    }
+
+    // 2) 锚点：取最近的一条
+    let best: { index: number; side: 'anchor' } | null = null;
+    let bestDist = anchorR;
+    for (let i = store.prefabJoints().length - 1; i >= 0; i--) {
+      const world = store.prefabJointWorld(i);
+      if (!world) continue;
+      const d = Math.hypot(p.x - world.anchor.x, p.y - world.anchor.y);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = { index: i, side: 'anchor' };
+      }
+    }
+    return best;
+  }
+
+  private prefabJointLabel(index: number): Phaser.GameObjects.Text {
+    let label = this.prefabJointLabels[index];
+    if (!label) {
+      label = this.add
+        .text(0, 0, '', {
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+          fontSize: '10px',
+          color: '#ff9de0',
+          backgroundColor: '#0b0b14',
+          padding: { x: 4, y: 1 },
+        })
+        .setDepth(2000)
+        .setAlpha(0.92)
+        .setOrigin(0.5, 1)
+        .setVisible(false);
+      this.prefabJointLabels[index] = label;
+    }
+    return label;
+  }
+
+  /**
+   * 画预制件内部关节：锚点十字 + 两条手臂指向它连接的两个部件（部件用同色描边标出）。
+   * 拖动端点 → 改连接的部件；拖动锚点 → 移动铰链位置。
+   */
+  private drawPrefabJoints(g: Phaser.GameObjects.Graphics): void {
+    const store = editorStore;
+    const joints = store.prefabJoints();
+    const z = this.cameras.main.zoom;
+    const unit = 1 / z;
+    const ORANGE = 0xffa94d;
+
+    for (let i = joints.length; i < this.prefabJointLabels.length; i++) {
+      this.prefabJointLabels[i].setVisible(false);
+    }
+
+    joints.forEach((joint, i) => {
+      const world = store.prefabJointWorld(i);
+      const knobs = this.prefabJointKnob(i);
+      if (!world || !knobs) return;
+      const hot = this.prefabJointHover === i || this.prefabJointDrag?.index === i;
+      const anchor = world.anchor;
+
+      // ---- 两端部件的描边：一眼看出这条关节连的是哪两个物体 ----
+      const outline = (partIndex: number, color: number) => {
+        const b = store.partWorldBounds(partIndex);
+        if (!b) return;
+        g.lineStyle((hot ? 2 : 1) * Math.max(1, Math.min(2, 1 / z)), color, hot ? 0.95 : 0.45);
+        g.strokeRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
+      };
+      outline(joint.bodyA, 0x4dd6ff);
+      if (typeof joint.bodyB === 'number') outline(joint.bodyB, ORANGE);
+
+      // ---- 端点跟手：拖动中把被拖的那个端点画在鼠标位置 ----
+      const dragSide = this.prefabJointDrag?.index === i ? this.prefabJointDrag.side : null;
+      const dragPos = dragSide && dragSide !== 'anchor' ? this.prefabJointDragPos : null;
+      if (dragPos && dragSide === 'a') knobs.a = { x: dragPos.x, y: dragPos.y };
+      if (dragPos && dragSide === 'b') knobs.b = { x: dragPos.x, y: dragPos.y };
+
+      // ---- 手臂：锚点 → 两端 ----
+      g.lineStyle(Math.max(1, 1.5 * unit), 0x9d6bff, hot ? 0.95 : 0.45);
+      g.lineBetween(anchor.x, anchor.y, knobs.a.x, knobs.a.y);
+      g.lineBetween(anchor.x, anchor.y, knobs.b.x, knobs.b.y);
+
+      // ---- 端点手柄：只在高亮/拖动时露出（密链节下全画会互相重叠，点不准）----
+      const showKnobs = hot;
+      const knobR = 6 * unit + 1.5;
+      if (showKnobs) {
+        g.fillStyle(0x0b0b14, 0.9);
+        g.fillCircle(knobs.a.x, knobs.a.y, knobR + 1.5);
+        g.fillStyle(0x4dd6ff, 1);
+        g.fillCircle(knobs.a.x, knobs.a.y, knobR);
+
+        if (dragPos && (dragSide === 'a' || dragSide === 'b')) {
+          const color = dragSide === 'a' ? 0x4dd6ff : ORANGE;
+          g.lineStyle(2 * unit + 1, color, 1);
+          g.strokeCircle(knobs[dragSide].x, knobs[dragSide].y, knobR + 2);
+        }
+
+        if (knobs.worldEnd) {
+          g.fillStyle(0x0b0b14, 0.9);
+          g.fillRect(knobs.b.x - knobR - 1.5, knobs.b.y - knobR - 1.5, (knobR + 1.5) * 2, (knobR + 1.5) * 2);
+          g.fillStyle(0xffffff, 0.9);
+          g.fillRect(knobs.b.x - knobR, knobs.b.y - knobR, knobR * 2, knobR * 2);
+        } else {
+          g.fillStyle(0x0b0b14, 0.9);
+          g.fillCircle(knobs.b.x, knobs.b.y, knobR + 1.5);
+          g.fillStyle(ORANGE, 1);
+          g.fillCircle(knobs.b.x, knobs.b.y, knobR);
+        }
+      }
+
+      // ---- 锚点十字 ----
+      const crossR = 8 * unit + 2;
+      g.lineStyle(Math.max(1, 2 * unit), 0xff5cc8, hot ? 1 : 0.85);
+      g.strokeCircle(anchor.x, anchor.y, crossR);
+      g.lineBetween(anchor.x - crossR - 3, anchor.y, anchor.x + crossR + 3, anchor.y);
+      g.lineBetween(anchor.x, anchor.y - crossR - 3, anchor.x, anchor.y + crossR + 3);
+      g.fillStyle(0xff5cc8, 0.9);
+      g.fillCircle(anchor.x, anchor.y, 3);
+
+      // ---- 编号标签 ----
+      const label = this.prefabJointLabel(i);
+      label.setVisible(true);
+      label.setScale(unit);
+      label.setText(`#${i + 1}${knobs.worldEnd ? ' → world' : ''}`);
+      label.setPosition(anchor.x, anchor.y - (crossR + 6) * unit * 1.4);
+    });
+
+    // ---- 正在拖端点：高亮当前指向的部件（松手生效）----
+    if (this.prefabJointDrag && this.prefabJointDrag.side !== 'anchor' && this.prefabJointHoverPart !== null) {
+      const b = store.partWorldBounds(this.prefabJointHoverPart);
+      if (b) {
+        const color = this.prefabJointDrag.side === 'a' ? 0x4dd6ff : ORANGE;
+        g.lineStyle(3, color, 1);
+        g.strokeRect(b.minX - 2, b.minY - 2, b.maxX - b.minX + 4, b.maxY - b.minY + 4);
+      }
+    }
+  }
+
+  /**
+   * 画预制件自带的武器掉落点。
+   * 视觉与地图 Tab 的武器点一致（圆底 + 小枪 + 随机"?" + 可刷新绿点），
+   * 这样"预制件里的枪位"和"地图里的枪位"看起来是同一个东西。
+   */
+  private drawPrefabWeapons(g: Phaser.GameObjects.Graphics): void {
+    const store = editorStore;
+    const list = store.prefabWeaponSpawns();
+    if (list.length === 0) return;
+    list.forEach((w, i) => {
+      const p = store.prefabWeaponWorld(i);
+      if (!p) return;
+      const selected = store.selection.includes(`pweapon:${i}`);
+      g.fillStyle(0x2b2b36, 0.85);
+      g.fillCircle(p.x, p.y, 20);
+      g.lineStyle(selected ? 3 : 2, selected ? 0xffffff : 0xf5d76e, 1);
+      g.strokeCircle(p.x, p.y, 20);
+
+      const isRandom = (w.mode ?? 'fixed') === 'random';
+      const color = isRandom ? 0x66d9ef : 0xf5d76e;
+      g.lineStyle(3, color, 1);
+      g.lineBetween(p.x - 9, p.y, p.x + 9, p.y);
+      g.lineBetween(p.x + 4, p.y - 5, p.x + 9, p.y);
+      g.fillStyle(color, 1);
+      g.fillCircle(p.x - 10, p.y + 3, 3);
+      if (isRandom) {
+        g.lineStyle(1.8, color, 1);
+        g.beginPath();
+        g.arc(p.x + 12, p.y + 11, 4.5, Math.PI * 0.9, Math.PI * 2.3, false);
+        g.strokePath();
+        g.fillStyle(color, 1);
+        g.fillCircle(p.x + 12, p.y + 20, 1.7);
+      }
+      if ((w.respawnMs ?? 0) > 0) {
+        g.fillStyle(0x54d2b0, 1);
+        g.fillCircle(p.x - 12, p.y + 13, 3.2);
+      }
+    });
+  }
+
+  /** 拖动关节手柄时（每帧移动） */
+  private prefabJointPointerMove(p: Vec): void {
+    const d = this.prefabJointDrag;
+    if (!d) return;
+    const store = editorStore;
+    this.prefabJointDragPos = p;
+    if (d.side === 'anchor') {
+      store.patchPrefabJointLive(d.index, { anchor: store.worldToPartLocal(p) });
+      return;
+    }
+    this.prefabJointHoverPart = store.hitTestPart(p);
+  }
+
+  /** 松开关节手柄：端点落到哪个部件就连哪个；落到空白处 = 改回 world */
+  private prefabJointPointerUp(): void {
+    const d = this.prefabJointDrag;
+    if (!d) return;
+    this.prefabJointDrag = null;
+    this.prefabJointDragPos = null;
+    const target = this.prefabJointHoverPart;
+    this.prefabJointHoverPart = null;
+    const store = editorStore;
+    if (d.side === 'anchor') {
+      store.commit();
+    } else if (d.side === 'a') {
+      if (target !== null) {
+        store.setPrefabJointBody(d.index, 'a', target);
+        store.message = `关节 #${d.index + 1} 的 A 端 → 部件 #${target}`;
+      }
+    } else {
+      store.setPrefabJointBody(d.index, 'b', target);
+      store.message =
+        target === null ? `关节 #${d.index + 1} 的 B 端 → world（固定在世界锚点）` : `关节 #${d.index + 1} 的 B 端 → 部件 #${target}`;
+    }
+    this.drawOverlay();
   }
 
   private rebuildAll(): void {
@@ -236,29 +554,48 @@ export class EditorScene extends Phaser.Scene {
     this.drawOverlay();
   }
 
+  /**
+   * 当前可见的世界矩形。
+   *
+   * 不用 `cameras.main.worldView`：那是 `preRender()` 才算出来的，
+   * `fitToMap()` 里刚改完 zoom/scroll 就立刻 drawGrid 时它还是脏的（首屏网格/遮罩会缺）。
+   * 这里用 scrollX/scrollY/zoom 现算，和 Camera.preRender 的公式一致。
+   */
+  private viewRect(): { x: number; y: number; w: number; h: number } {
+    const cam = this.cameras.main;
+    const w = cam.width / cam.zoom;
+    const h = cam.height / cam.zoom;
+    return {
+      x: cam.scrollX + cam.width / 2 - w / 2,
+      y: cam.scrollY + cam.height / 2 - h / 2,
+      w,
+      h,
+    };
+  }
+
   private drawGrid(): void {
     const g = this.gridGfx;
     g.clear();
     const store = editorStore;
     if (!store.showGrid || store.gridSize <= 0) return;
 
-    const view = this.cameras.main.worldView;
+    const view = this.viewRect();
     const step = store.gridSize;
     const major = step * 5;
     const startX = Math.floor(view.x / step) * step;
-    const endX = Math.ceil((view.x + view.width) / step) * step;
+    const endX = Math.ceil((view.x + view.w) / step) * step;
     const startY = Math.floor(view.y / step) * step;
-    const endY = Math.ceil((view.y + view.height) / step) * step;
+    const endY = Math.ceil((view.y + view.h) / step) * step;
 
     for (let x = startX; x <= endX; x += step) {
       const isMajor = x % major === 0;
       g.lineStyle(1, isMajor ? 0x3a3a52 : 0x26263a, isMajor ? 0.9 : 0.6);
-      g.lineBetween(x, view.y, x, view.y + view.height);
+      g.lineBetween(x, view.y, x, view.y + view.h);
     }
     for (let y = startY; y <= endY; y += step) {
       const isMajor = y % major === 0;
       g.lineStyle(1, isMajor ? 0x3a3a52 : 0x26263a, isMajor ? 0.9 : 0.6);
-      g.lineBetween(view.x, y, view.x + view.width, y);
+      g.lineBetween(view.x, y, view.x + view.w, y);
     }
   }
 
@@ -268,18 +605,8 @@ export class EditorScene extends Phaser.Scene {
     const g = this.refFigure;
     const guide = this.refGuide;
     guide.clear();
-    if (store.tab === 'map') {
+    if (store.tab === 'map' || !store.showPrefabRef) {
       g.setVisible(false);
-      return;
-    }
-    if (store.tab === 'action') {
-      const origin = this.actionOrigin();
-      g.setVisible(true);
-      g.setPosition(origin.x, origin.y);
-      this.drawActionFigure(g, actionStore.currentPose, actionStore.current.weapon);
-      guide.clear();
-      guide.lineStyle(1, 0x8fa3b8, 0.3);
-      guide.lineBetween(origin.x - 220, origin.y + 48, origin.x + 260, origin.y + 48);
       return;
     }
     g.setVisible(true);
@@ -312,254 +639,6 @@ export class EditorScene extends Phaser.Scene {
     guide.lineBetween(bx - 6, feet, bx + 6, feet);
     guide.lineStyle(1, 0x8fa3b8, 0.18);
     guide.lineBetween(bx - 60, feet, bx + 160, feet);
-  }
-
-  private actionOrigin(): Vec {
-    const map = editorStore.canvasMap();
-    return { x: map.width / 2, y: map.height / 2 + 80 };
-  }
-
-  private actionArm(root: Vec, shoulder: number, elbow: number): { joint: Vec; end: Vec } {
-    return chain2(root.x, root.y, shoulder, RIG_BONES.UPPER_ARM, elbow, RIG_BONES.FOREARM, 1, 'down');
-  }
-
-  private drawActionFigure(g: Phaser.GameObjects.Graphics, pose: ActionPose, weapon: ActionWeapon): void {
-    g.clear();
-    const hip = { x: pose.rootX, y: pose.rootY };
-    const footL = { x: hip.x + pose.footLX, y: hip.y + pose.footLY };
-    const footR = { x: hip.x + pose.footRX, y: hip.y + pose.footRY };
-    const legs = [
-      solveLegIKWithHint(
-        hip.x,
-        hip.y,
-        footL.x,
-        footL.y,
-        hip.x + pose.kneeLHintX,
-        hip.y + pose.kneeLHintY,
-      ),
-      solveLegIKWithHint(
-        hip.x,
-        hip.y,
-        footR.x,
-        footR.y,
-        hip.x + pose.kneeRHintX,
-        hip.y + pose.kneeRHintY,
-      ),
-    ];
-    const legChains = [
-      chain2(hip.x, hip.y, legs[0].thighAngle, RIG_BONES.THIGH, legs[0].kneeBend, RIG_BONES.SHIN, 1, 'down'),
-      chain2(hip.x, hip.y, legs[1].thighAngle, RIG_BONES.THIGH, legs[1].kneeBend, RIG_BONES.SHIN, 1, 'down'),
-    ];
-    g.lineStyle(5.5, 0x8fa3b8, 1);
-    for (const leg of legChains) {
-      g.lineBetween(hip.x, hip.y, leg.joint.x, leg.joint.y);
-      g.lineBetween(leg.joint.x, leg.joint.y, leg.end.x, leg.end.y);
-      g.fillStyle(0xdce7f0, 1);
-      g.fillCircle(leg.joint.x, leg.joint.y, 2.5);
-    }
-
-    const torsoAngle = pose.torsoTilt + pose.torsoTwist * 0.35;
-    const torso = upVec(torsoAngle, RIG_BONES.TORSO, 1);
-    const shoulder = { x: hip.x + torso.x, y: hip.y + torso.y };
-    g.lineStyle(7, 0x8fa3b8, 1);
-    g.lineBetween(hip.x, hip.y, shoulder.x, shoulder.y);
-    const neck = upVec(pose.headTilt, RIG_BONES.NECK, 1);
-    const headBase = { x: shoulder.x + neck.x, y: shoulder.y + neck.y };
-    const head = upVec(pose.headTilt, RIG_BONES.HEAD_R * 0.75, 1);
-    g.fillStyle(0x8fa3b8, 1);
-    g.fillCircle(headBase.x + head.x, headBase.y + head.y + pose.headOffsetY, RIG_BONES.HEAD_R);
-
-    const frontRoot = { x: shoulder.x + 3.5, y: shoulder.y + 1.5 };
-    const backRoot = { x: shoulder.x - 3.5, y: shoulder.y + 1.5 };
-    const front = this.actionArm(frontRoot, pose.armFrontShoulder, pose.armFrontElbow);
-    const back = this.actionArm(backRoot, pose.armBackShoulder, pose.armBackElbow);
-    g.lineStyle(4, 0x8fa3b8, 1);
-    g.lineBetween(frontRoot.x, frontRoot.y, front.joint.x, front.joint.y);
-    g.lineBetween(front.joint.x, front.joint.y, front.end.x, front.end.y);
-    g.lineBetween(backRoot.x, backRoot.y, back.joint.x, back.joint.y);
-    g.lineBetween(back.joint.x, back.joint.y, back.end.x, back.end.y);
-    g.fillStyle(0xdce7f0, 1);
-    g.fillCircle(front.joint.x, front.joint.y, 2.2);
-    g.fillCircle(back.joint.x, back.joint.y, 2.2);
-
-    if (weapon !== 'none') {
-      const weaponId = weapon === 'spear' ? 'spear' : weapon === 'dagger' ? 'dagger' : 'lightsaber';
-      const visual = getWeapon(weaponId)?.visual;
-      if (visual) {
-        const twoHanded = weapon === 'spear';
-        const aim = twoHanded
-          ? Math.atan2(front.end.y - back.end.y, front.end.x - back.end.x)
-          : Math.atan2(front.end.y - frontRoot.y, front.end.x - frontRoot.x);
-        const hand = twoHanded
-          ? {
-              x: (front.end.x + back.end.x) * 0.5,
-              y: (front.end.y + back.end.y) * 0.5,
-            }
-          : front.end;
-        drawHeldWeapon(g, { visual, facing: 1, aim, hand });
-      }
-    }
-  }
-
-  private actionHandlePoints(pose: ActionPose): Record<ActionDrag['handle'], Vec> {
-    const hip = { x: pose.rootX, y: pose.rootY };
-    const torsoAngle = pose.torsoTilt + pose.torsoTwist * 0.35;
-    const torso = upVec(torsoAngle, RIG_BONES.TORSO, 1);
-    const shoulder = { x: hip.x + torso.x, y: hip.y + torso.y };
-    const frontRoot = { x: shoulder.x + 3.5, y: shoulder.y + 1.5 };
-    const backRoot = { x: shoulder.x - 3.5, y: shoulder.y + 1.5 };
-    const front = this.actionArm(frontRoot, pose.armFrontShoulder, pose.armFrontElbow);
-    const back = this.actionArm(backRoot, pose.armBackShoulder, pose.armBackElbow);
-    const leftLeg = solveLegIKWithHint(
-      hip.x,
-      hip.y,
-      hip.x + pose.footLX,
-      hip.y + pose.footLY,
-      hip.x + pose.kneeLHintX,
-      hip.y + pose.kneeLHintY,
-    );
-    const rightLeg = solveLegIKWithHint(
-      hip.x,
-      hip.y,
-      hip.x + pose.footRX,
-      hip.y + pose.footRY,
-      hip.x + pose.kneeRHintX,
-      hip.y + pose.kneeRHintY,
-    );
-    return {
-      hip,
-      shoulder,
-      frontElbow: front.joint,
-      frontHand: front.end,
-      backElbow: back.joint,
-      backHand: back.end,
-      footL: { x: hip.x + pose.footLX, y: hip.y + pose.footLY },
-      footR: { x: hip.x + pose.footRX, y: hip.y + pose.footRY },
-      kneeL: leftLeg.knee,
-      kneeR: rightLeg.knee,
-    };
-  }
-
-  private actionArmPose(root: Vec, target: Vec): { shoulder: number; elbow: number } {
-    const dx = target.x - root.x;
-    const dy = target.y - root.y;
-    const l1 = RIG_BONES.UPPER_ARM;
-    const l2 = RIG_BONES.FOREARM;
-    const distance = Math.max(Math.abs(l1 - l2) + 0.5, Math.min(l1 + l2 - 0.01, Math.hypot(dx, dy)));
-    const cosB = (l1 * l1 + distance * distance - l2 * l2) / (2 * l1 * distance);
-    const bendAtRoot = Math.acos(Math.max(-1, Math.min(1, cosB)));
-    return {
-      shoulder: (Math.atan2(dx, dy) - bendAtRoot) * (180 / Math.PI),
-      elbow: bendAtRoot * 2 * (180 / Math.PI),
-    };
-  }
-
-  private drawActionHandles(): void {
-    const g = this.overlay;
-    const origin = this.actionOrigin();
-    const points = this.actionHandlePoints(actionStore.currentPose);
-    const entries: Array<[ActionDrag['handle'], number]> = [
-      ['hip', 0xf1c40f],
-      ['shoulder', 0xf1c40f],
-      ['frontElbow', 0x48dbfb],
-      ['frontHand', 0x2ecc71],
-      ['backElbow', 0x48dbfb],
-      ['backHand', 0x2ecc71],
-      ['footL', 0xff8c42],
-      ['footR', 0xff8c42],
-      ['kneeL', 0xffd166],
-      ['kneeR', 0xffd166],
-    ];
-    for (const [name, color] of entries) {
-      const p = points[name];
-      const x = origin.x + p.x;
-      const y = origin.y + p.y;
-      g.lineStyle(1.5, color, 0.9);
-      g.strokeCircle(x, y, 7);
-      g.fillStyle(color, 0.9);
-      g.fillCircle(x, y, 3.5);
-    }
-    g.lineStyle(1, 0xffffff, 0.25);
-    g.lineBetween(origin.x - 220, origin.y, origin.x + 260, origin.y);
-    g.lineBetween(origin.x, origin.y - 120, origin.x, origin.y + 70);
-  }
-
-  private actionPointerDown(p: Vec): void {
-    const origin = this.actionOrigin();
-    const local = { x: p.x - origin.x, y: p.y - origin.y };
-    const points = this.actionHandlePoints(actionStore.currentPose);
-    const order: ActionDrag['handle'][] = ['frontHand', 'backHand', 'frontElbow', 'backElbow', 'kneeL', 'kneeR', 'footL', 'footR', 'shoulder', 'hip'];
-    const hit = order.find((name) => Math.hypot(local.x - points[name].x, local.y - points[name].y) <= 12 / this.cameras.main.zoom);
-    if (!hit) return;
-    actionStore.ensureKeyframeAtTime();
-    this.actionDrag = { handle: hit };
-  }
-
-  private actionPointerMove(p: Vec): void {
-    if (!this.actionDrag) return;
-    const origin = this.actionOrigin();
-    const local = { x: p.x - origin.x, y: p.y - origin.y };
-    const pose = actionStore.currentPose;
-    const hip = { x: pose.rootX, y: pose.rootY };
-    const torsoAngle = pose.torsoTilt + pose.torsoTwist * 0.35;
-    const torso = upVec(torsoAngle, RIG_BONES.TORSO, 1);
-    const shoulder = { x: hip.x + torso.x, y: hip.y + torso.y };
-    const frontRoot = { x: shoulder.x + 3.5, y: shoulder.y + 1.5 };
-    const backRoot = { x: shoulder.x - 3.5, y: shoulder.y + 1.5 };
-    const patch: Partial<ActionPose> = {};
-    switch (this.actionDrag.handle) {
-      case 'hip':
-        patch.rootX = local.x;
-        patch.rootY = local.y;
-        break;
-      case 'shoulder':
-        patch.torsoTilt = (Math.atan2(local.x - hip.x, -(local.y - hip.y)) * 180) / Math.PI - pose.torsoTwist * 0.35;
-        break;
-      case 'frontHand': {
-        const arm = this.actionArmPose(frontRoot, local);
-        patch.armFrontShoulder = arm.shoulder;
-        patch.armFrontElbow = arm.elbow;
-        break;
-      }
-      case 'backHand': {
-        const arm = this.actionArmPose(backRoot, local);
-        patch.armBackShoulder = arm.shoulder;
-        patch.armBackElbow = arm.elbow;
-        break;
-      }
-      case 'frontElbow':
-        patch.armFrontShoulder = (Math.atan2(local.x - frontRoot.x, local.y - frontRoot.y) * 180) / Math.PI;
-        patch.armFrontElbow = pose.armFrontElbow;
-        break;
-      case 'backElbow':
-        patch.armBackShoulder = (Math.atan2(local.x - backRoot.x, local.y - backRoot.y) * 180) / Math.PI;
-        patch.armBackElbow = pose.armBackElbow;
-        break;
-      case 'kneeL':
-        patch.kneeLHintX = local.x - pose.rootX;
-        patch.kneeLHintY = local.y - pose.rootY;
-        break;
-      case 'kneeR':
-        patch.kneeRHintX = local.x - pose.rootX;
-        patch.kneeRHintY = local.y - pose.rootY;
-        break;
-      case 'footL':
-        patch.footLX = local.x - pose.rootX;
-        patch.footLY = local.y - pose.rootY;
-        break;
-      case 'footR':
-        patch.footRX = local.x - pose.rootX;
-        patch.footRY = local.y - pose.rootY;
-        break;
-    }
-    actionStore.updateCurrentPoseLive(patch);
-  }
-
-  private actionPointerUp(): boolean {
-    if (!this.actionDrag) return false;
-    this.actionDrag = null;
-    actionStore.commit();
-    return true;
   }
 
   /** 虚线（Graphics 没有原生 dash） */
@@ -847,10 +926,17 @@ export class EditorScene extends Phaser.Scene {
   }
 
   // ---------------- 预制件工作台交互 ----------------
-  private prefabPointerDown(p: Vec, altKey = false, doubleClick = false): void {
+  private prefabPointerDown(p: Vec, altKey = false, doubleClick = false, addSelect = false): void {
     const store = editorStore;
     // 顶点手柄优先级最高（选中多边形部件时）
     if (this.tryVertexEdit(p, altKey, doubleClick)) return;
+
+    // Alt + 拖动 = 从任意位置框选（起点压在部件上也行）
+    // 需求来源：部件比较大时"空白处起手"很难找，只能框到一个，误以为框选坏了。
+    if (altKey) {
+      this.drag = { kind: 'marquee', start: p, current: p, lastApplied: { x: 0, y: 0 } };
+      return;
+    }
 
     const z = this.cameras.main.zoom;
     const hs = 9 / z;
@@ -878,10 +964,17 @@ export class EditorScene extends Phaser.Scene {
 
     const hit = store.hitTestPart(p);
     if (hit === null) {
-      store.select([]);
+      // 空白处按下 = 拉框多选（松开时才决定选中哪些部件）
+      this.drag = { kind: 'marquee', start: p, current: p, lastApplied: { x: 0, y: 0 } };
       return;
     }
-    store.select([`part:${hit}`]);
+    if (addSelect) {
+      // Ctrl/Shift + 点击：加选 / 取消勾选（不进入拖动）
+      store.toggleSelect(`part:${hit}`);
+      return;
+    }
+    // 点已在多选里的部件：保持多选（方便整体拖动）
+    if (!store.selection.includes(`part:${hit}`)) store.select([`part:${hit}`]);
     this.prefabDrag = { kind: 'move', index: hit, last: p };
     // 焊接体只有一个刚体，无法局部移动 → 走重建路径（部件数量少，开销可接受）
     this.suppressRebuild = store.prefabDraft.bodyMode !== 'compound';
@@ -896,6 +989,28 @@ export class EditorScene extends Phaser.Scene {
     const local = store.worldToPartLocal(p);
 
     if (d.kind === 'move') {
+      // 多选拖动：拖其中任意一个 → 所有选中的部件一起移动（保持相对位置）
+      const selected = store.selectedPartIndices();
+      if (selected.length > 1 && selected.includes(d.index)) {
+        const dx = p.x - d.last.x;
+        const dy = p.y - d.last.y;
+        d.last = p;
+        for (const idx of selected) {
+          const item = store.prefabDraft.parts[idx];
+          if (!item) continue;
+          store.patchPartLive(idx, { x: item.x + dx, y: item.y + dy });
+        }
+        if (store.prefabDraft.bodyMode === 'compound') this.queueRebuild();
+        else {
+          for (const idx of selected) {
+            const item = store.prefabDraft.parts[idx];
+            if (item) this.applyLiveVisual(this.partRuntimeId(idx), item, store.prefabRigOrigin());
+          }
+        }
+        this.drawOverlay();
+        return;
+      }
+
       const center = store.partWorldCenter(d.index);
       if (!center) return;
       // 拖动过程中不吸附（像素级跟手），松手时再对齐网格
@@ -951,7 +1066,8 @@ export class EditorScene extends Phaser.Scene {
     const store = editorStore;
     // 松手时吸附到网格（按住 Shift 则不吸附）
     if (!this.lastShift) {
-      if (d.kind === 'move') store.snapPartToGrid(d.index);
+      // 多选时整体吸附：逐个吸附会把相对位置改乱（拼好的门框会"散架"）
+      if (d.kind === 'move') store.snapSelectedPartsTogether(d.index);
       else if (d.kind === 'resize') {
         const part = store.prefabDraft.parts[d.index];
         if (part?.type === 'rect' && store.snapToGrid) {
@@ -978,14 +1094,15 @@ export class EditorScene extends Phaser.Scene {
     const store = editorStore;
     const g = this.overlay;
     g.clear();
+    this.rulerLabel.setVisible(false);
+    for (const label of this.zoneLabels) label.setVisible(false);
+    if (store.tab !== 'map') for (const fig of this.refUserGfx) fig.setVisible(false);
 
-    if (store.tab === 'action') {
-      this.drawActionHandles();
-      return;
-    }
-
-    // 预制件工作台：选中部件的 gizmo（缩放手柄 + 旋转手柄）
+    // 预制件工作台：选中部件的 gizmo（缩放手柄 + 旋转手柄）+ 内部关节
     if (store.tab === 'prefab') {
+      this.drawPrefabJoints(g);
+      this.drawPrefabWeapons(g);
+
       const idx = store.selectedPartIndex();
       const b = idx === null ? null : store.partWorldBounds(idx);
       const c = idx === null ? null : store.partWorldCenter(idx);
@@ -1011,21 +1128,19 @@ export class EditorScene extends Phaser.Scene {
     }
 
     if (store.tab === 'map') {
-      // 地图边界
-      g.lineStyle(2, 0x555577, 0.8);
-      g.strokeRect(0, 0, store.map.width, store.map.height);
+      // 地图边界（框外压暗 + 亮框 + 四角标记，让"地图范围"一眼可见）
+      this.drawMapBounds(g);
 
-      // 空投区域
-      for (const z of store.map.weaponDropZones ?? []) {
-        g.lineStyle(2, 0xf1c40f, 0.5);
-        g.strokeRect(z.x, z.y, z.w, z.h);
-        g.lineStyle(1, 0xf1c40f, 0.2);
-        g.lineBetween(z.x, z.y + z.h / 2, z.x + z.w, z.y + z.h / 2);
-      }
+      // 空投区域（只在自动空投开启时才有意义）
+      this.drawDropZones(g);
+
+      // 参考火柴人（编辑器标注，不写入地图数据）
+      this.drawRefFigures(g);
 
       // 出生点
       // 出生点（可选中/拖动）：选中时加一圈高亮
-      store.map.spawnPoints.forEach((sp, i) => {
+      const spawnPoints = store.showSpawnPoints ? store.map.spawnPoints : [];
+      spawnPoints.forEach((sp, i) => {
         const color = SPAWN_COLORS[i % SPAWN_COLORS.length];
         const selected = store.selection.includes(`spawn:${i}`);
         g.lineStyle(3, color, 1);
@@ -1042,21 +1157,46 @@ export class EditorScene extends Phaser.Scene {
         g.fillCircle(sp.x + 20, sp.y - 20, 9);
       });
 
-      // 地图武器投放点
-      store.weaponSpawns().forEach((w, i) => {
+      // 地图投放点（武器 / 补给道具）
+      const weaponSpawns = store.showWeaponSpawns ? store.weaponSpawns() : [];
+      weaponSpawns.forEach((w, i) => {
         const selected = store.selection.includes(`weapon:${i}`);
+        const isRandom = (w.mode ?? 'fixed') === 'random';
+        // 内容类型：道具用绿/青色 + 医疗十字/盾牌图标，武器用黄色 + 枪形图标
+        const fixedId = w.item ?? w.weapon ?? w.type ?? '';
+        const itemDef = fixedId ? getItem(fixedId) : undefined;
+        const isItem = !!itemDef;
+        const ringColor = selected ? 0xffffff : isItem ? 0x4ade80 : 0xf5d76e;
         g.fillStyle(0x2b2b36, 0.85);
         g.fillCircle(w.x, w.y, 20);
-        g.lineStyle(selected ? 3 : 2, selected ? 0xffffff : 0xf5d76e, 1);
+        g.lineStyle(selected ? 3 : 2, ringColor, 1);
         g.strokeCircle(w.x, w.y, 20);
-        // 小型"枪"图形，便于和出生点区分
-        const isRandom = (w.mode ?? 'fixed') === 'random';
-        const color = isRandom ? 0x66d9ef : 0xf5d76e;
-        g.lineStyle(3, color, 1);
-        g.lineBetween(w.x - 9, w.y, w.x + 9, w.y);
-        g.lineBetween(w.x + 4, w.y - 5, w.x + 9, w.y);
-        g.fillStyle(color, 1);
-        g.fillCircle(w.x - 10, w.y + 3, 3);
+        const color = isItem ? 0x4ade80 : isRandom ? 0x66d9ef : 0xf5d76e;
+        if (isItem) {
+          // 道具图标：heal = 医疗十字；shield = 盾牌轮廓
+          g.lineStyle(3, color, 1);
+          if (itemDef?.kind === 'shield') {
+            g.beginPath();
+            g.moveTo(w.x - 8, w.y - 7);
+            g.lineTo(w.x, w.y - 11);
+            g.lineTo(w.x + 8, w.y - 7);
+            g.lineTo(w.x + 8, w.y + 2);
+            g.lineTo(w.x, w.y + 11);
+            g.lineTo(w.x - 8, w.y + 2);
+            g.closePath();
+            g.strokePath();
+          } else {
+            g.lineBetween(w.x - 8, w.y, w.x + 8, w.y);
+            g.lineBetween(w.x, w.y - 8, w.x, w.y + 8);
+          }
+        } else {
+          // 小型"枪"图形，便于和出生点区分
+          g.lineStyle(3, color, 1);
+          g.lineBetween(w.x - 9, w.y, w.x + 9, w.y);
+          g.lineBetween(w.x + 4, w.y - 5, w.x + 9, w.y);
+          g.fillStyle(color, 1);
+          g.fillCircle(w.x - 10, w.y + 3, 3);
+        }
         // 随机点：右下角画一个"?"（圆弧 + 点）
         if (isRandom) {
           g.lineStyle(1.8, color, 1);
@@ -1172,14 +1312,242 @@ export class EditorScene extends Phaser.Scene {
       g.lineBetween(minX, minY, minX + w, minY + h);
     }
 
-    // 尺子
-    if (store.ruler) {
-      const { from, to } = store.ruler;
-      g.lineStyle(2, 0xffffff, 0.85);
-      g.lineBetween(from.x, from.y, to.x, to.y);
-      g.fillStyle(0xffffff, 1);
-      g.fillCircle(from.x, from.y, 4);
-      g.fillCircle(to.x, to.y, 4);
+    // 框选矩形
+    if (this.drag?.kind === 'marquee') {
+      const { start, current } = this.drag;
+      const zoom = this.cameras.main.zoom;
+      const x = Math.min(start.x, current.x);
+      const y = Math.min(start.y, current.y);
+      const w = Math.abs(current.x - start.x);
+      const h = Math.abs(current.y - start.y);
+      g.fillStyle(0x48dbfb, 0.1);
+      g.fillRect(x, y, w, h);
+      g.lineStyle(1.5 / zoom, 0x48dbfb, 0.95);
+      const dash = 6 / zoom;
+      this.drawDashed(g, { x, y }, { x: x + w, y }, dash);
+      this.drawDashed(g, { x: x + w, y }, { x: x + w, y: y + h }, dash);
+      this.drawDashed(g, { x: x + w, y: y + h }, { x, y: y + h }, dash);
+      this.drawDashed(g, { x, y: y + h }, { x, y }, dash);
+    }
+
+    // 尺子：拖动中实时预览（虚线），松手后保留测量结果（实线）
+    const rulerPreview =
+      this.drag?.kind === 'ruler' ? { from: this.drag.start, to: this.drag.current } : null;
+    const ruler = rulerPreview ?? store.ruler;
+    if (ruler) {
+      const zoom = this.cameras.main.zoom;
+      const color = rulerPreview ? 0x7bed9f : 0xffffff;
+      if (rulerPreview) {
+        g.lineStyle(2, color, 0.95);
+        this.drawDashed(g, ruler.from, ruler.to, 8 / zoom);
+      } else {
+        g.lineStyle(2, color, 0.85);
+        g.lineBetween(ruler.from.x, ruler.from.y, ruler.to.x, ruler.to.y);
+      }
+      g.fillStyle(color, 1);
+      g.fillCircle(ruler.from.x, ruler.from.y, 4.5 / zoom);
+      g.fillCircle(ruler.to.x, ruler.to.y, 4.5 / zoom);
+
+      // 实时读数：屏幕尺寸恒定的标签（挂在终点右上）
+      const d = Math.hypot(ruler.to.x - ruler.from.x, ruler.to.y - ruler.from.y);
+      const m = jumpMetrics(PLAYER_CONFIG.moveSpeed, PLAYER_CONFIG.jumpVelocity);
+      const verdict = d <= m.safeGap ? '可轻松跳过' : d <= m.distance ? '极限' : '跳不过去';
+      this.rulerLabel
+        .setVisible(true)
+        .setScale(1 / zoom)
+        .setPosition(ruler.to.x + 12 / zoom, ruler.to.y - 10 / zoom)
+        .setText(`${Math.round(d)}px · ${verdict}`);
+    }
+  }
+
+  /**
+   * 参考火柴人（编辑器标注）。
+   *
+   * 用途只有一个：对照物品/平台的尺寸。**不写入地图 JSON**（存在 store.refFigures 里），
+   * 随地图切换/刷新清空。每个火柴人单独一个 Graphics ——
+   * `StickmanRenderer.draw()` 会先 `clear()`，共用一个会把其它火柴人擦掉。
+   */
+  private drawRefFigures(g: Phaser.GameObjects.Graphics): void {
+    const store = editorStore;
+    const figures = store.refFigures;
+
+    // 按需增删 Graphics 对象
+    while (this.refUserGfx.length > figures.length) {
+      this.refUserGfx.pop()?.destroy();
+    }
+    while (this.refUserGfx.length < figures.length) {
+      this.refUserGfx.push(this.add.graphics().setDepth(402).setAlpha(0.55));
+    }
+
+    const zoom = this.cameras.main.zoom;
+    figures.forEach((f, i) => {
+      const fig = this.refUserGfx[i];
+      fig.setVisible(true).setPosition(f.x, f.y).setScale(f.facing, 1);
+      StickmanRenderer.draw(fig, {
+        color: 0x9fb3c8,
+        gaitTime: 0,
+        pose: 'idle',
+        moving: false,
+        grounded: true,
+        hitIntensity: 0,
+        hitPhase: 0,
+        velocityX: 0,
+        velocityY: 0,
+        facing: f.facing,
+      });
+
+      // 选中高亮：虚线框 + 底部光圈
+      if (store.selectedRefIndex === i) {
+        const z = this.cameras.main.zoom;
+        g.lineStyle(2 / z, 0x4dd6ff, 0.95);
+        const l = f.x - 24;
+        const t = f.y - 68;
+        const r = f.x + 24;
+        const bt = f.y + 52;
+        const dash = 6 / z;
+        this.drawDashed(g, { x: l, y: t }, { x: r, y: t }, dash);
+        this.drawDashed(g, { x: r, y: t }, { x: r, y: bt }, dash);
+        this.drawDashed(g, { x: r, y: bt }, { x: l, y: bt }, dash);
+        this.drawDashed(g, { x: l, y: bt }, { x: l, y: t }, dash);
+        g.fillStyle(0x4dd6ff, 0.12);
+        g.fillEllipse(f.x, f.y + PLAYER_CONFIG.bodyHeight / 2, 44, 12);
+      }
+
+      // 身高标尺（画在 overlay 上，跟着缩放保持可读）
+      const feet = f.y + PLAYER_CONFIG.bodyHeight / 2;
+      const head = f.y - 63;
+      const bx = f.x + (f.facing > 0 ? 42 : -42);
+      g.lineStyle(1.5 / zoom, 0x9fb3c8, 0.6);
+      g.lineBetween(bx, head, bx, feet);
+      const tick = 5 / zoom;
+      g.lineBetween(bx - tick, head, bx + tick, head);
+      g.lineBetween(bx - tick, feet, bx + tick, feet);
+      g.lineStyle(1 / zoom, 0x9fb3c8, 0.25);
+      g.lineBetween(f.x - 26, feet, f.x + 26, feet);
+    });
+  }
+
+  /**
+   * 空投区域（`weaponDropZones`）。
+   *
+   * 语义只有一个：**随机空投的 x 区间**（掉落高度固定从屏幕上方落下，y/h 不参与计算）。
+   * 而且只在 `autoDrop.enabled` 开启时才会被 `DropSystem` / 服务端读取 ——
+   * 所以这里的画法要对齐这个事实：
+   * - 自动空投关闭（默认）：**不画**，避免"看起来能配置掉落范围"的误导；
+   * - 开启：画成一条带端点箭头 + 刻度 + `x` 读数的区间线，作者填的 y/h 只作为极淡的参考带。
+   */
+  private drawDropZones(g: Phaser.GameObjects.Graphics): void {
+    const map = editorStore.map;
+    const zones = map.weaponDropZones ?? [];
+    if (zones.length === 0 || map.autoDrop?.enabled !== true) return;
+
+    const zoom = this.cameras.main.zoom;
+    const unit = 1 / zoom; // 1 屏幕像素对应的世界长度
+
+    zones.forEach((z, i) => {
+      const x0 = z.x;
+      const x1 = z.x + z.w;
+      const cy = z.y + z.h / 2;
+
+      // 作者填的矩形：只是一条"摆放参考带"，不参与任何计算
+      g.fillStyle(0xf1c40f, 0.05);
+      g.fillRect(x0, z.y, z.w, z.h);
+      g.lineStyle(unit, 0xf1c40f, 0.18);
+      g.strokeRect(x0, z.y, z.w, z.h);
+
+      // 主区间线
+      g.lineStyle(2 * unit, 0xf1c40f, 0.95);
+      g.lineBetween(x0, cy, x1, cy);
+
+      // 端点刻度
+      const tick = 7 * unit;
+      g.lineBetween(x0, cy - tick, x0, cy + tick);
+      g.lineBetween(x1, cy - tick, x1, cy + tick);
+
+      // 两端向外箭头（表示"这一段 x 区间"）
+      const arrow = 9 * unit;
+      g.lineBetween(x0, cy, x0 - arrow, cy - arrow * 0.55);
+      g.lineBetween(x0, cy, x0 - arrow, cy + arrow * 0.55);
+      g.lineBetween(x1, cy, x1 + arrow, cy - arrow * 0.55);
+      g.lineBetween(x1, cy, x1 + arrow, cy + arrow * 0.55);
+
+      // 读数：屏幕尺寸恒定
+      const label = this.zoneLabel(i);
+      label
+        .setVisible(true)
+        .setScale(unit)
+        .setPosition(x0, cy - 6 * unit)
+        .setText(`空投 x ${Math.round(x0)}–${Math.round(x1)}`);
+    });
+  }
+
+  /** 按需创建 / 复用空投区域标签 */
+  private zoneLabel(index: number): Phaser.GameObjects.Text {
+    let label = this.zoneLabels[index];
+    if (!label) {
+      label = this.add
+        .text(0, 0, '', {
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+          fontSize: '11px',
+          color: '#f7e08a',
+          backgroundColor: '#0b0b14',
+          padding: { x: 4, y: 1 },
+        })
+        .setDepth(2000)
+        .setAlpha(0.92)
+        .setOrigin(0, 1)
+        .setVisible(false);
+      this.zoneLabels[index] = label;
+    }
+    return label;
+  }
+
+  /**
+   * 地图范围可视化：框外压暗 + 亮色边框 + 四角加粗标记。
+   *
+   * 只画"视口 ∩ 框外"的四块区域（缩得很小时也不会画巨大矩形）；
+   * 压暗层同时把网格/框外物体一并盖住，一眼就能看出哪里是可玩范围。
+   */
+  private drawMapBounds(g: Phaser.GameObjects.Graphics): void {
+    const map = editorStore.map;
+    const zoom = this.cameras.main.zoom;
+    const v = this.viewRect();
+    const vx1 = v.x + v.w;
+    const vy1 = v.y + v.h;
+
+    const mask = (x0: number, y0: number, x1: number, y1: number): void => {
+      const w = x1 - x0;
+      const h = y1 - y0;
+      if (w <= 0 || h <= 0) return;
+      g.fillStyle(0x05050a, 0.5);
+      g.fillRect(x0, y0, w, h);
+    };
+    // 上 / 下（整宽）
+    mask(v.x, v.y, vx1, Math.min(vy1, 0));
+    mask(v.x, Math.max(v.y, map.height), vx1, vy1);
+    // 左 / 右（只补地图高度区间，避免和上下重叠处二次压暗）
+    const midY0 = Math.max(v.y, 0);
+    const midY1 = Math.min(vy1, map.height);
+    mask(v.x, midY0, Math.min(vx1, 0), midY1);
+    mask(Math.max(v.x, map.width), midY0, vx1, midY1);
+
+    // 边框
+    g.lineStyle(2.5, 0x4dd6ff, 0.9);
+    g.strokeRect(0, 0, map.width, map.height);
+
+    // 四角括号：长度按缩放换算，屏幕上尺寸恒定
+    const len = 26 / zoom;
+    const thick = 3.5 / zoom;
+    g.lineStyle(thick, 0xffffff, 0.95);
+    const corners: Array<[number, number, number, number]> = [
+      [0, 0, 1, 1],
+      [map.width, 0, -1, 1],
+      [0, map.height, 1, -1],
+      [map.width, map.height, -1, -1],
+    ];
+    for (const [cx, cy, sx, sy] of corners) {
+      g.lineBetween(cx, cy, cx + sx * len, cy);
+      g.lineBetween(cx, cy, cx, cy + sy * len);
     }
   }
 
@@ -1243,21 +1611,53 @@ export class EditorScene extends Phaser.Scene {
     }
 
     const doubleClick = this.detectDoubleClick(p);
-    const altKey = (pointer.event as MouseEvent | undefined)?.altKey === true;
+    const mouseEvent = pointer.event as MouseEvent | undefined;
+    const altKey = mouseEvent?.altKey === true;
+    const addSelect = mouseEvent?.ctrlKey === true || mouseEvent?.metaKey === true || mouseEvent?.shiftKey === true;
 
     if (store.tab === 'prefab') {
-      this.prefabPointerDown(p, altKey, doubleClick);
+      // 形状工具：在预制件画布上直接拖出一个新部件（坐标自动转成预制件局部坐标）
+      if (store.tool === 'rect' || store.tool === 'circle' || store.tool === 'polygon') {
+        this.drag = { kind: 'create', start: p, current: p, createType: store.tool, lastApplied: { x: 0, y: 0 } };
+        this.drawOverlay();
+        return;
+      }
+
+      // 内部关节手柄优先：锚点 / 端点都是可拖的
+      const jointHit = this.prefabJointHandleAt(p);
+      if (jointHit) {
+        this.prefabJointDrag = jointHit;
+        this.prefabJointHoverPart = null;
+        this.prefabJointDragPos = p;
+        this.drawOverlay();
+        return;
+      }
+      // 武器掉落点：点中就直接拖（比部件小，优先级在关节手柄之后、部件之前）
+      const weaponHit = store.hitTestPrefabWeapon(p);
+      if (weaponHit !== null) {
+        const world = store.prefabWeaponWorld(weaponHit);
+        store.select([`pweapon:${weaponHit}`]);
+        if (world) this.prefabWeaponDrag = { index: weaponHit, offset: { x: p.x - world.x, y: p.y - world.y } };
+        this.drawOverlay();
+        return;
+      }
+
+      this.prefabPointerDown(p, altKey, doubleClick, addSelect);
       this.drawOverlay();
       return;
     }
-    if (store.tab === 'action') {
-      this.actionPointerDown(p);
+
+    // 材质 Tab：只允许"选中对象"（用来只对选中对象做材质测试/应用），
+    // 不允许放置/移动/改数据 —— 画布显示的是同一张地图，误点不该改到它。
+    if (store.tab === 'material') {
+      const hit = store.hitTest(p);
+      if (hit && (hit.kind === 'object' || hit.kind === 'prefab')) store.select([hit.id]);
+      else store.select([]);
       this.drawOverlay();
       return;
     }
 
     // 只有地图 Tab 才允许"编辑地图"（放置/选择/关节/尺子）。
-    // 材质/动作 Tab 画布显示的是同一张地图，但在那里误点不该改到地图数据。
     if (store.tab !== 'map') return;
 
     const shiftKey = (pointer.event as MouseEvent | undefined)?.shiftKey === true;
@@ -1274,6 +1674,22 @@ export class EditorScene extends Phaser.Scene {
 
     switch (store.tool) {
       case 'select': {
+        // 参考火柴人优先：它是编辑器标注，常摆在地面附近/物体前面
+        const refIndex = store.hitTestRef(p);
+        if (refIndex !== null) {
+          store.selectRef(refIndex);
+          const fig = store.refFigures[refIndex];
+          this.drag = {
+            kind: 'refmove',
+            refIndex,
+            refOffset: { x: p.x - fig.x, y: p.y - fig.y },
+            start: p,
+            current: p,
+            lastApplied: { x: 0, y: 0 },
+          };
+          this.suppressRebuild = true;
+          break;
+        }
         const hit = store.hitTest(p);
         if (hit) {
           if (pointer.event.shiftKey) {
@@ -1339,25 +1755,43 @@ export class EditorScene extends Phaser.Scene {
       }
       case 'joint': {
         if (!store.pendingJointBodyA) {
-          const hit = store.hitTest(p);
-          if (hit?.kind === 'object') {
-            store.pendingJointBodyA = hit.id;
+          // 可以点选：地图物体 / 预制件焊接体 / 预制件松件里的某一个部件
+          const bodyId = store.jointBodyAt(p);
+          if (bodyId) {
+            store.pendingJointBodyA = bodyId;
             store.message = store.jointHint();
             store.touch();
           } else {
-            store.message = '关节：请先点选一个地图物体（不能用预制件部件）';
+            store.message = '关节：请先点选一个物体（地图物体或预制件）作为主体';
             store.touch();
           }
         } else {
           const anchor = store.snapPoint(p);
-          store.addJoint(store.pendingJointBodyA, anchor);
-          setStatus(`已创建关节：${store.joints().length} 个`);
+          // 第二下点到的若是另一个刚体，就直接连成“物体→物体”，否则连世界锚点
+          const target = store.jointBodyAt(p);
+          const bodyB = target && target !== store.pendingJointBodyA ? target : undefined;
+          store.addJoint(store.pendingJointBodyA, anchor, bodyB);
+          setStatus(
+            `已创建关节：${store.joints().length} 个${bodyB ? `（${store.pendingJointBodyA ?? ''} → ${bodyB}）` : '（→ 世界锚点）'}`,
+          );
         }
         break;
       }
       case 'ruler': {
         const sp = store.snapPoint(p);
         this.drag = { kind: 'ruler', start: sp, current: sp, lastApplied: { x: 0, y: 0 } };
+        break;
+      }
+      case 'ref': {
+        // 参考火柴人：点哪站哪（脚底对齐点击点），只用于对照尺寸，不进地图数据
+        // Shift = 朝左，方便对照左右对称的物件
+        const sp = store.snapPoint(p);
+        const faceLeft = (pointer.event as MouseEvent | undefined)?.shiftKey === true;
+        store.addRefFigure(sp.x, sp.y + PLAYER_CONFIG.bodyHeight / 2, faceLeft ? -1 : 1);
+        store.message = '已放置参考火柴人（可拖动/Delete 删除；已切回选择工具）';
+        // 放完立刻切回选择工具：避免连点误放一堆
+        store.tool = 'select';
+        store.touch();
         break;
       }
     }
@@ -1368,18 +1802,28 @@ export class EditorScene extends Phaser.Scene {
     const store = editorStore;
     const p = this.worldPoint(pointer);
 
+    // 框选（预制件 Tab）：只更新预览矩形，松开时才落选择
+    if (this.drag?.kind === 'marquee') {
+      this.drag.current = p;
+      this.drawOverlay();
+      return;
+    }
+
+    // 拖动参考火柴人（地图 Tab）
+    if (this.drag?.kind === 'refmove' && this.drag.refIndex !== undefined) {
+      const shift = (pointer.event as MouseEvent | undefined)?.shiftKey === true;
+      const target = shift ? p : store.snapPoint(p);
+      const off = this.drag.refOffset ?? { x: 0, y: 0 };
+      store.moveRefFigure(this.drag.refIndex, target.x - off.x, target.y - off.y);
+      this.drawOverlay();
+      return;
+    }
+
     if (this.panning) {
       const cam = this.cameras.main;
       cam.scrollX = this.panning.startScroll.x - (pointer.x - this.panning.pointer.x) / cam.zoom;
       cam.scrollY = this.panning.startScroll.y - (pointer.y - this.panning.pointer.y) / cam.zoom;
       this.drawGrid();
-      this.drawOverlay();
-      return;
-    }
-
-    if (this.actionDrag) {
-      this.actionPointerMove(p);
-      this.drawReferenceFigure();
       this.drawOverlay();
       return;
     }
@@ -1408,6 +1852,23 @@ export class EditorScene extends Phaser.Scene {
       const shift = (pointer.event as MouseEvent | undefined)?.shiftKey === true;
       this.lastShift = shift;
       this.mapGizmoMove(p, shift);
+      return;
+    }
+
+    if (this.prefabWeaponDrag) {
+      const o = store.prefabRigOrigin();
+      const local = { x: p.x - this.prefabWeaponDrag.offset.x - o.x, y: p.y - this.prefabWeaponDrag.offset.y - o.y };
+      store.patchPrefabWeaponSpawnLive(this.prefabWeaponDrag.index, {
+        x: store.snapToGrid ? store.snapValue(local.x) : Math.round(local.x),
+        y: store.snapToGrid ? store.snapValue(local.y) : Math.round(local.y),
+      });
+      this.drawOverlay();
+      return;
+    }
+
+    if (this.prefabJointDrag) {
+      this.prefabJointPointerMove(p);
+      this.drawOverlay();
       return;
     }
 
@@ -1458,10 +1919,6 @@ export class EditorScene extends Phaser.Scene {
       this.panning = null;
       return;
     }
-    if (this.actionDrag) {
-      this.actionPointerUp();
-      return;
-    }
     if (this.mapGizmoDrag) {
       const shift = this.lastShift;
       this.lastShift = false;
@@ -1472,6 +1929,17 @@ export class EditorScene extends Phaser.Scene {
       this.vertexDrag = null;
       this.suppressRebuild = false;
       editorStore.commit();
+      return;
+    }
+    if (this.prefabWeaponDrag) {
+      this.prefabWeaponDrag = null;
+      store.commit();
+      this.drawOverlay();
+      return;
+    }
+
+    if (this.prefabJointDrag) {
+      this.prefabJointPointerUp();
       return;
     }
     if (this.prefabPointerUp()) return;
@@ -1488,7 +1956,33 @@ export class EditorScene extends Phaser.Scene {
     }
 
     if (drag.kind === 'create') {
-      this.createFromDrag(drag);
+      if (store.tab === 'prefab') this.createPartFromDrag(drag);
+      else this.createFromDrag(drag);
+      return;
+    }
+
+    if (drag.kind === 'refmove') {
+      this.suppressRebuild = false;
+      this.lastShift = false;
+      store.message = '参考火柴人已移动（Delete 删除）';
+      store.touch();
+      this.drawOverlay();
+      return;
+    }
+
+    if (drag.kind === 'marquee') {
+      const rect = {
+        minX: Math.min(drag.start.x, drag.current.x),
+        minY: Math.min(drag.start.y, drag.current.y),
+        maxX: Math.max(drag.start.x, drag.current.x),
+        maxY: Math.max(drag.start.y, drag.current.y),
+      };
+      const hit = store.partsInWorldRect(rect);
+      // 面积太小的拖动视为"点空白 → 清空选择"
+      const tiny = Math.hypot(drag.current.x - drag.start.x, drag.current.y - drag.start.y) < 4;
+      store.select(tiny ? [] : hit.map((i) => `part:${i}`));
+      if (!tiny) store.message = `框选了 ${hit.length} 个部件`;
+      this.drawOverlay();
       return;
     }
 
@@ -1502,6 +1996,39 @@ export class EditorScene extends Phaser.Scene {
       );
       this.drawOverlay();
     }
+  }
+
+  /**
+   * 在预制件画布上拖出一个新部件。
+   *
+   * 与地图 Tab 的 createFromDrag 是同一套交互，只是坐标要换成**预制件局部坐标**
+   * （画布原点 = prefabRigOrigin）。之前预制件 Tab 里形状工具是“点了没反应”，
+   * 只能靠左栏「+ 矩形」按钮加默认尺寸的部件。
+   */
+  private createPartFromDrag(drag: DragState): void {
+    const store = editorStore;
+    const origin = store.prefabRigOrigin();
+    const toLocal = (pt: Vec): Vec => ({ x: pt.x - origin.x, y: pt.y - origin.y });
+    const a = toLocal(drag.start);
+    const b = toLocal(drag.current);
+    const minX = Math.min(a.x, b.x);
+    const minY = Math.min(a.y, b.y);
+    const w = Math.abs(b.x - a.x);
+    const h = Math.abs(b.y - a.y);
+    const centerX = (a.x + b.x) / 2;
+    const centerY = (a.y + b.y) / 2;
+    const minSize = Math.max(store.gridSize, 8);
+    const material = store.activeMaterialId;
+
+    if (drag.createType === 'rect') {
+      store.addPart({ type: 'rect', x: minX, y: minY, w: Math.max(w, minSize), h: Math.max(h, minSize), material });
+    } else if (drag.createType === 'circle') {
+      store.addPart({ type: 'circle', x: centerX, y: centerY, radius: Math.max(w, h, minSize) / 2, material });
+    } else {
+      store.addPart({ type: 'polygon', x: centerX, y: centerY, sides: 3, radius: Math.max(w, h, minSize) / 2, material });
+    }
+    store.tool = 'select';
+    this.drawOverlay();
   }
 
   private createFromDrag(drag: DragState): void {
@@ -1565,31 +2092,46 @@ export class EditorScene extends Phaser.Scene {
     const rot = ((obj.angle ?? 0) * Math.PI) / 180;
     const v = item.visual;
 
-    if (v instanceof Phaser.GameObjects.TileSprite) {
-      const r = obj as MapObjectRect;
-      v.setPosition(offset.x + r.x + r.w / 2, offset.y + r.y + r.h / 2);
-      if (v.width !== r.w || v.height !== r.h) v.setSize(r.w, r.h);
-      if (v.rotation !== rot) v.setRotation(rot);
-      if (v.alpha !== alpha) v.setAlpha(alpha);
-    } else if (v instanceof Phaser.GameObjects.Image) {
-      const r = obj as MapObjectRect;
-      v.setPosition(offset.x + r.x + r.w / 2, offset.y + r.y + r.h / 2);
-      if (v.displayWidth !== r.w || v.displayHeight !== r.h) v.setDisplaySize(r.w, r.h);
-      if (v.rotation !== rot) v.setRotation(rot);
-      if (v.alpha !== alpha) v.setAlpha(alpha);
-    } else if (v instanceof Phaser.GameObjects.Rectangle) {
-      const r = obj as MapObjectRect;
-      v.setPosition(offset.x + r.x + r.w / 2, offset.y + r.y + r.h / 2);
-      v.setSize(r.w, r.h);
-      v.setFillStyle(color, 1);
-      v.setRotation(rot);
-      v.setAlpha(alpha);
-    } else if (v instanceof Phaser.GameObjects.Arc) {
+    if (obj.type === 'circle') {
       const c = obj as MapObjectCircle;
-      v.setPosition(offset.x + c.x, offset.y + c.y);
-      v.setRadius(c.radius);
-      v.setFillStyle(color, 1);
-      v.setAlpha(alpha);
+      const cx = offset.x + c.x;
+      const cy = offset.y + c.y;
+      if (v instanceof Phaser.GameObjects.Arc) {
+        v.setPosition(cx, cy);
+        v.setRadius(c.radius);
+        v.setFillStyle(color, 1);
+        v.setAlpha(alpha);
+      } else if (v instanceof Phaser.GameObjects.TileSprite) {
+        // 贴图版圆形：尺寸 = 外接正方形（蒙版在松手重建时按新半径重建）
+        v.setPosition(cx, cy);
+        if (v.width !== c.radius * 2 || v.height !== c.radius * 2) v.setSize(c.radius * 2, c.radius * 2);
+        v.setAlpha(alpha);
+      } else if (v instanceof Phaser.GameObjects.Image) {
+        v.setPosition(cx, cy);
+        if (v.displayWidth !== c.radius * 2 || v.displayHeight !== c.radius * 2) {
+          v.setDisplaySize(c.radius * 2, c.radius * 2);
+        }
+        v.setAlpha(alpha);
+      }
+    } else if (obj.type === 'rect') {
+      const r = obj as MapObjectRect;
+      if (v instanceof Phaser.GameObjects.TileSprite) {
+        v.setPosition(offset.x + r.x + r.w / 2, offset.y + r.y + r.h / 2);
+        if (v.width !== r.w || v.height !== r.h) v.setSize(r.w, r.h);
+        if (v.rotation !== rot) v.setRotation(rot);
+        if (v.alpha !== alpha) v.setAlpha(alpha);
+      } else if (v instanceof Phaser.GameObjects.Image) {
+        v.setPosition(offset.x + r.x + r.w / 2, offset.y + r.y + r.h / 2);
+        if (v.displayWidth !== r.w || v.displayHeight !== r.h) v.setDisplaySize(r.w, r.h);
+        if (v.rotation !== rot) v.setRotation(rot);
+        if (v.alpha !== alpha) v.setAlpha(alpha);
+      } else if (v instanceof Phaser.GameObjects.Rectangle) {
+        v.setPosition(offset.x + r.x + r.w / 2, offset.y + r.y + r.h / 2);
+        v.setSize(r.w, r.h);
+        v.setFillStyle(color, 1);
+        v.setRotation(rot);
+        v.setAlpha(alpha);
+      }
     } else if (v instanceof Phaser.GameObjects.Container) {
       const p = obj as MapObjectPolygon;
       const vs = currentVertices(p);
@@ -1607,6 +2149,10 @@ export class EditorScene extends Phaser.Scene {
         g.strokePoints(pts, true);
       }
     }
+    // 贴图版圆/多边形的蒙版是独立对象，改完视觉立刻跟上（否则拖动时贴图会"错位裁切"）
+    syncVisualMasks(this.runtime);
+    updateMaterialGlows(this.runtime, this.time.now);
+    updateObjectLabels(this.runtime);
   }
 
   /** 预制件部件对应的运行时 id */

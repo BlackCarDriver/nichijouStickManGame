@@ -48,3 +48,32 @@ export function getPrefabTable(): Record<string, PrefabData> {
   for (const p of listPrefabs()) table[p.id] = p;
   return table;
 }
+
+/**
+ * 内容指纹（djb2 哈希，只用于"文件是否被外部改过"的变更检测）。
+ * 与 `MATERIALS_FILE_HASH` 同源同算法，保证编辑器几处草稿守卫行为一致。
+ */
+export function dataHash(value: unknown): string {
+  const input = JSON.stringify(value);
+  let h = 5381;
+  for (let i = 0; i < input.length; i++) {
+    h = ((h << 5) + h + input.charCodeAt(i)) | 0;
+  }
+  return (h >>> 0).toString(36);
+}
+
+/**
+ * 地图「文件版本」的指纹（按 name 找 data/maps/*.json）。
+ * 编辑器草稿恢复时用它判断：文件从存草稿到现在有没有被外部改过。
+ * 返回 null = 当前没有同名文件（例如编辑器里新建、还没导出）。
+ */
+export function mapFileHash(name: string): string | null {
+  const file = getMapByName(name);
+  return file ? dataHash(file) : null;
+}
+
+/** 预制件「文件版本」的指纹（按 id 找 data/prefabs/*.json）；null = 文件不存在 */
+export function prefabFileHash(id: string): string | null {
+  const file = listPrefabs().find((p) => p.id === id);
+  return file ? dataHash(file) : null;
+}

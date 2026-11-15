@@ -6,5 +6,6 @@
   "dataDir": "../data",
   "maxPlayers": 8,
   "allowDevIdentity": false,
-  "roundEndSeconds": 4
+  "roundEndSeconds": 4,
+  "mode": "random"
 }

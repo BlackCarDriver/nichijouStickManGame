@@ -3,7 +3,9 @@ import type { Player } from '../entities/Player';
 import { getWeapon } from '../combat/WeaponFormat';
 import type { PlayerProfile } from '../config/playerProfiles';
 import { getFakeProfiles } from '../config/playerProfiles';
-import { DESIGN_WIDTH, TEXT_RESOLUTION, viewScaleOf } from '../config/display';
+import { DESIGN_HEIGHT, DESIGN_WIDTH, TEXT_RESOLUTION, viewScaleOf } from '../config/display';
+import { isTeamMode, teamColor, teamName } from '../config/teams';
+import type { MatchMode } from '../net/protocol';
 
 /** 单个玩家的状态面板（容器 + 自己的 Graphics + 文本 + 圆形头像） */
 interface Slot {
@@ -29,6 +31,16 @@ export class Hud {
   private profiles: PlayerProfile[] = [];
   private kills: Map<number, number> | null = null;
 
+  // ---- 团队战：顶部/底部队伍比分 ----
+  private teamMode = false;
+  private teamOf: ((player: Player) => number) | null = null;
+  private scoreRoot?: Phaser.GameObjects.Container;
+  private scoreG?: Phaser.GameObjects.Graphics;
+  private scoreLeft?: Phaser.GameObjects.Text;
+  private scoreRight?: Phaser.GameObjects.Text;
+  private static readonly SCORE_W = 208;
+  private static readonly SCORE_H = 26;
+
   // ---- 布局常量（屏幕像素，紧凑尺寸）----
   private static readonly PANEL_W = 186;
   private static readonly PANEL_H = 52;
@@ -50,6 +62,87 @@ export class Hud {
 
   bindKills(kills: Map<number, number>): void {
     this.kills = kills;
+  }
+
+  /**
+   * 绑定本局模式（团队战时在屏幕底部中间画队伍比分）。
+   *
+   * 为什么放底部：6 人以上时左上角面板会排成两行，顶部整条都被占用，
+   * 底部中间永远是空的（屏幕外敌人箭头贴在四边，不会冲突）。
+   */
+  setTeams(mode: MatchMode, teamOf?: (player: Player) => number): void {
+    this.teamMode = isTeamMode(mode);
+    this.teamOf = teamOf ?? null;
+    if (this.teamMode) {
+      this.ensureScoreRoot();
+    } else {
+      this.scoreRoot?.destroy(true);
+      this.scoreRoot = undefined;
+      this.scoreG = undefined;
+      this.scoreLeft = undefined;
+      this.scoreRight = undefined;
+    }
+  }
+
+  private ensureScoreRoot(): void {
+    if (this.scoreRoot) return;
+    const root = this.scene.add.container(
+      DESIGN_WIDTH / 2 - Hud.SCORE_W / 2,
+      DESIGN_HEIGHT - Hud.SCORE_H - 10,
+    );
+    this.root.add(root);
+    const g = this.scene.add.graphics();
+    root.add(g);
+    const base = {
+      fontFamily: 'PingFang SC, Microsoft YaHei, monospace',
+      fontSize: '12px',
+      fontStyle: 'bold',
+      color: '#f0f2f8',
+    };
+    const left = this.scene.add
+      .text(10, Hud.SCORE_H / 2, '', base)
+      .setOrigin(0, 0.5)
+      .setResolution(TEXT_RESOLUTION);
+    const right = this.scene.add
+      .text(Hud.SCORE_W - 10, Hud.SCORE_H / 2, '', base)
+      .setOrigin(1, 0.5)
+      .setResolution(TEXT_RESOLUTION);
+    root.add([left, right]);
+    this.scoreRoot = root;
+    this.scoreG = g;
+    this.scoreLeft = left;
+    this.scoreRight = right;
+  }
+
+  /** 画队伍比分（击杀数汇总；两侧用队伍色区分） */
+  private drawScore(): void {
+    const g = this.scoreG;
+    if (!g || !this.scoreLeft || !this.scoreRight) return;
+    const byTeam = [0, 0];
+    for (const player of this.players) {
+      const team = this.teamOf?.(player) ?? -1;
+      if (team < 0 || team > 1) continue;
+      byTeam[team] += this.kills?.get(player.id) ?? 0;
+    }
+    const W = Hud.SCORE_W;
+    const H = Hud.SCORE_H;
+    const half = W / 2;
+    g.clear();
+    g.fillStyle(0x0b0b16, 0.72);
+    g.fillRoundedRect(0, 0, W, H, 7);
+    g.fillStyle(teamColor(0), 0.18);
+    g.fillRoundedRect(0, 0, half, H, { tl: 7, bl: 7, tr: 0, br: 0 });
+    g.fillStyle(teamColor(1), 0.18);
+    g.fillRoundedRect(half, 0, half, H, { tl: 0, bl: 0, tr: 7, br: 7 });
+    g.lineStyle(1.4, teamColor(0), 0.7);
+    g.lineBetween(half - 0.5, 2, half - 0.5, H - 2);
+    g.lineStyle(1.2, teamColor(0), 0.55);
+    g.strokeRoundedRect(0, 0, W, H, 7);
+
+    this.scoreLeft.setText(`${teamName(0)} ${byTeam[0]}`);
+    this.scoreLeft.setColor(`#${teamColor(0).toString(16).padStart(6, '0')}`);
+    this.scoreRight.setText(`${byTeam[1]} ${teamName(1)}`);
+    this.scoreRight.setColor(`#${teamColor(1).toString(16).padStart(6, '0')}`);
   }
 
   /** 绑定玩家列表并（重新）构建面板 */
@@ -139,6 +232,8 @@ export class Hud {
 
       this.drawSlot(slot, player);
     });
+
+    if (this.teamMode) this.drawScore();
   }
 
   /** 单个面板的绘制：底板 / 头像 / 血条 / 护盾条 */
@@ -229,6 +324,8 @@ export class Hud {
   destroy(): void {
     for (const slot of this.slots) slot.root.destroy(true);
     this.slots = [];
+    this.scoreRoot?.destroy(true);
+    this.scoreRoot = undefined;
     this.root.destroy(true);
   }
 }

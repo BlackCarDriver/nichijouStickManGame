@@ -81,6 +81,11 @@ export class WeaponSystem {
   private attackSeq = 0;
   /** 正在"瞄准投掷"的玩家（按住副攻击键时显示抛物线预览） */
   private readonly throwAiming = new Set<number>();
+  /**
+   * 团队战：友军判定（true = 近战/光束/挥砍直接穿过队友，既不挡也不结算伤害）。
+   * 由 GameScene 注入；不注入 = 所有人互相阻挡（混战/单机）。
+   */
+  friendlyOf: ((ownerId: number, target: Player) => boolean) | null = null;
   private preview!: TrajectoryPreview;
 
   constructor(
@@ -102,6 +107,20 @@ export class WeaponSystem {
 
   destroy(): void {
     this.preview.destroy();
+  }
+
+  /**
+   * 射线忽略列表：自己 + （团队战里）所有队友。
+   * 这样出拳/刺击/光束会直接穿过友军，能打到背后的敌人。
+   */
+  private ignoreBodiesFor(player: Player): MatterJS.BodyType[] {
+    const ignore: MatterJS.BodyType[] = [player.body];
+    if (!this.friendlyOf) return ignore;
+    for (const other of this.bodyToPlayer.values()) {
+      if (other === player || !other.body) continue;
+      if (this.friendlyOf(player.id, other)) ignore.push(other.body);
+    }
+    return ignore;
   }
 
   /** 该玩家手持的武器是否可投掷（匕首/长矛） */
@@ -291,7 +310,7 @@ export class WeaponSystem {
     const dir = { x: Math.cos(aim), y: Math.sin(aim) };
 
     const hits = raycast(getWorldBodies(this.scene), from, dir, PUNCH.reach, {
-      ignore: [player.body],
+      ignore: this.ignoreBodiesFor(player),
       maxHits: 1,
     });
     const hit = hits[0];
@@ -469,7 +488,7 @@ export class WeaponSystem {
   ): { endPoint: { x: number; y: number }; targets: BeamTarget[] } {
     const bodies = getWorldBodies(this.scene);
     const hits = raycast(bodies, from, dir, beam.range, {
-      ignore: [player.body],
+      ignore: this.ignoreBodiesFor(player),
       maxHits: 48,
     });
 
@@ -757,10 +776,10 @@ export class WeaponSystem {
     const angle = player.aim;
     const dir = { x: Math.cos(angle), y: Math.sin(angle) };
     // 近战刺击用专门的弓步突刺动作（枪械的后坐仍用 stab）
-    player.setAttack('thrust', 220, weapon.visual.style === 'spear' ? 'spear_thrust' : undefined);
+    player.setAttack('thrust', 220);
 
     const hits = raycast(getWorldBodies(this.scene), from, dir, melee.reach, {
-      ignore: [player.body],
+      ignore: this.ignoreBodiesFor(player),
       maxHits: 1,
     });
     const hit = hits[0];
@@ -800,7 +819,7 @@ export class WeaponSystem {
 
     const from = player.muzzle;
     const angle = player.aim;
-    player.setAttack('stab', 160, weapon.visual.style === 'spear' ? 'spear_throw' : undefined);
+    player.setAttack('stab', 160);
 
     const bullet = buildThrownBullet(weapon);
 

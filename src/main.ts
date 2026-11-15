@@ -4,6 +4,7 @@ import { RoomController } from './net/RoomController';
 import { bindGame, createStage } from './ui/orientation';
 import { startGate } from './net/startGate';
 import { DESIGN_WIDTH, DESIGN_HEIGHT, RENDER_SCALE } from './config/display';
+import { WORLD_GRAVITY_Y } from './config/physics';
 
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
@@ -24,8 +25,8 @@ const config: Phaser.Types.Core.GameConfig = {
   physics: {
     default: 'matter',
     matter: {
-      // 重力强度 1.6：下落加速更明显，跳跃更有抛物线感
-      gravity: { x: 0, y: 1.6 },
+      // 重力强度 1.6：下落加速更明显，跳跃更有抛物线感（编辑器测试同值，见 config/physics）
+      gravity: { x: 0, y: WORLD_GRAVITY_Y },
       debug: false,
     },
   },

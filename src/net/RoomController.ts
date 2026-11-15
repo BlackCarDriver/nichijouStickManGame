@@ -2,6 +2,7 @@ import type Phaser from 'phaser';
 import { NetClient } from './NetClient';
 import { ShellBridge } from './ShellBridge';
 import type { MatchContext, MatchEndMsg, MatchStartMsg, RoomSnapshot, ServerMsg } from './protocol';
+import { modeLabel } from '../config/teams';
 import { Overlay, type OverlayAction } from '../ui/Overlay';
 import { inputBlock } from './inputBlock';
 import { startGate } from './startGate';
@@ -277,6 +278,7 @@ export class RoomController {
     const ctx: MatchContext = {
       matchId: msg.matchId,
       map: msg.map,
+      mode: msg.mode ?? 'ffa',
       you: msg.you,
       host: msg.host ?? -1,
       players: msg.players,
@@ -289,8 +291,10 @@ export class RoomController {
 
     startGate.resetForMatch(msg.you);
     const role = msg.you >= 0 ? '' : ' · 观战中';
-    this.overlay.prepareMatch(`地图 ${msg.map} · 剩 ${msg.players.length} 人 · 最后一人胜出${role}`);
-    this.overlay.addChat('', `新的一局：${msg.map}`);
+    this.overlay.prepareMatch(
+      `地图 ${msg.map} · 剩 ${msg.players.length} 人 · ${modeLabel(msg.mode)}${role}`,
+    );
+    this.overlay.addChat('', `新的一局：${msg.map}（${modeLabel(msg.mode)}）`);
 
     const scene = this.game.scene.getScene('GameScene');
     if (scene && (this.game.scene.isActive('GameScene') || this.game.scene.isPaused('GameScene'))) {

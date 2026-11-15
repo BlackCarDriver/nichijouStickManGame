@@ -13,11 +13,14 @@ import Phaser from 'phaser';
 import { getMaterial } from '../config/materials';
 import type { MaterialConfig } from '../config/materials';
 import { COLLISION_CATEGORY } from '../core/CollisionCategories';
-import type { MapData, MapJoint, MapObject, PrefabInstance } from './MapFormat';
+import type { MapData, MapJoint, MapObject, MapWeaponSpawn, PrefabInstance } from './MapFormat';
 import type { PrefabData } from './PrefabFormat';
-import { expandPrefab } from './PrefabExpand';
+import { expandPrefab, expandPrefabJoints, expandPrefabWeapons } from './PrefabExpand';
 import { centroidOf, currentVertices, signedArea } from './PolygonUtil';
 import { hasMaterialTexture, matTextureKey } from './TextureLoader';
+import { createCircleTexture, createPolygonTexture, type MaskPair } from './ShapeTexture';
+import { createShapeGlow, type GlowShape, type GlowVisual } from './MaterialGlow';
+import { createObjectLabel, destroyObjectLabels, type LabelVisual } from './ObjectLabel';
 
 /** 地图物体的运行时记录（破坏系统 / 编辑器重建 需要） */
 export interface MapObjectRuntime {
@@ -36,6 +39,15 @@ export interface MapObjectRuntime {
   extraBodies?: MatterJS.BodyType[];
   /** 是否焊接体（一个刚体 + 一个 Container 视觉，需要每帧同步） */
   compound?: boolean;
+  /**
+   * 圆形/多边形贴图的几何蒙版（每帧跟随视觉对象的世界变换）。
+   * 矩形不需要蒙版，所以这里通常是空的。
+   */
+  maskPairs?: MaskPair[];
+  /** 材质发光的光晕对象（每帧跟随视觉 + 按发光方式调制亮度） */
+  glows?: GlowVisual[];
+  /** 物体上的文字（招牌等，纯视觉，每帧跟随） */
+  labels?: LabelVisual[];
 }
 
 /** Matter body 与游戏对象绑定的返回形态 */
@@ -44,6 +56,24 @@ interface MatterBound {
 }
 
 let autoIdSeq = 0;
+
+/**
+ * 地图物体的渲染层次（越小越靠后）。
+ *
+ * - `decor`（纯视觉 / 背景装饰）：-2 —— 必须在火柴人之下，它的文案也一起在下面
+ * - `solid`（参与物理）：-1 —— 与玩家同属场景内容，但地图先创建，本来就该在玩家之下
+ * - 玩家 / 掉落物 / 弹道 / 特效：各自的正 depth（0 / 820 / 850 / 900…）
+ *
+ * 物体上的文字（招牌）用"物体层次 + 0.5"：压在自己的物体之上，但仍与物体同层，
+ * 不会因为层次是写死的就骑到玩家头上。
+ */
+const DEPTH_DECOR = -2;
+const DEPTH_SOLID = -1;
+
+/** 给任意视觉对象设置深度（Image / Graphics / Container 都有 setDepth） */
+function setVisualDepth(visual: Phaser.GameObjects.GameObject, depth: number): void {
+  (visual as unknown as { setDepth?: (d: number) => void }).setDepth?.(depth);
+}
 
 /**
  * 构建整张地图。
@@ -68,6 +98,9 @@ export function buildMap(
   }
   const pending: PendingObject[] = [];
 
+  /** 预制件实例自带的内部关节（展开后与世界关节一起创建） */
+  const prefabJoints: MapJoint[] = [];
+
   map.objects.forEach((obj) => {
     pending.push({ obj, id: obj.id ?? `obj_${autoIdSeq++}` });
   });
@@ -90,10 +123,11 @@ export function buildMap(
       return;
     }
 
-    // 松件：每个部件独立刚体
+    // 松件：每个部件独立刚体（预制件内部关节按实例展开）
     expandPrefab(prefab, { ...inst, id: instId }).forEach((part, j) => {
       pending.push({ obj: part, id: part.id ?? `${instId}#${j}` });
     });
+    prefabJoints.push(...expandPrefabJoints(prefab, { ...inst, id: instId }));
   });
 
   // 1.5) 物体 id 唯一性检查：联机的"销毁/同步"全靠 id 对齐。
@@ -119,8 +153,9 @@ export function buildMap(
     if (result.body) bodiesById.set(id, result.body);
   }
 
-  // 3) 关节（需要 body 已创建）
-  for (const joint of map.joints ?? []) {
+  // 3) 关节（需要 body 已创建）：地图自带的 + 预制件实例内部的
+  const allJoints: MapJoint[] = [...(map.joints ?? []), ...prefabJoints];
+  for (const joint of allJoints) {
     const created = createJoint(scene, joint, bodiesById, runtime);
     if (created) {
       const host = runtime.find((r) => r.id === joint.bodyA);
@@ -130,7 +165,86 @@ export function buildMap(
     }
   }
 
+  // 4) 关节链的"同组不互撞"（noCollide）：必须在 body 全部创建后
+  applyNoCollideGroups(allJoints, bodiesById);
+
   return runtime;
+}
+
+/**
+ * 收集一张地图**实际生效的武器掉落点**：地图自带的 `weapons[]` + 预制件实例自带的。
+ *
+ * 顺序是固定的（先地图，再按 `map.prefabs` 顺序逐个实例，实例内按数组顺序）：
+ * 联机时服务端展开的顺序必须与这里一致，否则两端的 `wspawn:序号` 会对不上。
+ */
+export function collectMapWeapons(
+  map: MapData,
+  prefabs: Record<string, PrefabData> = {},
+): MapWeaponSpawn[] {
+  const out: MapWeaponSpawn[] = [...(map.weapons ?? [])];
+  (map.prefabs ?? []).forEach((inst) => {
+    const prefab = prefabs[inst.ref];
+    if (!prefab) return;
+    out.push(...expandPrefabWeapons(prefab, inst));
+  });
+  return out;
+}
+
+/**
+ * 把用 `noCollide` 关节串在一起的刚体分到同一个负碰撞组。
+ *
+ * Matter 规则：`collisionFilter.group` 相同且不为 0 时，正数 = 必碰、负数 = 必不碰。
+ * 所以一条吊链的每一节、以及它们吊着的平台，都能得到一个互不碰撞的负组号，
+ * 而它们对玩家/地形/其它组仍然是正常碰撞（category/mask 生效）。
+ *
+ * 用并查集而不是"每个关节各分一组"：一个链节同时属于两个关节，
+ * 逐关节分组会互相覆盖，只有连通分量才是正确的分组单位。
+ */
+function applyNoCollideGroups(
+  joints: MapJoint[],
+  bodiesById: Map<string, MatterJS.BodyType>,
+): void {
+  const parent = new Map<string, string>();
+  const find = (id: string): string => {
+    let cur = id;
+    while (parent.get(cur) !== undefined && parent.get(cur) !== cur) cur = parent.get(cur) as string;
+    return cur;
+  };
+  const union = (a: string, b: string): void => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+
+  const isBody = (id: string | undefined): id is string =>
+    !!id && id !== 'world' && bodiesById.has(id);
+
+  for (const joint of joints) {
+    if (joint.noCollide !== true) continue;
+    if (!isBody(joint.bodyA) || !isBody(joint.bodyB)) continue;
+    if (!parent.has(joint.bodyA)) parent.set(joint.bodyA, joint.bodyA);
+    if (!parent.has(joint.bodyB)) parent.set(joint.bodyB, joint.bodyB);
+    union(joint.bodyA, joint.bodyB);
+  }
+
+  const components = new Map<string, string[]>();
+  for (const id of parent.keys()) {
+    const root = find(id);
+    const list = components.get(root) ?? [];
+    list.push(id);
+    components.set(root, list);
+  }
+
+  let groupSeq = 0;
+  for (const [, ids] of components) {
+    // 单个刚体不需要分组（没有“同组”可避）
+    if (ids.length < 2) continue;
+    const group = -(++groupSeq);
+    for (const id of ids) {
+      const body = bodiesById.get(id);
+      if (body) body.collisionFilter.group = group;
+    }
+  }
 }
 
 /**
@@ -178,6 +292,9 @@ function createObject(
   const angleRad = obj.angle ? Phaser.Math.DegToRad(obj.angle) : 0;
   const oneWay = obj.oneWay === true;
 
+  /** 本次创建的几何蒙版（圆/多边形贴图用；矩形没有） */
+  const maskPairs: MaskPair[] = [];
+
   // ---- 纯视觉装饰 ----
   if (layer === 'decor') {
     let visual: Phaser.GameObjects.GameObject;
@@ -187,10 +304,20 @@ function createObject(
       if (angleRad !== 0) (visual as unknown as Phaser.GameObjects.Components.Transform).setRotation(angleRad);
       applyAlpha(visual, alpha);
     } else if (obj.type === 'circle') {
-      const go = scene.add.circle(obj.x, obj.y, obj.radius, color, 1);
-      go.setStrokeStyle(2, 0x000000, 0.4);
-      applyAlpha(go, alpha);
-      visual = go;
+      const tex = createCircleTexture(
+        scene, obj.x, obj.y, obj.radius,
+        obj.texture ?? mat.texture, obj.textureMode ?? mat.textureMode,
+      );
+      if (tex) {
+        applyAlpha(tex.go, alpha);
+        visual = tex.go;
+        maskPairs.push({ go: tex.go, mask: tex.mask });
+      } else {
+        const go = scene.add.circle(obj.x, obj.y, obj.radius, color, 1);
+        go.setStrokeStyle(2, 0x000000, 0.4);
+        applyAlpha(go, alpha);
+        visual = go;
+      }
     } else {
       const verts = resolvePolygonVertices(obj);
       if (!verts) {
@@ -198,17 +325,61 @@ function createObject(
         return null;
       }
       const container = scene.add.container(obj.x, obj.y);
-      const g = scene.add.graphics();
-      container.add(g);
       if (angleRad !== 0) container.setRotation(angleRad);
-      g.fillStyle(color, 1);
-      g.lineStyle(2, 0x000000, 0.4);
-      g.fillPoints(verts.map((v) => new Phaser.Geom.Point(v.x, v.y)), true);
-      g.strokePoints(verts.map((v) => new Phaser.Geom.Point(v.x, v.y)), true);
+      const tex = createPolygonTexture(
+        scene, verts,
+        obj.texture ?? mat.texture, obj.textureMode ?? mat.textureMode,
+      );
+      if (tex) {
+        container.add(tex.go);
+        maskPairs.push({ go: container, mask: tex.mask });
+      } else {
+        const g = scene.add.graphics();
+        container.add(g);
+        g.fillStyle(color, 1);
+        g.lineStyle(2, 0x000000, 0.4);
+        g.fillPoints(verts.map((v) => new Phaser.Geom.Point(v.x, v.y)), true);
+        g.strokePoints(verts.map((v) => new Phaser.Geom.Point(v.x, v.y)), true);
+      }
       applyAlpha(container, alpha);
       visual = container;
     }
-    return { id, visual, material: obj.material, durability: -1, oneWay: false, layer: 'decor' };
+    // decor 是背景层：显式压到玩家之下（否则和玩家同 depth=0，全靠创建顺序，改一次加载顺序就乱）
+    setVisualDepth(visual, DEPTH_DECOR);
+
+    const glows: GlowVisual[] = [];
+    const glowShape = glowShapeOf(obj, visual);
+    if (mat.glow && glowShape) {
+      const glow = createShapeGlow(scene, glowShape, mat.glow, id);
+      glow.follow = visual;
+      glow.gfx.setPosition(
+        (visual as unknown as { x: number }).x ?? 0,
+        (visual as unknown as { y: number }).y ?? 0,
+      );
+      glow.gfx.setRotation((visual as unknown as { rotation?: number }).rotation ?? 0);
+      glows.push(glow);
+    }
+
+    // 文字（招牌）：decor 也支持
+    const labels: LabelVisual[] = [];
+    const labelBounds =
+      obj.type === 'rect'
+        ? { minX: -obj.w / 2, minY: -obj.h / 2, maxX: obj.w / 2, maxY: obj.h / 2 }
+        : obj.type === 'circle'
+          ? { minX: -obj.radius, minY: -obj.radius, maxX: obj.radius, maxY: obj.radius }
+          : boundsOfPoints(resolvePolygonVertices(obj) ?? []);
+    if (labelBounds) {
+      // 文案跟着物体层次走：decor 的招牌也在玩家之下
+      const lv = createObjectLabel(scene, obj.label, labelBounds, visual, DEPTH_DECOR);
+      if (lv) labels.push(lv);
+    }
+
+    return {
+      id, visual, material: obj.material, durability: -1, oneWay: false, layer: 'decor',
+      ...(maskPairs.length ? { maskPairs } : {}),
+      ...(glows.length ? { glows } : {}),
+      ...(labels.length ? { labels } : {}),
+    };
   }
 
   // ---- 物理物体 ----
@@ -242,8 +413,18 @@ function createObject(
 
   switch (obj.type) {
     case 'circle': {
-      const go = scene.add.circle(obj.x, obj.y, obj.radius, color, 1);
-      go.setStrokeStyle(2, 0x000000, 0.5);
+      const tex = createCircleTexture(
+        scene, obj.x, obj.y, obj.radius,
+        obj.texture ?? mat.texture, obj.textureMode ?? mat.textureMode,
+      );
+      const go = tex
+        ? tex.go
+        : (() => {
+            const circle = scene.add.circle(obj.x, obj.y, obj.radius, color, 1);
+            circle.setStrokeStyle(2, 0x000000, 0.5);
+            return circle;
+          })();
+      if (tex) maskPairs.push({ go, mask: tex.mask });
       applyAlpha(go, alpha);
       body = (
         scene.matter.add.gameObject(go, {
@@ -282,10 +463,19 @@ function createObject(
       const localPts = (body.vertices ?? []).map(
         (v) => new Phaser.Geom.Point(v.x - body.position.x, v.y - body.position.y),
       );
-      g.fillStyle(color, 1);
-      g.lineStyle(2, 0x000000, 0.5);
-      g.fillPoints(localPts, true);
-      g.strokePoints(localPts, true);
+      const tex = createPolygonTexture(
+        scene, localPts,
+        obj.texture ?? mat.texture, obj.textureMode ?? mat.textureMode,
+      );
+      if (tex) {
+        container.add(tex.go);
+        maskPairs.push({ go: container, mask: tex.mask });
+      } else {
+        g.fillStyle(color, 1);
+        g.lineStyle(2, 0x000000, 0.5);
+        g.fillPoints(localPts, true);
+        g.strokePoints(localPts, true);
+      }
       applyAlpha(container, alpha);
       visual = container;
       break;
@@ -310,6 +500,36 @@ function createObject(
     }
   }
 
+  // solid 物体：显式给定层次（低于玩家 0，但高于 decor -2）
+  setVisualDepth(visual, DEPTH_SOLID);
+
+  // ---- 材质发光：光晕画在物体背后（负 depth），每帧跟随物体 ----
+  const glows: GlowVisual[] = [];
+  if (mat.glow) {
+    const shape = glowShapeOf(obj, visual, body);
+    if (shape) {
+      const glow = createShapeGlow(scene, shape, mat.glow, id);
+      glow.follow = visual;
+      glow.gfx.setDepth(-10);
+      glows.push(glow);
+    }
+  }
+
+  // ---- 文字（招牌）：局部包围盒按形状给 ----
+  const labels: LabelVisual[] = [];
+  const labelBounds =
+    obj.type === 'rect'
+      ? { minX: -obj.w / 2, minY: -obj.h / 2, maxX: obj.w / 2, maxY: obj.h / 2 }
+      : obj.type === 'circle'
+        ? { minX: -obj.radius, minY: -obj.radius, maxX: obj.radius, maxY: obj.radius }
+        : boundsOfPoints(
+            (body.vertices ?? []).map((v) => ({ x: v.x - body.position.x, y: v.y - body.position.y })),
+          );
+  if (labelBounds) {
+    const lv = createObjectLabel(scene, obj.label, labelBounds, visual, DEPTH_SOLID);
+    if (lv) labels.push(lv);
+  }
+
   return {
     id,
     body,
@@ -318,7 +538,59 @@ function createObject(
     durability: mat.destructible ? mat.durability : -1,
     oneWay,
     layer: 'solid',
+    ...(maskPairs.length ? { maskPairs } : {}),
+    ...(glows.length ? { glows } : {}),
+    ...(labels.length ? { labels } : {}),
   };
+}
+
+/** 一组点的包围盒（用于文字锚点） */
+function boundsOfPoints(pts: Array<{ x: number; y: number }>): {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+} | null {
+  if (pts.length === 0) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of pts) {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/**
+ * 光晕的形状描述（用于在物体背后画出等形状的光）。
+ *
+ * 优先用刚体顶点（视觉与碰撞 100% 一致），没有刚体（decor）时按数据算。
+ */
+function glowShapeOf(
+  obj: MapObject,
+  visual: Phaser.GameObjects.GameObject,
+  body?: MatterJS.BodyType,
+): GlowShape | null {
+  if (obj.type === 'rect') return { kind: 'rect', w: obj.w, h: obj.h };
+  if (obj.type === 'circle') return { kind: 'circle', radius: obj.radius };
+  // 多边形
+  if (body && body.vertices && body.vertices.length >= 3) {
+    return {
+      kind: 'polygon',
+      pts: body.vertices.map((v) => ({ x: v.x - body.position.x, y: v.y - body.position.y })),
+    };
+  }
+  const v = visual as unknown as { x?: number; y?: number };
+  const vs = currentVertices(obj);
+  // decor：容器位置 = (obj.x, obj.y)，顶点直接是容器局部坐标
+  if (typeof v.x === 'number' && typeof v.y === 'number') {
+    return { kind: 'polygon', pts: vs.map((p) => ({ x: p.x, y: p.y })) };
+  }
+  return { kind: 'polygon', pts: vs.map((p) => ({ x: p.x, y: p.y })) };
 }
 
 /** 形状在世界坐标下的中心（rect=中心 / circle=圆心 / polygon=中心+质心） */
@@ -472,7 +744,13 @@ function buildCompoundPrefab(
   const ba = compound.angle;
   const ca = Math.cos(-ba);
   const sa = Math.sin(-ba);
-  const container = scene.add.container(bx, by);
+  const container = scene.add.container(bx, by).setDepth(DEPTH_SOLID);
+  /** 焊接体里带贴图的部件：蒙版需要跟着部件的世界变换走 */
+  const maskPairs: MaskPair[] = [];
+  /** 焊接体里发光部件的画布对象（跟随容器；透明度由 updateMaterialGlows 调制） */
+  const weldedGlows: GlowVisual[] = [];
+  /** 焊接体里部件的文字对象 */
+  const weldedLabels: LabelVisual[] = [];
 
   for (const p of parts) {
     const visual = createShapeVisual(scene, p, mat);
@@ -484,6 +762,38 @@ function buildCompoundPrefab(
     t.setPosition(dx * ca - dy * sa, dx * sa + dy * ca);
     t.setRotation(Phaser.Math.DegToRad(p.angle ?? 0) - ba);
     container.add(visual);
+    const pair = visual.getData?.('maskPair') as MaskPair | undefined;
+    if (pair) maskPairs.push(pair);
+
+    // 部件文字（招牌）：跟随部件视觉（世界变换由 getWorldTransformMatrix 给出，含容器变换）
+    const partLabelBounds =
+      p.type === 'rect'
+        ? { minX: -p.w / 2, minY: -p.h / 2, maxX: p.w / 2, maxY: p.h / 2 }
+        : p.type === 'circle'
+          ? { minX: -p.radius, minY: -p.radius, maxX: p.radius, maxY: p.radius }
+          : boundsOfPoints(currentVertices(p));
+    if (partLabelBounds) {
+      const lv = createObjectLabel(scene, p.label, partLabelBounds, visual, DEPTH_SOLID);
+      if (lv) weldedLabels.push(lv);
+    }
+
+    // 部件材质的发光：光晕作为容器子对象，跟随焊接体整体移动/旋转
+    const partMat = getMaterial(p.material);
+    if (partMat?.glow) {
+      const shape: GlowShape =
+        p.type === 'rect'
+          ? { kind: 'rect', w: p.w, h: p.h }
+          : p.type === 'circle'
+            ? { kind: 'circle', radius: p.radius }
+            : { kind: 'polygon', pts: currentVertices(p) };
+      const glow = createShapeGlow(scene, shape, partMat.glow, `${instId}#${p.id ?? p.material}`);
+      glow.gfx.setDepth(0);
+      glow.gfx.setPosition(t.x, t.y);
+      glow.gfx.setRotation(t.rotation);
+      // 放在部件前面一点（Container 内后加的在上层）：光晕要先于部件绘制
+      container.addAt(glow.gfx, Math.max(0, container.length - 1));
+      weldedGlows.push(glow);
+    }
   }
 
   return {
@@ -495,6 +805,9 @@ function buildCompoundPrefab(
     oneWay: false,
     layer: 'solid',
     compound: true,
+    ...(maskPairs.length ? { maskPairs } : {}),
+    ...(weldedGlows.length ? { glows: weldedGlows } : {}),
+    ...(weldedLabels.length ? { labels: weldedLabels } : {}),
   };
 }
 
@@ -611,6 +924,26 @@ function parseHex(hex: string, fallback: number): number {
   return m ? parseInt(m[1], 16) : fallback;
 }
 
+/**
+ * 销毁一个地图物体的视觉（连带的几何蒙版也一起销毁）。
+ *
+ * 必须走这个函数而不是 `visual.destroy()`：焊接体的子对象不会随 Container 一起销毁，
+ * 蒙版又是"不进显示列表"的独立 Graphics，不显式销毁就会泄漏。
+ */
+export function disposeRuntimeVisual(runtime: MapObjectRuntime): void {
+  for (const pair of runtime.maskPairs ?? []) {
+    if (pair.mask.scene) pair.mask.destroy();
+  }
+  runtime.maskPairs = undefined;
+  for (const glow of runtime.glows ?? []) {
+    if (glow.gfx.scene) glow.gfx.destroy();
+  }
+  runtime.glows = undefined;
+  destroyObjectLabels(runtime.labels);
+  runtime.labels = undefined;
+  runtime.visual.destroy();
+}
+
 /** 销毁一次 buildMap 产生的所有对象（编辑器重建时用） */
 export function destroyMapRuntime(scene: Phaser.Scene, runtime: MapObjectRuntime[]): void {
   for (const item of runtime) {
@@ -618,7 +951,7 @@ export function destroyMapRuntime(scene: Phaser.Scene, runtime: MapObjectRuntime
       scene.matter.world.remove(extra);
     }
     if (item.body) scene.matter.world.remove(item.body);
-    item.visual.destroy();
+    disposeRuntimeVisual(item);
   }
   runtime.length = 0;
 }

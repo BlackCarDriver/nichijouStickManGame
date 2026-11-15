@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "id": "bridge1",
+  "name": "链桥",
+  "anchor": "center",
+  "bodyMode": "loose",
+  "parts": [
+    {
+      "type": "rect",
+      "x": -80,
+      "y": 10,
+      "w": 80,
+      "h": 20,
+      "material": "metal_2"
+    },
+    {
+      "type": "rect",
+      "x": 0,
+      "y": 10,
+      "w": 80,
+      "h": 20,
+      "material": "metal_2"
+    },
+    {
+      "type": "rect",
+      "x": 80,
+      "y": 10,
+      "w": 80,
+      "h": 20,
+      "material": "metal_2"
+    },
+    {
+      "type": "rect",
+      "x": 160,
+      "y": 10,
+      "w": 80,
+      "h": 20,
+      "material": "metal_2"
+    },
+    {
+      "type": "rect",
+      "x": 240,
+      "y": 10,
+      "w": 80,
+      "h": 20,
+      "material": "metal_2"
+    },
+    {
+      "type": "rect",
+      "x": -160,
+      "y": 10,
+      "w": 80,
+      "h": 20,
+      "material": "wall"
+    },
+    {
+      "type": "rect",
+      "x": 320,
+      "y": 10,
+      "w": 80,
+      "h": 20,
+      "material": "wall"
+    }
+  ],
+  "joints": [
+    {
+      "bodyA": 0,
+      "anchor": {
+        "x": -79.27617225305039,
+        "y": 19.935362194478103
+      },
+      "noCollide": true,
+      "bodyB": 5
+    },
+    {
+      "bodyA": 4,
+      "anchor": {
+        "x": 321.80425071691525,
+        "y": 19.62224454195689
+      },
+      "noCollide": true,
+      "bodyB": 6
+    },
+    {
+      "bodyA": 1,
+      "anchor": {
+        "x": 80.49834031948546,
+        "y": 21.976448545834273
+      },
+      "noCollide": true,
+      "bodyB": 2
+    },
+    {
+      "bodyA": 3,
+      "anchor": {
+        "x": 239.4071105812077,
+        "y": 21.976448545834273
+      },
+      "noCollide": true,
+      "bodyB": 4
+    },
+    {
+      "bodyA": 0,
+      "anchor": {
+        "x": 0.45540418765506274,
+        "y": 21.976448545834273
+      },
+      "noCollide": true,
+      "bodyB": 1
+    },
+    {
+      "bodyA": 2,
+      "anchor": {
+        "x": 161.71837845325456,
+        "y": 20.79934654389558
+      },
+      "noCollide": true,
+      "bodyB": 3
+    }
+  ]
+}

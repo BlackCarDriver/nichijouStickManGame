@@ -84,6 +84,29 @@ function validateObject(obj: unknown, path: string, ctx: ValidateContext, issues
   if (o.color !== undefined && (typeof o.color !== 'string' || !/^#?[0-9a-fA-F]{6}$/.test(o.color))) {
     issues.push(err(`${path}.color`, '颜色必须是 hex 字符串，如 "#8b5a2b"'));
   }
+  if (o.label !== undefined) {
+    const lb = o.label as Record<string, unknown> | null;
+    if (!lb || typeof lb !== 'object') {
+      issues.push(err(`${path}.label`, '文字配置必须是对象'));
+    } else {
+      if (typeof lb.text !== 'string' || lb.text.trim() === '') {
+        issues.push(warn(`${path}.label.text`, '文案为空：不会显示文字（可以直接删掉 label）'));
+      }
+      if (lb.size !== undefined && (!isFiniteNumber(lb.size) || lb.size < 4 || lb.size > 400)) {
+        issues.push(err(`${path}.label.size`, '字号必须是 4~400 的数字'));
+      }
+      if (lb.color !== undefined && (typeof lb.color !== 'string' || !/^#?[0-9a-fA-F]{6}$/.test(lb.color))) {
+        issues.push(err(`${path}.label.color`, '颜色必须是 hex 字符串，如 "#ffffff"'));
+      }
+      const anchors = [
+        'center', 'top', 'bottom', 'left', 'right',
+        'topLeft', 'topRight', 'bottomLeft', 'bottomRight',
+      ];
+      if (lb.anchor !== undefined && !anchors.includes(String(lb.anchor))) {
+        issues.push(err(`${path}.label.anchor`, `位置只能是：${anchors.join(' / ')}`));
+      }
+    }
+  }
   if (o.oneWay === true && o.layer === 'decor') {
     issues.push(warn(`${path}.oneWay`, 'decor 图层没有物理体，oneWay 不会生效'));
   }
@@ -228,7 +251,20 @@ export function validateMap(map: unknown, ctx: ValidateContext): Issue[] {
           ids.add(it.id);
         }
         const prefab = ctx.prefabs[it.ref];
-        solidCount += expandPrefab(prefab, { ref: it.ref, x: it.x as number, y: it.y as number }).length;
+        const parts = expandPrefab(prefab, {
+          ref: it.ref,
+          x: it.x as number,
+          y: it.y as number,
+          // 与 MapLoader 一致：有显式 id 的实例，部件 id 才是 `${instId}#i`
+          id: typeof it.id === 'string' ? it.id : undefined,
+        });
+        solidCount += parts.length;
+        // 松件：每个部件是独立刚体，关节可以指向它（焊接体只能指向实例 id 本身）
+        if (typeof it.id === 'string' && (prefab.bodyMode ?? 'loose') !== 'compound') {
+          for (const part of parts) {
+            if (typeof part.id === 'string' && !ids.has(part.id)) ids.add(part.id);
+          }
+        }
       });
     }
   }
@@ -257,6 +293,9 @@ export function validateMap(map: unknown, ctx: ValidateContext): Issue[] {
         const anchor = j.anchor as Record<string, unknown> | undefined;
         if (!anchor || !isFiniteNumber(anchor.x) || !isFiniteNumber(anchor.y)) {
           issues.push(err(`${path}.anchor`, '锚点必须是 { x, y } 有限数字'));
+        }
+        if (j.noCollide !== undefined && typeof j.noCollide !== 'boolean') {
+          issues.push(err(`${path}.noCollide`, 'noCollide 必须是布尔值'));
         }
       });
     }
@@ -297,45 +336,7 @@ export function validateMap(map: unknown, ctx: ValidateContext): Issue[] {
     if (!Array.isArray(m.weapons)) {
       issues.push(err('weapons', '必须是数组'));
     } else {
-      m.weapons.forEach((it, i) => {
-        const o = it as Record<string, unknown>;
-        const path = `weapons[${i}]`;
-        if (!isFiniteNumber(o?.x) || !isFiniteNumber(o?.y)) {
-          issues.push(err(path, '坐标必须是有限数字'));
-        }
-        // 模式：默认 fixed（兼容只有 type 的旧格式）
-        const mode = o?.mode === undefined ? 'fixed' : o.mode;
-        if (mode !== 'fixed' && mode !== 'random') {
-          issues.push(err(`${path}.mode`, `mode 只能是 "fixed" 或 "random"（当前 "${String(o.mode)}"）`));
-        }
-        const checkWeapon = (id: unknown, field: string): void => {
-          if (typeof id !== 'string' || !id) {
-            issues.push(err(`${path}.${field}`, '需要武器 id 字符串'));
-            return;
-          }
-          if (ctx.weaponIds && !ctx.weaponIds.includes(id)) {
-            issues.push(err(`${path}.${field}`, `未知武器 "${id}"（可用：${ctx.weaponIds.join(', ')}）`));
-          }
-        };
-        if (mode === 'fixed') {
-          if (typeof o?.weapon === 'string') checkWeapon(o.weapon, 'weapon');
-          else if (typeof o?.type === 'string') checkWeapon(o.type, 'type');
-          else issues.push(err(path, '固定武器模式需要 weapon（或旧字段 type）'));
-        }
-        if (mode === 'random' && o?.pool !== undefined) {
-          if (!Array.isArray(o.pool) || o.pool.length === 0) {
-            issues.push(err(`${path}.pool`, 'pool 必须是非空数组（不填 = 全部武器）'));
-          } else {
-            (o.pool as unknown[]).forEach((id, k) => checkWeapon(id, `pool[${k}]`));
-          }
-        }
-        if (o?.respawnMs !== undefined && (!isFiniteNumber(o.respawnMs) || o.respawnMs < 0)) {
-          issues.push(err(`${path}.respawnMs`, '刷新间隔必须 >= 0（0 = 不刷新）'));
-        }
-        if (o?.maxRespawns !== undefined && (!isFiniteNumber(o.maxRespawns) || o.maxRespawns < 0)) {
-          issues.push(err(`${path}.maxRespawns`, '刷新次数必须 >= 0（不填 = 无限）'));
-        }
-      });
+      m.weapons.forEach((it, i) => validateWeaponSpawn(it, `weapons[${i}]`, ctx, issues));
     }
   }
   if (m.items !== undefined) {
@@ -367,6 +368,72 @@ export function validateMap(map: unknown, ctx: ValidateContext): Issue[] {
   return issues;
 }
 
+/**
+ * 校验单个武器掉落点。
+ *
+ * 地图的 `weapons[]` 与预制件的 `weapons[]` 字段完全一致，只有坐标系不同
+ * （预制件是局部坐标），所以两边共用这一份校验。
+ */
+function validateWeaponSpawn(
+  it: unknown,
+  path: string,
+  ctx: ValidateContext,
+  issues: Issue[],
+): void {
+  const o = it as Record<string, unknown>;
+  if (!isFiniteNumber(o?.x) || !isFiniteNumber(o?.y)) {
+    issues.push(err(path, '坐标必须是有限数字'));
+  }
+  // 模式：默认 fixed（兼容只有 type 的旧格式）
+  const mode = o?.mode === undefined ? 'fixed' : o.mode;
+  if (mode !== 'fixed' && mode !== 'random') {
+    issues.push(err(`${path}.mode`, `mode 只能是 "fixed" 或 "random"（当前 "${String(o.mode)}"）`));
+  }
+  /** 投放内容 id 可以是武器，也可以是补给道具（医疗包/防弹衣） */
+  const isKnownContent = (id: string): boolean =>
+    (ctx.weaponIds?.includes(id) ?? false) || (ctx.itemIds?.includes(id) ?? false);
+  /** 上下文没提供 id 表时（例如校验预制件里的武器架）无法判断，跳过内容校验 */
+  const canCheckContent = ctx.weaponIds !== undefined || ctx.itemIds !== undefined;
+  const checkContent = (id: unknown, field: string): void => {
+    if (typeof id !== 'string' || !id) {
+      issues.push(err(`${path}.${field}`, '需要武器或道具 id 字符串'));
+      return;
+    }
+    if (!canCheckContent) return;
+    if (!isKnownContent(id)) {
+      issues.push(
+        err(
+          `${path}.${field}`,
+          `未知内容 "${id}"（武器：${(ctx.weaponIds ?? []).join(', ')}；道具：${(ctx.itemIds ?? []).join(', ')}）`,
+        ),
+      );
+    }
+  };
+  if (mode === 'fixed') {
+    if (typeof o?.item === 'string') {
+      checkContent(o.item, 'item');
+      if (typeof o?.weapon === 'string' || typeof o?.type === 'string') {
+        issues.push(warn(path, 'item 与 weapon/type 同时存在：以 item 为准，建议删掉多余的字段'));
+      }
+    } else if (typeof o?.weapon === 'string') checkContent(o.weapon, 'weapon');
+    else if (typeof o?.type === 'string') checkContent(o.type, 'type');
+    else issues.push(err(path, '固定模式需要 item / weapon（或旧字段 type）'));
+  }
+  if (mode === 'random' && o?.pool !== undefined) {
+    if (!Array.isArray(o.pool) || o.pool.length === 0) {
+      issues.push(err(`${path}.pool`, 'pool 必须是非空数组（不填 = 全部武器）'));
+    } else {
+      (o.pool as unknown[]).forEach((id, k) => checkContent(id, `pool[${k}]`));
+    }
+  }
+  if (o?.respawnMs !== undefined && (!isFiniteNumber(o.respawnMs) || o.respawnMs < 0)) {
+    issues.push(err(`${path}.respawnMs`, '刷新间隔必须 >= 0（0 = 不刷新）'));
+  }
+  if (o?.maxRespawns !== undefined && (!isFiniteNumber(o.maxRespawns) || o.maxRespawns < 0)) {
+    issues.push(err(`${path}.maxRespawns`, '刷新次数必须 >= 0（不填 = 无限）'));
+  }
+}
+
 /** 校验一个预制件 */
 export function validatePrefab(prefab: unknown, ctx: ValidateContext): Issue[] {
   const issues: Issue[] = [];
@@ -387,6 +454,73 @@ export function validatePrefab(prefab: unknown, ctx: ValidateContext): Issue[] {
     issues.push(err('parts', '预制件至少需要 1 个部件'));
   } else {
     parts.forEach((part, i) => validateObject(part, `parts[${i}]`, ctx, issues));
+
+    // ---- 部件 id：预制件部件**禁止**带 id ----
+    // 部件的真实 id 是实例化时按 `${实例id}#序号` 生成的；写死 id 会让同一个预制件的
+    // 多个实例撞 id → buildMap 报“物体 id 重复”，联机的销毁事件会作用到别的实例上。
+    const partIds = new Map<string, number>();
+    parts.forEach((part, i) => {
+      const id = (part as Record<string, unknown>)?.id;
+      if (id === undefined) return;
+      if (typeof id !== 'string' || id.trim() === '') {
+        issues.push(err(`${'parts[' + i + '].id'}`, '部件 id 请直接删掉（预制件部件不应有 id）'));
+        return;
+      }
+      const prev = partIds.get(id);
+      if (prev !== undefined) {
+        issues.push(err(`parts[${i}].id`, `部件 id 重复: "${id}"（与 parts[${prev}] 相同）→ 多个实例会撞 id，请删掉部件 id`));
+      } else {
+        partIds.set(id, i);
+      }
+      if (prev === undefined) {
+        issues.push(
+          err(`parts[${i}].id`, `预制件部件不要写 id（"${id}"）：部件 id 由实例化时自动生成，写死会让多个实例撞 id`),
+        );
+      }
+    });
+
+    // ---- 内部关节（只对松件有意义：焊接体整体就是一个刚体）----
+    const joints = p.joints;
+    if (joints !== undefined) {
+      if (!Array.isArray(joints)) {
+        issues.push(err('joints', 'joints 必须是数组'));
+      } else if (p.bodyMode === 'compound') {
+        issues.push(err('joints', '焊接体（bodyMode: "compound"）内部关节无意义，请改用 loose 或删除 joints'));
+      } else {
+        joints.forEach((joint, k) => {
+          const path = `joints[${k}]`;
+          const j = joint as Record<string, unknown>;
+          const inRange = (v: unknown): v is number =>
+            typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < parts.length;
+          if (!inRange(j.bodyA)) {
+            issues.push(err(`${path}.bodyA`, `bodyA 必须是 0~${parts.length - 1} 的部件下标`));
+          }
+          if (j.bodyB !== undefined && j.bodyB !== 'world' && !inRange(j.bodyB)) {
+            issues.push(err(`${path}.bodyB`, `bodyB 必须是部件下标、"world" 或省略（当前 ${String(j.bodyB)}）`));
+          }
+          if (j.bodyA === j.bodyB) {
+            issues.push(err(`${path}.bodyB`, '两端不能是同一个部件'));
+          }
+          const anchor = j.anchor as Record<string, unknown> | undefined;
+          if (!anchor || !isFiniteNumber(anchor.x) || !isFiniteNumber(anchor.y)) {
+            issues.push(err(`${path}.anchor`, '锚点必须是 { x, y } 有限数字（局部坐标）'));
+          }
+          if (j.noCollide !== undefined && typeof j.noCollide !== 'boolean') {
+            issues.push(err(`${path}.noCollide`, 'noCollide 必须是布尔值'));
+          }
+        });
+      }
+    }
+
+    // ---- 预制件自带的武器掉落点（局部坐标）----
+    const weapons = p.weapons;
+    if (weapons !== undefined) {
+      if (!Array.isArray(weapons)) {
+        issues.push(err('weapons', 'weapons 必须是数组'));
+      } else {
+        weapons.forEach((it, i) => validateWeaponSpawn(it, `weapons[${i}]`, ctx, issues));
+      }
+    }
 
     if (p.bodyMode === 'compound') {
       // 焊接体只能有一套物理属性 → 取面积最大部件的材质
@@ -476,6 +610,55 @@ export function validateMaterialsFile(
     if (def.hardness !== undefined) {
       if (!isFiniteNumber(def.hardness) || def.hardness < 0) {
         issues.push(err(`${path}.hardness`, '硬度必须 >= 0 的数字'));
+      }
+    }
+    if (def.explosive !== undefined) {
+      const ex = def.explosive;
+      if (!ex || typeof ex !== 'object') {
+        issues.push(err(`${path}.explosive`, '爆炸配置必须是对象'));
+      } else {
+        if (ex.damage !== undefined && (!isFiniteNumber(ex.damage) || ex.damage < 0)) {
+          issues.push(err(`${path}.explosive.damage`, '爆炸伤害必须 >= 0 的数字'));
+        }
+        if (ex.radius !== undefined && (!isFiniteNumber(ex.radius) || ex.radius < 1 || ex.radius > 1200)) {
+          issues.push(err(`${path}.explosive.radius`, '爆炸范围必须是 1~1200 的数字'));
+        }
+        if (ex.knockback !== undefined && (!isFiniteNumber(ex.knockback) || ex.knockback < 0 || ex.knockback > 80)) {
+          issues.push(err(`${path}.explosive.knockback`, '击退强度必须是 0~80 的数字'));
+        }
+        if (ex.damage === 0 && ex.radius !== undefined) {
+          issues.push(warn(`${path}.explosive`, '伤害为 0：只会推动刚体，不会掉血'));
+        }
+      }
+    }
+    if (def.glow !== undefined) {
+      const g = def.glow;
+      if (!g || typeof g !== 'object') {
+        issues.push(err(`${path}.glow`, '发光配置必须是对象'));
+      } else {
+        if (g.color !== undefined && !/^#[0-9a-fA-F]{6}$/.test(String(g.color))) {
+          issues.push(err(`${path}.glow.color`, '颜色必须是 #rrggbb'));
+        }
+        if (g.brightness !== undefined) {
+          if (!isFiniteNumber(g.brightness) || g.brightness < 0 || g.brightness > 3) {
+            issues.push(err(`${path}.glow.brightness`, '亮度必须是 0~3 的数字'));
+          }
+        }
+        if (g.radius !== undefined) {
+          if (!isFiniteNumber(g.radius) || g.radius < 1 || g.radius > 400) {
+            issues.push(err(`${path}.glow.radius`, '范围必须是 1~400 的数字'));
+          }
+        }
+        if (g.mode !== undefined && !['constant', 'pulse', 'flicker'].includes(String(g.mode))) {
+          issues.push(err(`${path}.glow.mode`, '发光方式只能是 constant / pulse / flicker'));
+        }
+      }
+    }
+    if (def.damagePerSecond !== undefined) {
+      if (!isFiniteNumber(def.damagePerSecond) || def.damagePerSecond < 0) {
+        issues.push(err(`${path}.damagePerSecond`, '接触伤害（每秒）必须 >= 0 的数字'));
+      } else if (def.damagePerSecond > 100) {
+        issues.push(warn(`${path}.damagePerSecond`, `${def.damagePerSecond}/秒 偏高（玩家满血 100），1 秒内会致死`));
       }
     }
     if (def.damageMultiplier !== undefined) {

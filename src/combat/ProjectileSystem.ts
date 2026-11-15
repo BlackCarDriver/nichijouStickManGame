@@ -176,6 +176,13 @@ export class ProjectileSystem {
    */
   onSpawn?: (options: ProjectileSpawnOptions) => boolean;
 
+  /**
+   * 团队战：友军不挡子弹（穿透队友，不引爆/不钉住/不弹开）。
+   * 返回 true 时本次命中直接忽略目标，继续飞行。
+   * 不注入 = 所有人都要挡（混战/单机）。
+   */
+  passThroughTarget?: (ownerId: number, target: Player) => boolean;
+
   spawn(options: ProjectileSpawnOptions): void {
     if (!options.relayed && this.onSpawn && !this.onSpawn(options)) return;
     if (this.projectiles.length >= ProjectileSystem.MAX_PROJECTILES) {
@@ -336,6 +343,13 @@ export class ProjectileSystem {
 
   /** 结算一次命中。返回 true = 子弹终止 */
   private onHit(p: Projectile, hit: RayHit, dirX: number, dirY: number): boolean {
+    const hitPlayer = this.bodyToPlayer.get(hit.body.id);
+    // 团队战：穿透友军（含手雷弹跳、投掷物钉入、火箭引爆都在下面统一跳过）
+    if (hitPlayer && this.passThroughTarget?.(p.ownerId, hitPlayer)) {
+      p.ignore.push(hit.body);
+      this.advancePast(p, hit, dirX, dirY);
+      return false;
+    }
     // ---- 引信弹（手榴弹）：碰到任何东西都只弹开，等引信到期才爆炸 ----
     if (p.fuseMs) {
       this.bounceOff(p, hit);
@@ -374,7 +388,7 @@ export class ProjectileSystem {
     }
 
     // ---- 命中玩家 ----
-    const target = this.bodyToPlayer.get(hit.body.id);
+    const target = hitPlayer;
     if (target && target.health.isDead) {
       // 已阵亡的玩家（尸体）不该当"看不见的墙"吃子弹：忽略并继续飞
       p.ignore.push(hit.body);

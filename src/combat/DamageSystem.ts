@@ -41,6 +41,11 @@ export class DamageSystem {
   private readonly fx: FxSystem;
   private readonly destruction: DestructionSystem;
   private netSink: DamageNetSink | null = null;
+  /**
+   * 友军判定（团队战）：(sourceId, target) => true 时这次伤害整体作废。
+   * 只在游戏场景里注入；不注入 = 所有人都能互相伤害（混战/单机）。
+   */
+  private allyFilter: ((sourceId: number, target: Player) => boolean) | null = null;
 
   constructor(fx: FxSystem, destruction: DestructionSystem) {
     this.fx = fx;
@@ -51,6 +56,11 @@ export class DamageSystem {
     this.netSink = sink;
   }
 
+  /** 注入友军判定（团队战用；传 null 关闭） */
+  setAllyFilter(filter: ((sourceId: number, target: Player) => boolean) | null): void {
+    this.allyFilter = filter;
+  }
+
   /**
    * 对玩家造成伤害。
    *
@@ -59,6 +69,11 @@ export class DamageSystem {
    * 爆炸与摔落不参与暴击：它们的 point 是爆炸中心/缺失，不对应"打到头"。
    */
   damagePlayer(player: Player, info: DamageInfo): DamageResult {
+    // 团队战：友军完全无伤害（连火花/伤害数字/硬直都不播，否则看起来像打中了）。
+    // 服务端 handleDamage 还有同样的判定，这里只是让本地表现与服务端一致。
+    if (this.allyFilter && info.sourceId !== undefined && this.allyFilter(info.sourceId, player)) {
+      return { applied: 0, killed: false };
+    }
     const canCrit = (info.kind === 'bullet' || info.kind === 'melee') && info.point !== undefined;
     const crit = canCrit && player.isHeadHit(info.point!.y);
 

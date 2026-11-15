@@ -13,6 +13,47 @@ import rawMaterials from '../../data/materials.json';
 /** 贴图模式：stretch = 拉伸铺满；tile = 平铺（TileSprite） */
 export type TextureMode = 'stretch' | 'tile';
 
+/** 发光方式 */
+export type GlowMode = 'constant' | 'pulse' | 'flicker';
+
+/** materials.json 里的爆炸配置（也是导出的格式） */
+export interface MaterialExplosiveJson {
+  /** 中心伤害（按距离线性衰减到 0） */
+  damage?: number;
+  /** 爆炸半径（px） */
+  radius?: number;
+  /** 击退强度（不填 = 按半径自动给一个手感合适的值） */
+  knockback?: number;
+}
+
+/** 运行时爆炸配置 */
+export interface MaterialExplosive {
+  damage: number;
+  radius: number;
+  knockback: number;
+}
+
+/** materials.json 里的发光配置（也是导出的格式） */
+export interface MaterialGlowJson {
+  /** 光晕颜色（hex 字符串）。不填 = 用材质自身的颜色 */
+  color?: string;
+  /** 亮度 0~3（1 = 默认；叠加混合，>1 会明显更亮） */
+  brightness?: number;
+  /** 范围（px）：光晕向外扩散多远 */
+  radius?: number;
+  /** 发光方式：常亮 / 呼吸 / 闪烁 */
+  mode?: GlowMode;
+}
+
+/** 运行时发光配置（解析后） */
+export interface MaterialGlow {
+  color: number;
+  colorHex: string;
+  brightness: number;
+  radius: number;
+  mode: GlowMode;
+}
+
 /** materials.json 中的单条材质（也是导出的格式） */
 export interface MaterialJson {
   name: string;
@@ -57,6 +98,20 @@ export interface MaterialJson {
   bulletBounce?: boolean;
   /** 子弹是否可穿透（纸箱） */
   bulletPierce?: boolean;
+  /** 发光（不填 = 不发光） */
+  glow?: MaterialGlowJson;
+  /**
+   * 爆炸（不填 = 不炸）。
+   * 物体被破坏时在原地爆炸：范围伤害 + 击退 + 视觉，**不产生弹片**。
+   */
+  explosive?: MaterialExplosiveJson;
+  /**
+   * 接触伤害（每秒）：火柴人碰到这种材质的物体时，每秒钟掉多少血（0/不填 = 无伤害）。
+   *
+   * 典型用途：岩浆、尖刺、毒液池、电击地板。
+   * 伤害按固定节流逐次结算（不是"碰一下掉一次"），所以数值就是"每秒"。
+   */
+  damagePerSecond?: number;
 }
 
 export interface MaterialsFile {
@@ -65,7 +120,20 @@ export interface MaterialsFile {
 }
 
 /** 运行时材质（解析后的形态） */
-export interface MaterialConfig extends Omit<MaterialJson, 'color' | 'textureMode' | 'damageMultiplier' | 'bulletBounce' | 'bulletPierce' | 'hardness' | 'stickable'> {
+export interface MaterialConfig
+  extends Omit<
+    MaterialJson,
+    | 'color'
+    | 'textureMode'
+    | 'damageMultiplier'
+    | 'bulletBounce'
+    | 'bulletPierce'
+    | 'hardness'
+    | 'stickable'
+    | 'damagePerSecond'
+    | 'glow'
+    | 'explosive'
+  > {
   id: string;
   opacity: number;
   /** 解析后的颜色（Phaser number） */
@@ -78,6 +146,12 @@ export interface MaterialConfig extends Omit<MaterialJson, 'color' | 'textureMod
   stickable: boolean | undefined;
   bulletBounce: boolean;
   bulletPierce: boolean;
+  /** 接触伤害（每秒），0 = 无伤害 */
+  damagePerSecond: number;
+  /** 发光配置（null = 不发光） */
+  glow: MaterialGlow | null;
+  /** 爆炸配置（null = 不炸） */
+  explosive: MaterialExplosive | null;
 }
 
 /** 当前生效的材质表（就地可变） */
@@ -138,7 +212,33 @@ export function toMaterialConfig(id: string, def: MaterialJson): MaterialConfig 
     stickable: def.stickable,
     bulletBounce: def.bulletBounce ?? false,
     bulletPierce: def.bulletPierce ?? false,
+    damagePerSecond: Math.max(0, def.damagePerSecond ?? 0),
+    glow: parseGlow(def.glow, def.color ?? '#ffffff'),
+    explosive: parseExplosive(def.explosive),
   };
+}
+
+/** 解析爆炸配置（不填/非法 → null，表示不爆炸） */
+export function parseExplosive(def: MaterialExplosiveJson | undefined): MaterialExplosive | null {
+  if (!def) return null;
+  const damage = Number.isFinite(def.damage) ? Math.max(0, def.damage as number) : 40;
+  const radius = Number.isFinite(def.radius) ? Math.max(1, Math.min(1200, def.radius as number)) : 120;
+  const knockback = Number.isFinite(def.knockback)
+    ? Math.max(0, Math.min(80, def.knockback as number))
+    : Math.max(8, radius / 10);
+  if (damage <= 0 || radius <= 0) return null;
+  return { damage, radius, knockback };
+}
+
+/** 解析发光配置（不填/非法 → null，表示不发光） */
+export function parseGlow(def: MaterialGlowJson | undefined, fallbackColor: string): MaterialGlow | null {
+  if (!def) return null;
+  const colorHex = typeof def.color === 'string' && def.color.trim() ? def.color.trim() : fallbackColor;
+  const mode: GlowMode = def.mode === 'pulse' || def.mode === 'flicker' ? def.mode : 'constant';
+  const brightness = Number.isFinite(def.brightness) ? Math.max(0, Math.min(3, def.brightness as number)) : 1;
+  const radius = Number.isFinite(def.radius) ? Math.max(1, Math.min(400, def.radius as number)) : 18;
+  if (brightness <= 0 || radius <= 0) return null;
+  return { color: parseColor(colorHex), colorHex, brightness, radius, mode };
 }
 
 /** 运行时形态 → JSON 形态（导出用） */
@@ -161,6 +261,27 @@ export function materialToJson(m: MaterialConfig): MaterialJson {
     stickable: m.stickable,
     bulletBounce: m.bulletBounce,
     bulletPierce: m.bulletPierce,
+    // 0 不写进 JSON：避免给所有已有材质塞一堆无意义的 0
+    ...(m.damagePerSecond > 0 ? { damagePerSecond: m.damagePerSecond } : {}),
+    ...(m.glow
+      ? {
+          glow: {
+            color: m.glow.colorHex,
+            brightness: m.glow.brightness,
+            radius: m.glow.radius,
+            mode: m.glow.mode,
+          },
+        }
+      : {}),
+    ...(m.explosive
+      ? {
+          explosive: {
+            damage: m.explosive.damage,
+            radius: m.explosive.radius,
+            knockback: m.explosive.knockback,
+          },
+        }
+      : {}),
   };
 }
 

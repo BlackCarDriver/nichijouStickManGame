@@ -313,6 +313,100 @@ body {
   padding: 0 3px;
 }
 
+/* ---------- 左栏分区（放置 / 对象列表 / 显示） ---------- */
+.ed-subtabs {
+  display: flex;
+  gap: 3px;
+  margin-bottom: 8px;
+  padding: 3px;
+  background: #171720;
+  border: 1px solid #2a2a3c;
+  border-radius: 7px;
+}
+
+.ed-subtab {
+  flex: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  padding: 5px 4px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.ed-subtab:hover {
+  color: var(--text);
+  background: #22222f;
+}
+
+.ed-subtab.active {
+  color: #d6f5ff;
+  background: #1b3f52;
+  border-color: var(--accent);
+}
+
+/* ---------- 工具二级选项（分组展开） ---------- */
+.ed-tool.open {
+  border-color: #3f7f9a;
+}
+
+.ed-subgroup {
+  margin: 6px 0 2px;
+  padding: 7px 8px 8px;
+  background: #171720;
+  border: 1px solid #2a2a3c;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+}
+
+.ed-subgroup-title {
+  font-size: 10px;
+  color: #8d9cb5;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+
+.ed-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.ed-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #20202c;
+  border: 1px solid #30304a;
+  color: var(--text);
+  padding: 4px 9px;
+  border-radius: 99px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.ed-chip:hover {
+  background: #2a2a3a;
+}
+
+.ed-chip.active {
+  background: #1b3f52;
+  border-color: var(--accent);
+  color: #d6f5ff;
+}
+
+.ed-list-short {
+  max-height: 168px;
+}
+
+/* 对象列表 Tab：列表撑满左栏剩余高度（左栏本身是滚动容器，用视口高度兜） */
+.ed-list-fill {
+  max-height: calc(100vh - 230px);
+  min-height: 140px;
+}
+
 /* ---------- 列表 ---------- */
 .ed-list {
   display: flex;
@@ -683,45 +777,17 @@ body.testing .ed-actions {
   font-variant-numeric: tabular-nums;
 }
 
-.ed-pose-slider {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
+/* ---------- 预制件内部关节卡片（右栏） ---------- */
+.ed-joint-card {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin: 6px 0;
+  background: rgba(255, 92, 200, 0.05);
 }
 
-.ed-pose-slider .ed-slider {
-  min-width: 0;
-}
-
-.ed-pose-slider .ed-slider-val {
-  flex: 0 0 28px;
-}
-
-.ed-action-panel {
-  min-width: 0;
-  padding-bottom: 18px;
-}
-
-.ed-action-panel .ed-grid2 {
-  grid-template-columns: 1fr;
-  gap: 7px;
-}
-
-.ed-action-panel .ed-field {
-  min-width: 0;
-}
-
-.ed-action-panel .ed-field-label {
-  max-width: 84px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.ed-action-panel .ed-pose-slider {
-  min-width: 0;
+.ed-joint-card .ed-field {
+  margin: 3px 0;
 }
 
 .ed-status-fps {

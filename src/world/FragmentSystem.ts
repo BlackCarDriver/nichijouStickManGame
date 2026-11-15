@@ -35,8 +35,11 @@ export class FragmentSystem {
 
   /**
    * 在物体中心炸出碎片。
+   *
    * @param colorHex 材质颜色（hex 字符串）
-   * @param pieces 碎片数量
+   * @param pieces 碎片数量（调用方按物体体积算：越大越多）
+   * @param spread 碎片初始散布范围（px）
+   * @param sizeScale 碎片尺寸倍数（大物体碎块也该更大，否则看着像"一堆沙")
    */
   burst(
     x: number,
@@ -44,13 +47,15 @@ export class FragmentSystem {
     colorHex: string,
     pieces = 5,
     spread = 26,
+    sizeScale = 1,
   ): void {
     const color = parseColor(colorHex, 0xffffff);
+    const scale = Number.isFinite(sizeScale) ? Phaser.Math.Clamp(sizeScale, 0.5, 3) : 1;
     for (let i = 0; i < pieces; i++) {
       if (this.fragments.length >= FragmentSystem.MAX_FRAGMENTS) {
         this.removeOldest();
       }
-      const size = 4 + Math.random() * 7;
+      const size = (4 + Math.random() * 7) * scale;
       const fx = x + (Math.random() - 0.5) * spread;
       const fy = y + (Math.random() - 0.5) * spread;
       const body = this.scene.matter.add.rectangle(fx, fy, size, size, {

@@ -6,7 +6,10 @@
  */
 
 /** 游戏同步协议版本（与 server/main.go 的 gameProtocolVersion 一致；前后端必须同版本上线） */
-export const GAME_PROTOCOL_VERSION = 6;
+export const GAME_PROTOCOL_VERSION = 7;
+
+/** 对局模式：ffa = 个人混战（最后一人胜出）；tdm = 红蓝团队战（消灭对方全队获胜） */
+export type MatchMode = 'ffa' | 'tdm';
 
 /** 输入边沿掩码（与 server/protocol.go 一致） */
 export const EDGE = {
@@ -60,6 +63,8 @@ export interface MatchPlayer {
   avatar: string;
   netId: number;
   color: number;
+  /** 队伍编号（团队战 0=红队 / 1=蓝队；混战 -1） */
+  team: number;
   spawn: number;
   kills: number;
 }
@@ -88,6 +93,8 @@ export interface MatchStartMsg {
   t: 'match_start';
   matchId: number;
   map: string;
+  /** 本局模式（老服务端不带此字段，按 ffa 处理） */
+  mode?: MatchMode;
   players: MatchPlayer[];
   stats: PlayerStat[];
   you: number;
@@ -320,14 +327,20 @@ export interface PlayerLeftMsg {
 
 export interface MatchEndMsg {
   t: 'match_end';
-  results: Array<{ nick: string; netId: number; kills: number }>;
+  results: Array<{ nick: string; netId: number; kills: number; team?: number }>;
   winner: string;
+  /** 团队战获胜方（0/1；-1 = 平局或混战） */
+  winnerTeam?: number;
+  /** 本局模式 */
+  mode?: MatchMode;
   reason: string;
   /** 多少毫秒后自动开始下一局（换图） */
   restartInMs: number;
   /** 结算弹窗延迟多少毫秒再弹出（留出击败镜头） */
   delayMs: number;
   nextMap: string;
+  /** 下一局模式（结算弹窗用它预告；老服务端不带此字段） */
+  nextMode?: MatchMode;
 }
 
 export interface ErrorMsg {
@@ -421,6 +434,8 @@ export type ClientMsg =
 export interface MatchContext {
   matchId: number;
   map: string;
+  /** 本局模式（默认 ffa） */
+  mode: MatchMode;
   you: number;
   /** 世界权威（房主）座位号 */
   host: number;

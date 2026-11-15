@@ -1,7 +1,9 @@
 import Phaser from 'phaser';
 import type { PickupSystem } from './PickupSystem';
-import type { MapData, MapWeaponSpawn } from '../map/MapFormat';
+import { PICKUP_REST_OFFSET } from './PickupSystem';
+import type { MapWeaponSpawn } from '../map/MapFormat';
 import { listWeaponIds } from '../combat/WeaponFormat';
+import { resolveDropContent, type DropContentDef } from './DropContent';
 
 /** 每个掉落点的运行状态 */
 interface PointState {
@@ -25,7 +27,8 @@ const DROP_HEIGHT = 240;
 /**
  * 武器掉落点系统（地图的"补给站"）。
  *
- * 数据来自 `map.weapons[]`，每个点支持：
+ * 数据来自 `map.weapons[]` **加**预制件实例自带的 `weapons[]`
+ * （统一由 `collectMapWeapons()` 展开，含预制件的旋转/翻转），每个点支持：
  * - **固定武器**：mode='fixed' + weapon（旧字段 type 等价）
  * - **随机武器**：mode='random' + pool（不填 pool = 全部武器）
  * - **刷新**：respawnMs（被捡走后多久再刷，0 = 不刷）+ maxRespawns（最多刷几次，不填 = 无限）
@@ -41,11 +44,11 @@ export class WeaponSpawnerSystem {
   private readonly pickups: PickupSystem;
   private readonly states: PointState[] = [];
 
-  constructor(scene: Phaser.Scene, pickups: PickupSystem, map: MapData) {
+  constructor(scene: Phaser.Scene, pickups: PickupSystem, weapons: MapWeaponSpawn[]) {
     this.scene = scene;
     this.pickups = pickups;
 
-    (map.weapons ?? []).forEach((cfg, index) => {
+    weapons.forEach((cfg, index) => {
       const state: PointState = {
         cfg,
         index,
@@ -94,38 +97,57 @@ export class WeaponSpawnerSystem {
     }
   }
 
-  /** 解析这个点这次该刷什么武器 */
-  private pickWeapon(cfg: MapWeaponSpawn): string | null {
+  /**
+   * 解析这个点这次该刷什么（武器 or 补给道具）。
+   *
+   * 规则与服务端 `pickDropLocked` 保持一致：
+   * - `mode: fixed`：`item` → 道具；否则 `weapon` / `type`（写道具 id 也认）
+   * - `mode: random`：从 `pool` 里抽（武器/道具混排都支持）；池为空 = 全部武器
+   */
+  private pickContent(cfg: MapWeaponSpawn): DropContentDef | null {
     const mode = cfg.mode ?? 'fixed';
     if (mode === 'fixed') {
-      const id = cfg.weapon ?? cfg.type;
-      return id ?? null;
+      return resolveDropContent(cfg.item ?? cfg.weapon ?? cfg.type);
     }
-    // 随机：候选池过滤掉不存在的武器；池为空则用全部
-    const all = listWeaponIds();
-    const pool = (cfg.pool ?? []).filter((id) => all.includes(id));
-    const effective = pool.length > 0 ? pool : all;
-    if (effective.length === 0) return null;
-    return effective[Math.floor(Math.random() * effective.length)];
+    const pool = (cfg.pool ?? []).map((id) => resolveDropContent(id)).filter((x): x is DropContentDef => !!x);
+    if (pool.length === 0) {
+      // 池为空（或全是无效 id）→ 退回"全部武器"，与旧行为一致
+      const all = listWeaponIds();
+      if (all.length === 0) return null;
+      return resolveDropContent(all[Math.floor(Math.random() * all.length)]);
+    }
+    return pool[Math.floor(Math.random() * pool.length)];
   }
 
-  /** 在某个点上刷一件武器（从空中落到该点附近） */
+  /**
+   * 在掉落点刷一件武器。
+   *
+   * 默认**直接落在作者放置的位置**（falling: false）：
+   * 从天上掉会被画面上方的屋顶/门框挡住，最后停在"门上面"而不是刷新点里。
+   * 想要从天而降的观感时，在 `weapons[]` 里给该点加 `"fromSky": true`。
+   */
   private spawnOne(st: PointState): boolean {
-    const weaponId = this.pickWeapon(st.cfg);
-    if (!weaponId) {
-      console.warn(`[WeaponSpawner] 掉落点 #${st.index} 无法确定武器（mode=${st.cfg.mode ?? 'fixed'}）`);
+    const content = this.pickContent(st.cfg);
+    if (!content) {
+      console.warn(`[WeaponSpawner] 投放点 #${st.index} 无法确定内容（mode=${st.cfg.mode ?? 'fixed'}）`);
       return false;
     }
-    const item = this.pickups.spawn(weaponId, st.cfg.x, Math.max(24, st.cfg.y - DROP_HEIGHT), {
-      falling: true,
-      tag: st.tag,
-    });
+    const fromSky = st.cfg.fromSky === true;
+    // 原地生成时要抬到"落地时的视觉高度"（surface - REST_OFFSET），
+    // 否则点正好落在平台表面时物品会陷进实体里（半埋 + 拾取变差）
+    const y = fromSky ? Math.max(24, st.cfg.y - DROP_HEIGHT) : st.cfg.y - PICKUP_REST_OFFSET;
+
+    const item =
+      content.kind === 'weapon'
+        ? this.pickups.spawn(content.id, st.cfg.x, y, { falling: fromSky, tag: st.tag })
+        : this.pickups.spawnItem(content.id, st.cfg.x, y, { falling: fromSky, tag: st.tag });
     if (!item) {
-      console.warn(`[WeaponSpawner] 掉落点 #${st.index} 未知武器 ${weaponId}`);
+      console.warn(`[WeaponSpawner] 投放点 #${st.index} 未知内容 ${content.kind}:${content.id}`);
       return false;
     }
-    st.lastWeapon = weaponId;
-    this.scene.events.emit('weapon-spawned', weaponId, st.cfg.x, st.cfg.y);
+    st.lastWeapon = content.id;
+    if (content.kind === 'weapon') this.scene.events.emit('weapon-spawned', content.id, st.cfg.x, st.cfg.y);
+    else this.scene.events.emit('item-dropped', content.id);
     return true;
   }
 

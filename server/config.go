@@ -24,6 +24,8 @@ type RuntimeConfig struct {
 	// 结算弹窗延迟（秒）：先看"被谁击败"的镜头，再弹结算
 	ResultDelaySeconds int  `json:"resultDelaySeconds"`
 	AllowDevIdentity   bool `json:"allowDevIdentity"`
+	// 对局模式：random（每局随机，默认）| ffa（个人混战）| tdm（红蓝团队战）
+	Mode string `json:"mode"`
 }
 
 const (
@@ -42,6 +44,7 @@ func defaultRuntimeConfig() RuntimeConfig {
 		RoundEndSeconds:    4,
 		ResultDelaySeconds: 4,
 		AllowDevIdentity:   false,
+		Mode:               "random",
 	}
 }
 
@@ -70,7 +73,25 @@ func loadRuntimeConfig(path string) (RuntimeConfig, error) {
 	if cfg.RoundEndSeconds <= 0 {
 		cfg.RoundEndSeconds = 4
 	}
+	cfg.Mode = normalizeMode(cfg.Mode)
 	return cfg, nil
+}
+
+// 支持的对局模式（与客户端 protocol.ts 的 MatchMode 一一对应）。
+const (
+	modeRandom = "random"
+	modeFFA    = "ffa"
+	modeTDM    = "tdm"
+)
+
+// normalizeMode 把配置里的模式归一到合法值；未知值一律回退为随机。
+func normalizeMode(mode string) string {
+	switch mode {
+	case modeFFA, modeTDM, modeRandom:
+		return mode
+	default:
+		return modeRandom
+	}
 }
 
 // resolvePath 把配置里的相对路径按"启动目录"解析，避免依赖进程 cwd 的偶然值。

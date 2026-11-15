@@ -240,8 +240,10 @@ type matchPlayer struct {
 	Avatar string `json:"avatar"`
 	NetID  int    `json:"netId"`
 	Color  int    `json:"color"`
-	Spawn  int    `json:"spawn"`
-	Kills  int    `json:"kills"`
+	/// 队伍编号（团队战 0/1，混战 -1）
+	Team  int `json:"team"`
+	Spawn int `json:"spawn"`
+	Kills int `json:"kills"`
 }
 
 type dropItem struct {
@@ -265,9 +267,11 @@ type playerStatWire struct {
 }
 
 type matchStartMsg struct {
-	T       string           `json:"t"`
-	MatchID int64            `json:"matchId"`
-	Map     string           `json:"map"`
+	T       string `json:"t"`
+	MatchID int64  `json:"matchId"`
+	Map     string `json:"map"`
+	// Mode = 本局模式：ffa（个人混战）| tdm（红蓝团队战）
+	Mode    string           `json:"mode"`
 	Players []matchPlayer    `json:"players"`
 	Stats   []playerStatWire `json:"stats"`
 	You     int              `json:"you"`
@@ -393,17 +397,24 @@ type matchResult struct {
 	Nick  string `json:"nick"`
 	NetID int    `json:"netId"`
 	Kills int    `json:"kills"`
+	/// 队伍编号（混战 -1）
+	Team int `json:"team"`
 }
 
 type matchEndMsg struct {
-	T           string        `json:"t"`
-	Results     []matchResult `json:"results"`
-	Winner      string        `json:"winner"`
-	Reason      string        `json:"reason"`
-	RestartInMs int           `json:"restartInMs"`
+	T       string        `json:"t"`
+	Results []matchResult `json:"results"`
+	Winner  string        `json:"winner"`
+	/// 团队战获胜方（0/1；-1 = 平局或混战）
+	WinnerTeam  int    `json:"winnerTeam"`
+	Mode        string `json:"mode"`
+	Reason      string `json:"reason"`
+	RestartInMs int    `json:"restartInMs"`
 	// DelayMs 结算弹窗延迟（留出"击败镜头"的时间）
 	DelayMs int    `json:"delayMs"`
 	NextMap string `json:"nextMap"`
+	// NextMode 下一局模式（结算弹窗用来预告）
+	NextMode string `json:"nextMode"`
 }
 
 type errorMsg struct {

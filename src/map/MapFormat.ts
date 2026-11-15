@@ -17,6 +17,35 @@ export const MAP_FORMAT_VERSION = 1;
 /** 图层：solid = 参与物理；decor = 纯视觉（背景装饰，无碰撞） */
 export type ObjectLayer = 'solid' | 'decor';
 
+/** 文字标签在物体上的位置（相对包围盒的九宫格） */
+export type ObjectLabelAnchor =
+  | 'center'
+  | 'top'
+  | 'bottom'
+  | 'left'
+  | 'right'
+  | 'topLeft'
+  | 'topRight'
+  | 'bottomLeft'
+  | 'bottomRight';
+
+/**
+ * 物体上的文字（招牌、告示、按键提示、路标……）。
+ *
+ * 文字是**纯视觉**：不参与物理、不影响碰撞，随物体移动/旋转；
+ * 描边由渲染层自动加（保证压在任意贴图上都读得清）。
+ */
+export interface MapObjectLabel {
+  /** 文案（支持换行 \n） */
+  text: string;
+  /** 字号（px，世界单位）。不填 = 20 */
+  size?: number;
+  /** 颜色（hex 字符串）。不填 = #ffffff */
+  color?: string;
+  /** 位置：包围盒内的九宫格锚点，默认 center */
+  anchor?: ObjectLabelAnchor;
+}
+
 /** 所有地图物体共有的属性 */
 export interface MapObjectBase {
   /** 唯一 id（关节引用、AI 定位、编辑器选中都靠它）。不填时由加载器按索引生成 */
@@ -35,11 +64,14 @@ export interface MapObjectBase {
   color?: string;
   /**
    * 视觉贴图覆盖（public 下相对路径，如 "textures/wood.png"；也可 data: 内联）。
-   * 不填则用材质的贴图。仅对 rect 生效（圆/多边形仍用颜色）。
+   * 不填则用材质的贴图。**所有形状都支持**：
+   * 圆/多边形会用几何蒙版把贴图裁成对应形状（见 `ShapeTexture.ts`）。
    */
   texture?: string;
   /** 贴图铺法：tile 平铺 / stretch 拉伸（不填 = 跟材质一致，默认 tile） */
   textureMode?: 'tile' | 'stretch';
+  /** 物体上的文字（不填 = 没有文字） */
+  label?: MapObjectLabel;
 }
 
 /** 矩形：x,y = 左上角 */
@@ -90,16 +122,26 @@ export interface PrefabInstance {
   fixed?: boolean;
 }
 
-/** 关节（跷跷板等）。目前支持 revolute（铰链/销轴） */
+/** 关节（跷跷板、吹链、三节棍等）。目前支持 revolute（铰链/销轴，自由旋转） */
 export interface MapJoint {
   id?: string;
   type: 'revolute';
-  /** 主体 id（必须是本地图中存在的物体 id） */
+  /** 主体 id（本地图中存在的物体 id／预制件实例 id／松件部件 id `${instId}#i`） */
   bodyA: string;
   /** 另一主体 id；省略或 "world" 表示固定在世界的 anchor 点 */
   bodyB?: string;
   /** 铰链锚点（世界坐标） */
   anchor: { x: number; y: number };
+  /**
+   * 两端"互不碰撞"（默认 false）。
+   *
+   * 用 `noCollide: true` 的关节串在一起的刚体（吊链每一节、三节棍、平台）会被分到
+   * **同一个负碰撞组**：它们彼此不产生碰撞，但仍与玩家/地形/其它组正常碰撞。
+   *
+   * 不加这个开关的后果：链节旋转时端面互相顶，求解器会把关节缝拉开。
+   * 实测 30×30 粗段完全贴合时，缝隙在 30px ↔ 43px 之间抖动（看上去像“伸缩”）。
+   */
+  noCollide?: boolean;
 }
 
 export interface SpawnPoint {
@@ -156,16 +198,30 @@ export interface MapWeaponSpawn {
   y: number;
   /** 掉落模式，默认 fixed */
   mode?: 'fixed' | 'random';
-  /** 固定武器 id（mode=fixed） */
+  /** 固定武器 id（mode=fixed）。写道具 id（如 "medkit"）也可以，等价于 item 字段 */
   weapon?: string;
   /** 旧字段：等价于 weapon（mode 视为 fixed） */
   type?: string;
-  /** 随机模式的候选武器池（不填 = 全部武器） */
+  /**
+   * 固定道具 id（mode=fixed）：医疗包 `medkit` / 防弹衣 `armor`。
+   * 填了它就按"补给点"处理（不受武器池影响）。
+   */
+  item?: string;
+  /**
+   * 随机模式的候选池：**武器 id 与道具 id 可以混着写**（不填 = 全部武器）。
+   * 例：`["ak47", "medkit"]` → 每次随机刷一把 AK 或一个医疗包。
+   */
   pool?: string[];
   /** 拾取后重新刷新的间隔（ms）；0/不填 = 不刷新 */
   respawnMs?: number;
   /** 最多刷新次数；不填 = 无限 */
   maxRespawns?: number;
+  /**
+   * 是否"从天而降"。
+   * 默认 false：直接出现在 `x,y`（作者放置的位置）——
+   * 因为从天上掉会被屋顶/门框挡住，落到"门上面"而不是刷新点。
+   */
+  fromSky?: boolean;
 }
 
 export interface MapData {

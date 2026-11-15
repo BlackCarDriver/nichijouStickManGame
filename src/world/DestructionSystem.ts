@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { MATERIALS } from '../config/materials';
 import type { MapObjectRuntime } from '../map/MapLoader';
+import { disposeRuntimeVisual } from '../map/MapLoader';
 import type { WorldRegistry } from './WorldRegistry';
 import type { FxSystem } from '../fx/FxSystem';
 import type { DamageInfo } from '../combat/DamageInfo';
@@ -119,18 +120,38 @@ export class DestructionSystem {
 
     // 物理 & 索引
     for (const extra of runtime.extraBodies ?? []) {
+      this.detachJoints(extra);
       this.scene.matter.world.remove(extra);
     }
+    this.detachJoints(runtime.body);
     this.scene.matter.world.remove(runtime.body);
     this.registry.unregister(runtime);
 
     // 视觉
-    runtime.visual.destroy();
+    disposeRuntimeVisual(runtime);
 
     // 反馈
     this.fx.burst(center, color);
 
     // 广播（音效/计分/掉落 W5 挂这里）
     this.scene.events.emit('object-destroyed', runtime, center);
+  }
+
+  /**
+   * 摘掉所有引用该刚体的关节约束。
+   *
+   * 不做这件事的后果（实测）：约束会继续引用一个“已从世界移除但对象还在”的刚体，
+   * 它停在消失前的最后一帧 → 另一端被“看不见的锚点”钉在原地。
+   * 典型场景：两根吊链吊着的平台，打断其中一根链后平台纹丝不动（本该荡起来）；
+   * 三节棍打断中间一节后，剩下的段吊在半空中抽搐。
+   */
+  private detachJoints(body: MatterJS.BodyType): void {
+    const world = this.scene.matter.world;
+    // Phaser 的类型声明里 World 没有 constraints，但运行时就是 Matter 的复合体（已验证）
+    const composite = world.localWorld as unknown as { constraints: MatterJS.ConstraintType[] };
+    const dangling = composite.constraints.filter(
+      (c) => c.bodyA === body || c.bodyB === body,
+    );
+    for (const c of dangling) world.removeConstraint(c);
   }
 }

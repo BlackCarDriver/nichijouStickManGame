@@ -1,0 +1,155 @@
+{
+  "version": 1,
+  "id": "hanging_platform",
+  "name": "吊链平台",
+  "anchor": "center",
+  "bodyMode": "loose",
+  "parts": [
+    {
+      "type": "rect",
+      "x": -260.0,
+      "y": -88.0,
+      "w": 520,
+      "h": 24,
+      "material": "metal"
+    },
+    {
+      "type": "rect",
+      "x": -167.0,
+      "y": -64.0,
+      "w": 14,
+      "h": 44,
+      "material": "chain"
+    },
+    {
+      "type": "rect",
+      "x": -167.0,
+      "y": -20.0,
+      "w": 14,
+      "h": 44,
+      "material": "chain"
+    },
+    {
+      "type": "rect",
+      "x": -167.0,
+      "y": 24.0,
+      "w": 14,
+      "h": 44,
+      "material": "chain"
+    },
+    {
+      "type": "rect",
+      "x": 153.0,
+      "y": -64.0,
+      "w": 14,
+      "h": 44,
+      "material": "chain"
+    },
+    {
+      "type": "rect",
+      "x": 153.0,
+      "y": -20.0,
+      "w": 14,
+      "h": 44,
+      "material": "chain"
+    },
+    {
+      "type": "rect",
+      "x": 153.0,
+      "y": 24.0,
+      "w": 14,
+      "h": 44,
+      "material": "chain"
+    },
+    {
+      "type": "rect",
+      "x": -120.0,
+      "y": 68.0,
+      "w": 240,
+      "h": 20,
+      "material": "plank_2"
+    }
+  ],
+  "joints": [
+    {
+      "type": "revolute",
+      "bodyA": 1,
+      "bodyB": 0,
+      "anchor": {
+        "x": -160.0,
+        "y": -64.0
+      },
+      "noCollide": true
+    },
+    {
+      "type": "revolute",
+      "bodyA": 1,
+      "bodyB": 2,
+      "anchor": {
+        "x": -160.0,
+        "y": -20.0
+      },
+      "noCollide": true
+    },
+    {
+      "type": "revolute",
+      "bodyA": 2,
+      "bodyB": 3,
+      "anchor": {
+        "x": -160.0,
+        "y": 24.0
+      },
+      "noCollide": true
+    },
+    {
+      "type": "revolute",
+      "bodyA": 3,
+      "bodyB": 7,
+      "anchor": {
+        "x": -160.0,
+        "y": 68.0
+      },
+      "noCollide": true
+    },
+    {
+      "type": "revolute",
+      "bodyA": 4,
+      "bodyB": 0,
+      "anchor": {
+        "x": 160.0,
+        "y": -64.0
+      },
+      "noCollide": true
+    },
+    {
+      "type": "revolute",
+      "bodyA": 4,
+      "bodyB": 5,
+      "anchor": {
+        "x": 160.0,
+        "y": -20.0
+      },
+      "noCollide": true
+    },
+    {
+      "type": "revolute",
+      "bodyA": 5,
+      "bodyB": 6,
+      "anchor": {
+        "x": 160.0,
+        "y": 24.0
+      },
+      "noCollide": true
+    },
+    {
+      "type": "revolute",
+      "bodyA": 6,
+      "bodyB": 7,
+      "anchor": {
+        "x": 160.0,
+        "y": 68.0
+      },
+      "noCollide": true
+    }
+  ]
+}
