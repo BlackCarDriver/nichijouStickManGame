@@ -524,23 +524,48 @@ async function main() {
       })()`).catch(() => null);
   check(
     '客户端开火 → 房主端箱子耐久下降（中继链路端到端）',
-    boxRelay.ok !== false && boxRelay.isHost !== true && boxAfter !== null && boxAfter.dur < (boxRelay.before ?? 100),
-    JSON.stringify({ boxRelay, boxAfter }),
+    // 打中 60 点对 20 耐久的纸箱是直接打爆（对象被移除 → boxAfter 为 null），
+    // 这同样是“耐久被结算了”的成功路径；以前把 null 当失败，会随机误报。
+    boxRelay.ok !== false &&
+      boxRelay.isHost !== true &&
+      (boxAfter === null || boxAfter.dur < (boxRelay.before ?? 100)),
+    JSON.stringify({ boxRelay, boxAfter, 说明: boxAfter === null ? '物体被打爆（成功路径）' : '耐久下降' }),
   );
 
-  // ---- 6. 角色自愈：模拟"房主漏收了 host 通知" ----  // ---- 6. 角色自愈：模拟"房主漏收了 host 通知" ----
+  // ---- 6. 角色自愈：模拟"房主漏收了 host 通知" ----
   // 服务端在 30Hz 的 in 广播里持续下发权威座位号，所以即使漏事件也会在 1 帧内恢复。
-  const healed = await a.eval(`(async () => {
-    const s = window.__game.scene.getScene('GameScene');
-    const before = { role: s.online.stats.role, host: s.online.stats.hostSeat };
-    // 人为把状态改坏（等价于漏收 host 事件）
-    s.online.role = 'client';
-    s.online.hostSeat = -1;
-    s.online.applyRole();
-    const broken = { role: s.online.stats.role, host: s.online.stats.hostSeat };
-    await new Promise((r) => setTimeout(r, 600));
-    return { before, broken, after: { role: s.online.stats.role, host: s.online.stats.hostSeat } };
-  })()`);
+  //
+  // 坑：一局结束后的结算期，服务端会停止 in/pos 广播（`m.Over` 分支直接 return），
+  // 此时窗口内一条报文都收不到，本来就不可能自愈。所以用"窗口内 in 报文条数"区分：
+  //   - in === 0 → 赶上结算期，重试（等下一局开始）
+  //   - in > 0 但没恢复 → 才是真的自愈失效
+  let healed = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    healed = await a.eval(`(async () => {
+      const s = window.__game.scene.getScene('GameScene');
+      const before = { role: s.online.stats.role, host: s.online.stats.hostSeat };
+      // 插桩：统计窗口内收到的下行报文类型（区分"没收到报文"与"收到但没生效"）
+      const counts = { in: 0, pos: 0, snap: 0 };
+      const origHandle = s.online.handleMessage.bind(s.online);
+      s.online.handleMessage = (msg) => {
+        if (msg && msg.t in counts) counts[msg.t]++;
+        return origHandle(msg);
+      };
+      // 人为把状态改坏（等价于漏收 host 事件）
+      s.online.role = 'client';
+      s.online.hostSeat = -1;
+      s.online.applyRole();
+      const broken = { role: s.online.stats.role, host: s.online.stats.hostSeat };
+      await new Promise((r) => setTimeout(r, 600));
+      s.online.handleMessage = origHandle;
+      counts.inWindow = true;
+      return { before, broken, counts, after: { role: s.online.stats.role, host: s.online.stats.hostSeat } };
+    })()`);
+    if (healed.after.role === 'authority' && healed.after.host >= 0) break;
+    if (healed.counts.in > 0) break; // 有报文却没自愈 → 留给断言报错
+    console.log(`  ℹ️ 自愈窗口内没有 in 报文（第${attempt + 1}次），按“赶上结算期”处理，等下一局…`);
+    await sleep(3000);
+  }
   check(
     '角色失配会自愈（10~30Hz 状态里带房主座位号）',
     healed.after.role === 'authority' && healed.after.host >= 0,

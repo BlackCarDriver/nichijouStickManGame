@@ -344,17 +344,28 @@ async function main() {
   check('对局中全屏按钮可点击', fsState.visible && fsState.btn === 'auto' && fsState.bar === 'auto', JSON.stringify(fsState));
 
   // ---- 输入中继（无头多开偶尔会被系统调度打断，失败重试） ----
+  // 判定“中继是否生效”要比**位移增量**，不能比绝对距离：地图是随机的，
+  // 出生点某一侧可能紧贴墙体，固定 +40px 阈值会把“被墙挡住”误判成“中继失效”。
+  // 每轮换一个方向（一侧有墙就试另一侧）。
   let relayOk = false;
   let relayDetail = '';
+  const readLocalX = `window.__game.scene.getScene('GameScene').online.localPlayer.container.x`;
+  const readPeerX = `(() => {
+    const s = window.__game.scene.getScene('GameScene');
+    const other = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
+    return s.online.playerOf(other).container.x;
+  })()`;
   for (let attempt = 0; attempt < 3 && !relayOk; attempt++) {
-    const startX = await a.cdp.eval(`window.__game.scene.getScene('GameScene').online.localPlayer.container.x`);
+    const dir = attempt % 2 === 0 ? 1 : -1;
+    const startX = await a.cdp.eval(readLocalX);
+    const startSeen = await b.cdp.eval(readPeerX);
     await a.cdp.eval(`(() => {
       const s = window.__game.scene.getScene('GameScene');
       const orig = s.inputManager.readP1.bind(s.inputManager);
       window.__origRead = orig;
       s.inputManager.readP1 = () => {
         const c = orig();
-        c.moveX = 1;
+        c.moveX = ${dir};
         return c;
       };
       return true;
@@ -369,13 +380,12 @@ async function main() {
         dead: s.online.localPlayer.health.isDead,
       };
     })()`);
-    const seen = await b.cdp.eval(`(() => {
-      const s = window.__game.scene.getScene('GameScene');
-      const other = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
-      return s.online.playerOf(other).container.x;
-    })()`);
-    relayOk = seen > startX + 40;
-    relayDetail = `第${attempt + 1}次：起点=${Math.round(startX)} 本地=${Math.round(now.x)} cmd=${now.cmd} fps=${now.fps} dead=${now.dead} B看到=${Math.round(seen)}`;
+    const seen = await b.cdp.eval(readPeerX);
+    const aDelta = now.x - startX;
+    const bDelta = seen - startSeen;
+    // 自己确实动了（>8px），且对端看到的位移与自己一致（插值误差内）
+    relayOk = Math.abs(aDelta) > 8 && Math.abs(bDelta - aDelta) <= 45;
+    relayDetail = `第${attempt + 1}次(dir=${dir})：本地位移=${Math.round(aDelta)} 对端位移=${Math.round(bDelta)} cmd=${now.cmd} fps=${now.fps} dead=${now.dead}`;
     await a.cdp.eval(`(() => {
       const s = window.__game.scene.getScene('GameScene');
       if (window.__origRead) s.inputManager.readP1 = window.__origRead;
@@ -547,6 +557,9 @@ async function main() {
     const st = s.online.stats;
     return { previews: st.hitPreviews, interpDelay: st.interpDelay };
   })()`);
+  // 服务端对同一目标有 120ms 无敌窗口（防连点刷伤害）：目标可能刚被别的东西打过，
+  // 先等窗口过期，避免注入的合成命中被丢弃。
+  await sleep(200);
   const hitFeedback = await b.cdp.eval(`(async () => {
     const s = window.__game.scene.getScene('GameScene');
     const me = s.online.localPlayer;
@@ -574,16 +587,19 @@ async function main() {
     JSON.stringify(hitFeedback),
   );
   await sleep(900);
-  const reconciled = await a.cdp.eval(`(() => {
+  // 必须读**注入时打中的那个目标**，而且要用**注入端自己的视角**：
+  // 以前这里在 a 端读“自己的对手”，与 hpBefore（b 端视角下的对手）根本不是同一名玩家，
+  // 只是碰巧血量高低不同才“看起来通过”。
+  const reconciled = await b.cdp.eval(`(() => {
     const s = window.__game.scene.getScene('GameScene');
     const other = s.players.map((p) => s.online.netIdOf(p)).find((id) => id >= 0 && id !== s.online.localNetId);
     const p = s.online.playerOf(other);
-    return { hp: p.health.hp, shield: p.health.shield };
+    return { hp: p.health.hp, shield: p.health.shield, dead: p.health.isDead };
   })()`);
   check(
     '随后 hp 把数值补齐（只补数值，不重复播数字）',
     reconciled.hp + reconciled.shield < hitFeedback.hpBefore,
-    JSON.stringify(reconciled),
+    `注入后=${JSON.stringify(reconciled)} 注入前=${hitFeedback.hpBefore}`,
   );
 
   const preview2 = await b.cdp.eval(`window.__game.scene.getScene('GameScene').online.stats.hitPreviews`);
