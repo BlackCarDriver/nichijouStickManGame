@@ -26,6 +26,8 @@ type RuntimeConfig struct {
 	AllowDevIdentity   bool `json:"allowDevIdentity"`
 	// 对局模式：random（每局随机，默认）| ffa（个人混战）| tdm（红蓝团队战）
 	Mode string `json:"mode"`
+	// 命数（可复活次数）覆盖：>=0 时忽略地图的 lives（调试/回归用）；-1 = 跟随地图
+	Lives int `json:"lives"`
 }
 
 const (
@@ -45,6 +47,7 @@ func defaultRuntimeConfig() RuntimeConfig {
 		ResultDelaySeconds: 4,
 		AllowDevIdentity:   false,
 		Mode:               "random",
+		Lives:              -1,
 	}
 }
 

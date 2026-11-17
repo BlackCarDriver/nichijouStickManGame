@@ -169,6 +169,21 @@ export function validateMap(map: unknown, ctx: ValidateContext): Issue[] {
   if (!isFiniteNumber(m.width) || m.width <= 0) issues.push(err('width', '地图宽度必须 > 0'));
   if (!isFiniteNumber(m.height) || m.height <= 0) issues.push(err('height', '地图高度必须 > 0'));
 
+  // ---- 对局模式（可选；不填 = random） ----
+  const MAP_MODES = ['random', 'ffa', 'tdm'];
+  if (m.mode !== undefined && !MAP_MODES.includes(String(m.mode))) {
+    issues.push(err('mode', `mode 只能是 ${MAP_MODES.join(' / ')}（当前 ${JSON.stringify(m.mode)}）`));
+  }
+
+  // ---- 命数（可选；不填 = 1） ----
+  if (m.lives !== undefined) {
+    if (!isFiniteNumber(m.lives) || m.lives < 0 || !Number.isInteger(m.lives)) {
+      issues.push(err('lives', '命数必须是 >= 0 的整数（0 = 一命到底）'));
+    } else if (m.lives > 20) {
+      issues.push(warn('lives', '命数超过 20 会让一局非常长，确认是有意为之？'));
+    }
+  }
+
   // ---- 出生点 ----
   const spawns = m.spawnPoints;
   if (!Array.isArray(spawns) || spawns.length === 0) {

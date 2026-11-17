@@ -29,8 +29,12 @@ const (
 	// 接收端的插值缓冲就会周期性"饿死"（外推 → 新样本一到又缩回，表现为动作不连贯）。
 	// 16ms 把量化误差压到 ≤16ms，间隔稳定在 50±16ms，60ms 的插值延迟就够用了。
 	posFlushTick = 16 * time.Millisecond
-	// 重生等待（与 Player.PLAYER_CONFIG.respawnDelayMs 一致）
-	respawnDelay = 2800 * time.Millisecond
+	// 复活等待（地图命数 > 0 时生效；与客户端死亡提示的倒计时同一数值）
+	respawnDelay = 3 * time.Second
+	// 默认命数（可复活次数）：地图未配 lives 时用这个
+	defaultLives = 1
+	// 命数上限（防止误配成天文数字把一局拖死）
+	maxLives = 20
 	// 单次伤害上限与每秒伤害预算（宽松的防刷保护，不做严格反作弊）
 	maxDamagePerHit = 400.0
 	maxDamagePerSec = 900.0
@@ -120,13 +124,15 @@ type playerState struct {
 	Avatar string
 	Color  int
 	// Team = 队伍编号（团队战 0/1；混战 -1）
-	Team      int
-	Spawn     int
-	HP        int
-	Shield    int
-	Dead      bool
-	Kills     int
-	Deaths    int
+	Team   int
+	Spawn  int
+	HP     int
+	Shield int
+	Dead   bool
+	Kills  int
+	Deaths int
+	// Revives = 剩余复活次数（开局等于本局命数，每复活一次减 1）
+	Revives   int
 	RespawnAt time.Time
 
 	lastDamagedAt time.Time
@@ -134,6 +140,30 @@ type playerState struct {
 	lastWeaponID  string
 	budget        float64
 	budgetAt      time.Time
+}
+
+// livesLeft 剩余生命数（含当前这条；无命可续的永久死亡 = 0）。
+// 注意：死亡且在等复活时，“当前这条”已经用掉了，剩下的是即将复活的那条。
+func (p *playerState) livesLeft() int {
+	if !p.Dead {
+		return p.Revives + 1
+	}
+	if p.RespawnAt.IsZero() {
+		return 0
+	}
+	return p.Revives
+}
+
+// respawnInMs 距复活还有多少毫秒（0 = 不在等待复活）。
+func (p *playerState) respawnInMs(now time.Time) int {
+	if p.RespawnAt.IsZero() {
+		return 0
+	}
+	ms := p.RespawnAt.Sub(now).Milliseconds()
+	if ms < 0 {
+		return 0
+	}
+	return int(ms)
 }
 
 type dropState struct {
@@ -160,6 +190,11 @@ type match struct {
 
 	// 本局模式：ffa（个人混战）/ tdm（红蓝团队战）
 	Mode string
+	// 本局命数（可复活次数，来自地图 / 服务端覆盖）
+	Lives int
+	// 本局出现过的最大上座人数（用于判断“混战只剩一人”是否该结束：
+	// 单人房里自己死一次不应该立刻结算，否则有命数也来不及复活）
+	Participants int
 	// 本局死亡次数（至少一次死亡才会触发回合结束判定）
 	Deaths int
 	// 结束后到下一局开始的时间点
@@ -302,12 +337,41 @@ func (h *Hub) pickMapLocked() string {
 	return pool[rand.Intn(len(pool))]
 }
 
-// pickModeLocked 决定本局模式。
-// 配置 mode=ffa/tdm 固定模式；mode=random（默认）时每局随机二选一。
-// 团队战至少要有 2 名玩家才能分成两队，人不够时本局回退为混战。
-func (h *Hub) pickModeLocked(participants int) string {
-	mode := h.cfg.Mode
-	if mode != modeFFA && mode != modeTDM {
+// forcedModeLocked 配置里显式固定的模式（random = 不强制，交给地图/随机）。
+// --mode 命令行也会写进同一个字段，所以回归脚本靠它压住地图设置。
+func (h *Hub) forcedModeLocked() string {
+	if h.cfg.Mode == modeFFA || h.cfg.Mode == modeTDM {
+		return h.cfg.Mode
+	}
+	return ""
+}
+
+// mapFixedMode 地图里显式固定的模式（random/未设置 = 不固定）。
+func mapFixedMode(mf *mapFile) string {
+	if mf == nil {
+		return ""
+	}
+	if mf.Mode == modeFFA || mf.Mode == modeTDM {
+		return mf.Mode
+	}
+	return ""
+}
+
+// baseModeLocked 不考虑人数时的模式基础值（"" = 需要随机抽）。
+//
+// 优先级：服务端 config/--mode 显式固定 > 地图属性 mode > 随机。
+func (h *Hub) baseModeLocked(mf *mapFile) string {
+	if forced := h.forcedModeLocked(); forced != "" {
+		return forced
+	}
+	return mapFixedMode(mf)
+}
+
+// previewModeLocked 结算预告用：随机的话就现在抽一次定下来，免得预告与开局不一致。
+// 团队战至少要有 2 名玩家才能分成两队，人不够时回落为混战。
+func (h *Hub) previewModeLocked(mf *mapFile, participants int) string {
+	mode := h.baseModeLocked(mf)
+	if mode == "" {
 		if rand.Intn(2) == 0 {
 			mode = modeFFA
 		} else {
@@ -315,7 +379,26 @@ func (h *Hub) pickModeLocked(participants int) string {
 		}
 	}
 	if mode == modeTDM && participants < 2 {
-		return modeFFA
+		mode = modeFFA
+	}
+	return mode
+}
+
+// resolveModeLocked 开局用的模式：地图/配置没固定时，沿用上一局的预告（随机结果），
+// 保证“结算弹窗说的模式 = 实际打的模式”。
+func (h *Hub) resolveModeLocked(prevNextMode string, mf *mapFile, participants int) string {
+	mode := h.baseModeLocked(mf)
+	if mode == "" {
+		if prevNextMode == modeFFA || prevNextMode == modeTDM {
+			mode = prevNextMode
+		} else if rand.Intn(2) == 0 {
+			mode = modeFFA
+		} else {
+			mode = modeTDM
+		}
+	}
+	if mode == modeTDM && participants < 2 {
+		mode = modeFFA
 	}
 	return mode
 }
@@ -347,6 +430,24 @@ func waitingText(m *match) string {
 		return "上一局刚结束，下一局即将开始…"
 	}
 	return "上一局刚结束，下一局：" + strings.Join(parts, " · ") + "（即将开始…）"
+}
+
+// roundLives 本局命数（可复活次数）：地图 lives 优先，其次默认值；服务端 lives>=0 时强制覆盖。
+func (h *Hub) roundLives(mf *mapFile) int {
+	lives := defaultLives
+	if mf != nil && mf.Lives != nil {
+		lives = *mf.Lives
+	}
+	if h.cfg.Lives >= 0 {
+		lives = h.cfg.Lives
+	}
+	if lives < 0 {
+		lives = 0
+	}
+	if lives > maxLives {
+		lives = maxLives
+	}
+	return lives
 }
 
 // seatedCountLocked 统计当前对局上了座位的玩家人数（用于预告下一局模式）。
@@ -446,11 +547,14 @@ func (h *Hub) addSeatLocked(m *match, c *client) int {
 	p := &playerState{
 		Seat: seat, Nick: c.nick, Avatar: c.avatar, Color: color, Team: team,
 		Spawn: spawn,
-		HP:    maxHP, budget: 1000, budgetAt: time.Now(),
+		HP:    maxHP, Revives: m.Lives, budget: 1000, budgetAt: time.Now(),
 	}
 	m.Players[seat] = p
 	c.seat = seat
 	c.joined = true
+	if len(m.Seats) > m.Participants {
+		m.Participants = len(m.Seats)
+	}
 	// 新玩家如果是当前最小座位（比如房主刚离开），立刻把权威交给他
 	h.syncHostLocked()
 
@@ -459,7 +563,7 @@ func (h *Hub) addSeatLocked(m *match, c *client) int {
 		Player: matchPlayer{
 			Nick: p.Nick, Avatar: p.Avatar, NetID: seat, Color: p.Color, Team: p.Team, Spawn: p.Spawn, Kills: p.Kills,
 		},
-		Stat: playerStatWire{ID: seat, HP: p.HP, Shield: p.Shield, Dead: p.Dead, Kills: p.Kills},
+		Stat: playerStatWire{ID: seat, HP: p.HP, Shield: p.Shield, Dead: p.Dead, Kills: p.Kills, Lives: p.livesLeft(), Revives: p.Revives},
 	}
 	for _, other := range h.clients {
 		if other != c {
@@ -476,10 +580,14 @@ func (h *Hub) addSeatLocked(m *match, c *client) int {
 
 // startRoundLocked 开一局新对局（按入场顺序分配座位，多余的人旁观）。
 func (h *Hub) startRoundLocked() {
-	mapName := ""
-	if h.m != nil && h.m.NextMap != "" {
-		mapName = h.m.NextMap
+	// 上一局结束时就预告过的「下一局地图/模式」，新局沿用（否则预告与实际不一致）
+	nextMap := ""
+	nextMode := ""
+	if h.m != nil {
+		nextMap = h.m.NextMap
+		nextMode = h.m.NextMode
 	}
+	mapName := nextMap
 	if _, ok := h.data.maps[mapName]; !ok {
 		mapName = h.pickMapLocked()
 	}
@@ -518,13 +626,11 @@ func (h *Hub) startRoundLocked() {
 		}
 		participants++
 	}
-	// 模式：上一局结束时预告过的就用它（人数不够时回落混战），否则本局现算
-	if m.NextMode != "" && (m.NextMode != modeTDM || participants >= 2) {
-		m.Mode = m.NextMode
-	} else {
-		m.Mode = h.pickModeLocked(participants)
-	}
+	// 模式：服务端显式固定 > 地图属性 mode > 随机（随机结果沿用上一局的预告）
+	m.Mode = h.resolveModeLocked(nextMode, mf, participants)
 	m.NextMode = ""
+	// 命数（可复活次数）：地图 lives 优先，可用 config/--lives 强制覆盖
+	m.Lives = h.roundLives(mf)
 
 	for _, nick := range h.order {
 		if len(m.Seats) >= h.cfg.MaxPlayers {
@@ -548,7 +654,7 @@ func (h *Hub) startRoundLocked() {
 		m.Players[seat] = &playerState{
 			Seat: seat, Nick: nick, Avatar: c.avatar, Color: color, Team: team,
 			Spawn: spawn,
-			HP:    maxHP, budget: 1000, budgetAt: time.Now(),
+			HP:    maxHP, Revives: m.Lives, budget: 1000, budgetAt: time.Now(),
 		}
 		c.seat = seat
 	}
@@ -557,6 +663,8 @@ func (h *Hub) startRoundLocked() {
 			c.seat = -1 // 旁观
 		}
 	}
+	// 开局态的参战人数：混战"只剩一人"的判定要用（中途加入会继续往上加）
+	m.Participants = len(m.Seats)
 	m.Host = h.pickHostLocked(m)
 
 	h.initDropsLocked(m)
@@ -601,6 +709,7 @@ func (h *Hub) matchStartLocked(c *client) *matchStartMsg {
 		}
 		stats = append(stats, playerStatWire{
 			ID: seat, HP: p.HP, Shield: p.Shield, Dead: p.Dead, Kills: p.Kills,
+			Lives: p.livesLeft(), Revives: p.Revives, RespawnInMs: p.respawnInMs(time.Now()),
 		})
 	}
 	sort.Slice(stats, func(i, j int) bool { return stats[i].ID < stats[j].ID })
@@ -646,53 +755,138 @@ func (h *Hub) dropMatchPlayerExLocked(m *match, seat int, countDeath bool) {
 	h.checkRoundEndLocked()
 }
 
+// inRoundLocked 该玩家是否仍在局中：活着、或阵亡但还有命（等复活）；已离场/掉线不算。
+func (h *Hub) inRoundLocked(m *match, seat int, p *playerState) bool {
+	if p == nil || seat < 0 || seat >= len(m.Seats) {
+		return false
+	}
+	nick := m.Seats[seat]
+	if nick == "" || h.clients[nick] == nil {
+		return false
+	}
+	return !p.Dead || !p.RespawnAt.IsZero()
+}
+
+// tickRespawnsLocked 处理到点的复活：命数还有的人 3 秒后满血回到出生点（空手）。
+func (h *Hub) tickRespawnsLocked(m *match, now time.Time) {
+	for seat, p := range m.Players {
+		if p == nil || !p.Dead || p.RespawnAt.IsZero() {
+			continue
+		}
+		if now.Before(p.RespawnAt) {
+			continue
+		}
+		// 掉线/离场：取消复活，等回归时按新玩家处理
+		if seat < 0 || seat >= len(m.Seats) || m.Seats[seat] == "" || h.clients[m.Seats[seat]] == nil {
+			p.RespawnAt = time.Time{}
+			continue
+		}
+		h.respawnPlayerLocked(m, p)
+	}
+}
+
+// respawnPlayerLocked 让一个人复活：满血、护盾清空、回本队出生点，并广播 respawn。
+//
+// 位置由服务端指定：客户端收到后各自把自己/远端玩家瞬移过去（本地位置权威仍是客户端自己）。
+func (h *Hub) respawnPlayerLocked(m *match, p *playerState) {
+	if p.Revives > 0 {
+		p.Revives--
+	}
+	p.Dead = false
+	p.HP = maxHP
+	p.Shield = 0
+	p.RespawnAt = time.Time{}
+	p.budget = 1000
+	p.budgetAt = time.Now()
+	spawnIdx := respawnSpawnIndex(m, p)
+	p.Spawn = spawnIdx
+	pt := m.Map.SpawnPoints[spawnIdx]
+	h.broadcastLocked(&respawnMsg{
+		T: "respawn", ID: p.Seat, X: pt.X, Y: pt.Y, HP: p.HP, Shield: p.Shield,
+		Lives: p.livesLeft(), Revives: p.Revives,
+	})
+	// 补一次 hp：没收到 respawn 的端也能靠它自愈
+	h.broadcastHPFullLocked(p, 0, "respawn", false, nil, nil, -1, 0)
+}
+
+// respawnSpawnIndex 选复活出生点：团队战回本队半区（按死亡次数轮换，避免总在同一个点）；
+// 混战则按先后顺序轮换所有出生点。
+func respawnSpawnIndex(m *match, p *playerState) int {
+	if len(m.Map.SpawnPoints) == 0 {
+		return 0
+	}
+	if p.Team < 0 {
+		return (p.Spawn + 1) % len(m.Map.SpawnPoints)
+	}
+	left, right := spawnIndicesByTeam(m.Map)
+	pool := left
+	if p.Team == 1 {
+		pool = right
+	}
+	if len(pool) == 0 {
+		pool = left
+	}
+	if len(pool) == 0 {
+		return 0
+	}
+	return pool[p.Deaths%len(pool)]
+}
+
 // checkRoundEndLocked 回合结束判定。
 //
-// ffa：至少发生过一次死亡，且只剩一名存活玩家（最后一个站着的人胜出）。
-// tdm：任一支队全灭即结束；如果某支队的座位已经全部离场，也算（不必等到有人死）。
+// “还在局中” = 活着 或 还有命在等复活（见 inRoundLocked），所以命数耗尽才会少一个战力。
+//
+// ffa：至少发生过一次死亡，且只剩一名还剩命的玩家（最后一个站着的人胜出）。
+// tdm：任一支队全员出局（命尽/离场）即结束。
 func (h *Hub) checkRoundEndLocked() {
 	m := h.m
 	if m == nil || m.Over {
 		return
 	}
 	if m.Mode == modeTDM {
-		var alive, seated [2]int
+		var inRound, seated [2]int
 		for seat, p := range m.Players {
 			if p == nil || p.Team < 0 || p.Team > 1 {
 				continue
 			}
-			nick := m.Seats[seat]
-			if nick == "" {
+			if m.Seats[seat] == "" {
 				continue
 			}
 			seated[p.Team]++
-			if p.Dead || h.clients[nick] == nil {
-				continue
+			if h.inRoundLocked(m, seat, p) {
+				inRound[p.Team]++
 			}
-			alive[p.Team]++
 		}
 		// 两支队伍都还有人坐着时，只有全灭才结束；没人坐着（人全走光）直接结束
-		if alive[0] == 0 || alive[1] == 0 {
+		if inRound[0] == 0 || inRound[1] == 0 {
 			if m.Deaths >= 1 || seated[0] == 0 || seated[1] == 0 {
 				h.endRoundLocked()
 			}
 		}
 		return
 	}
-	alive := 0
+	remaining, seated := 0, 0
 	for seat, p := range m.Players {
-		if p == nil || p.Dead {
+		if p == nil || seat < 0 || seat >= len(m.Seats) || m.Seats[seat] == "" {
 			continue
 		}
-		nick := m.Seats[seat]
-		if nick == "" {
-			continue
-		}
-		if h.clients[nick] != nil {
-			alive++
+		seated++
+		if h.inRoundLocked(m, seat, p) {
+			remaining++
 		}
 	}
-	if alive <= 1 && m.Deaths >= 1 {
+	if seated > m.Participants {
+		m.Participants = seated
+	}
+	// 全员出局（含“都离开了”）→ 结算
+	if remaining == 0 {
+		if m.Deaths >= 1 {
+			h.endRoundLocked()
+		}
+		return
+	}
+	// 只剩一人还有命：本局结束（单人房里不这样判，否则一死就结算、复活没机会发生）
+	if remaining <= 1 && m.Participants >= 2 && m.Deaths >= 1 {
 		h.endRoundLocked()
 	}
 }
@@ -706,13 +900,14 @@ func (h *Hub) endRoundLocked() {
 
 	results := make([]matchResult, 0, len(m.Players))
 	lastAlive := ""
-	var aliveByTeam, killsByTeam, seatedByTeam [2]int
+	var inRoundByTeam, killsByTeam, seatedByTeam [2]int
 	for seat, p := range m.Players {
 		if p == nil {
 			continue
 		}
 		results = append(results, matchResult{Nick: p.Nick, NetID: seat, Kills: p.Kills, Team: p.Team})
-		if !p.Dead && m.Seats[seat] != "" {
+		stillIn := h.inRoundLocked(m, seat, p)
+		if stillIn {
 			lastAlive = p.Nick
 		}
 		if p.Team >= 0 && p.Team < 2 {
@@ -720,8 +915,8 @@ func (h *Hub) endRoundLocked() {
 			if m.Seats[seat] != "" {
 				seatedByTeam[p.Team]++
 			}
-			if !p.Dead && m.Seats[seat] != "" {
-				aliveByTeam[p.Team]++
+			if stillIn {
+				inRoundByTeam[p.Team]++
 			}
 		}
 	}
@@ -737,10 +932,10 @@ func (h *Hub) endRoundLocked() {
 	reason := "lastman"
 	if m.Mode == modeTDM {
 		reason = "teamwipe"
-		// 存活多的一队胜；都灭光了就看总击杀，再平就判平局
+		// 交战中的人头多的一队胜；都出局了就看总击杀，再平就判平局
 		switch {
-		case aliveByTeam[0] != aliveByTeam[1]:
-			if aliveByTeam[0] > aliveByTeam[1] {
+		case inRoundByTeam[0] != inRoundByTeam[1]:
+			if inRoundByTeam[0] > inRoundByTeam[1] {
 				winnerTeam = 0
 			} else {
 				winnerTeam = 1
@@ -773,8 +968,9 @@ func (h *Hub) endRoundLocked() {
 
 	nextMap := h.pickMapLocked()
 	m.NextMap = nextMap
-	// 下一局模式也提前定好，好让结算弹窗能预告（人数不够 tdm 时会被 pickModeLocked 自动回落）
-	m.NextMode = h.pickModeLocked(h.seatedCountLocked(m))
+	// 下一局模式也提前定好，好让结算弹窗能预告（优先看下一张地图自己配的模式；
+	// 随机的话现在就抽定，人数不够 tdm 时自动回落混战）
+	m.NextMode = h.previewModeLocked(h.data.maps[nextMap], h.seatedCountLocked(m))
 	// 先留 resultDelay 秒给"击败镜头"，再弹结算，最后换图重开
 	delaySeconds := h.cfg.ResultDelaySeconds
 	if delaySeconds < 0 {
@@ -1382,6 +1578,12 @@ func (h *Hub) handleDamage(c *client, msg damageMsg) {
 		if killer := m.Players[src]; killer != nil && src != msg.Target {
 			killer.Kills++
 		}
+		// 命数：还有命就排队复活；命尽则本局永久出局（等下一局）
+		if target.Revives > 0 {
+			target.RespawnAt = now.Add(respawnDelay)
+		} else {
+			target.RespawnAt = time.Time{}
+		}
 	}
 	// 展示用的伤害值是"本次攻击的伤害"，不被剩余血量截断
 	h.broadcastHPFullLocked(target, int(amount), msg.Kind, msg.Crit, msg.Point, msg.KB, src, msg.Attack)
@@ -1393,6 +1595,9 @@ func (h *Hub) handleDamage(c *client, msg damageMsg) {
 				h.bridge.EventLog(target.Nick + " 阵亡")
 			} else {
 				h.bridge.EventLog(target.Nick + " 被击败")
+			}
+			if !target.RespawnAt.IsZero() {
+				h.bridge.EventLog(target.Nick + " 还剩 " + itoa(target.Revives) + " 次复活")
 			}
 		}
 		h.checkRoundEndLocked()
@@ -1419,6 +1624,7 @@ func (h *Hub) broadcastHPFullLocked(p *playerState, amount int, kind string, cri
 		T: "hp", ID: p.Seat, HP: p.HP, Shield: p.Shield, Dead: p.Dead,
 		Amount: float64(amount), Kind: kind, Crit: crit, Point: point, KB: kb,
 		Src: src, Weapon: p.lastWeaponID, Attack: attack, Kills: h.killsMapLocked(),
+		Lives: p.livesLeft(), Revives: p.Revives, RespawnInMs: p.respawnInMs(time.Now()),
 	})
 }
 
@@ -1751,6 +1957,7 @@ func (h *Hub) tickLocked(dt time.Duration) {
 	}
 
 	h.tickDropsLocked(m, dt)
+	h.tickRespawnsLocked(m, now)
 	h.checkRoundEndLocked()
 }
 

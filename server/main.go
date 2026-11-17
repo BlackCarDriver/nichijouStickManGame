@@ -17,7 +17,7 @@ import (
 
 // gameProtocolVersion 游戏同步协议版本（前端 src/net/protocol.ts 与 server/protocol.go 同一版）。
 // 发版检查：curl /healthz 看到 gameProtocol=7 才说明服务端已更新。
-const gameProtocolVersion = 7
+const gameProtocolVersion = 8
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  8192,
@@ -43,6 +43,7 @@ func main() {
 	staticDir := flag.String("static", "", "前端静态目录（覆盖配置）")
 	dev := flag.Bool("dev", false, "本地开发：允许用 ?dev=1&nick=xxx 跳过 JWT")
 	modeOverride := flag.String("mode", "", "对局模式覆盖：random | ffa | tdm（回归测试固定模式时用）")
+	livesOverride := flag.Int("lives", -1, "命数（可复活次数）覆盖：>=0 时忽略地图的 lives（回归测试用）")
 	flag.Parse()
 
 	cfg, err := loadRuntimeConfig(resolvePath(*configPath))
@@ -61,6 +62,10 @@ func main() {
 	if *modeOverride != "" {
 		cfg.Mode = normalizeMode(*modeOverride)
 		log.Printf("[config] 模式被命令行覆盖：%s", cfg.Mode)
+	}
+	if *livesOverride >= 0 {
+		cfg.Lives = *livesOverride
+		log.Printf("[config] 命数被命令行覆盖：%d", cfg.Lives)
 	}
 
 	integ, err := nichijouSDK.LoadIntegrationConfig(resolvePath(*integrationPath))

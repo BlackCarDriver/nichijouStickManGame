@@ -33,6 +33,7 @@ export class DropSystem {
   private static readonly DROP_POOL = [
     'pistol',
     'ak47',
+    'machinegun',
     'dagger',
     'spear',
     'grenade',

@@ -7,5 +7,6 @@
   "maxPlayers": 8,
   "allowDevIdentity": false,
   "roundEndSeconds": 4,
-  "mode": "random"
+  "mode": "random",
+  "lives": -1
 }

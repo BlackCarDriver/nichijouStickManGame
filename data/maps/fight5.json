@@ -1,0 +1,287 @@
+{
+  "version": 1,
+  "name": "fight5",
+  "mode": "tdm",
+  "lives": 3,
+  "width": 2400,
+  "height": 1200,
+  "spawnPoints": [
+    {
+      "x": 80,
+      "y": 1071
+    },
+    {
+      "x": 87.09982144218475,
+      "y": 1071.1968629666267
+    },
+    {
+      "x": 84.62197446793743,
+      "y": 1077.8615940111827
+    },
+    {
+      "x": 2300.0839208524512,
+      "y": 1066.5239718132998
+    },
+    {
+      "x": 2287.4639916588217,
+      "y": 1074.2792495785152
+    },
+    {
+      "x": 2294.5711256133063,
+      "y": 1073.5481266407783
+    }
+  ],
+  "weaponDropZones": [
+    {
+      "x": 200,
+      "y": 80,
+      "w": 2000,
+      "h": 100
+    }
+  ],
+  "objects": [
+    {
+      "id": "ground",
+      "type": "rect",
+      "x": 40,
+      "y": 1120,
+      "w": 920,
+      "h": 40,
+      "material": "ground",
+      "label": {
+        "text": "地图制作：白宇喵喵喵"
+      }
+    },
+    {
+      "id": "wall_left",
+      "type": "rect",
+      "x": 0,
+      "y": 0,
+      "w": 40,
+      "h": 1200,
+      "material": "wall"
+    },
+    {
+      "id": "wall_right",
+      "type": "rect",
+      "x": 2360,
+      "y": 0,
+      "w": 40,
+      "h": 1200,
+      "material": "wall"
+    },
+    {
+      "type": "rect",
+      "x": 440,
+      "y": 900,
+      "w": 620,
+      "h": 20,
+      "material": "ground",
+      "id": "o1",
+      "oneWay": true
+    },
+    {
+      "type": "rect",
+      "x": 1240,
+      "y": 920,
+      "w": 660,
+      "h": 20,
+      "material": "ground",
+      "id": "o3",
+      "oneWay": true
+    },
+    {
+      "id": "o31",
+      "type": "rect",
+      "x": 1440,
+      "y": 1120,
+      "w": 920,
+      "h": 40,
+      "material": "ground",
+      "label": {
+        "text": "地图制作：白宇喵喵喵"
+      }
+    },
+    {
+      "type": "rect",
+      "x": 40,
+      "y": 1160,
+      "w": 2340,
+      "h": 40,
+      "material": "hotGround",
+      "id": "o32"
+    },
+    {
+      "type": "rect",
+      "x": 40,
+      "y": 760,
+      "w": 760,
+      "h": 20,
+      "material": "plank",
+      "id": "o2"
+    },
+    {
+      "type": "rect",
+      "x": 780,
+      "y": 600,
+      "w": 800,
+      "h": 20,
+      "material": "metal",
+      "id": "o6"
+    },
+    {
+      "type": "rect",
+      "x": 1600,
+      "y": 760,
+      "w": 760,
+      "h": 20,
+      "material": "plank",
+      "id": "o9"
+    }
+  ],
+  "prefabs": [
+    {
+      "id": "p2",
+      "ref": "table_wood",
+      "x": 560,
+      "y": 1080
+    },
+    {
+      "id": "p3",
+      "ref": "table_wood",
+      "x": 760,
+      "y": 1080
+    },
+    {
+      "id": "p25",
+      "ref": "table_wood",
+      "x": 600,
+      "y": 720
+    },
+    {
+      "id": "p26",
+      "ref": "table_wood",
+      "x": 940,
+      "y": 860
+    },
+    {
+      "id": "p27",
+      "ref": "table_wood",
+      "x": 1420,
+      "y": 880
+    },
+    {
+      "id": "p29",
+      "ref": "table_wood",
+      "x": 1580,
+      "y": 1080
+    },
+    {
+      "id": "p30",
+      "ref": "table_wood",
+      "x": 1920,
+      "y": 720
+    },
+    {
+      "id": "p15",
+      "ref": "table_wood",
+      "x": 1860,
+      "y": 1080
+    }
+  ],
+  "joints": [],
+  "weapons": [
+    {
+      "x": 617.183105098611,
+      "y": 676.1094940467572,
+      "mode": "fixed",
+      "weapon": "pistol",
+      "respawnMs": 10000,
+      "maxRespawns": 100,
+      "fromSky": false
+    },
+    {
+      "x": 555.2434255448761,
+      "y": 1044.7651849506929,
+      "mode": "fixed",
+      "weapon": "spear",
+      "respawnMs": 10000,
+      "maxRespawns": 100,
+      "fromSky": false
+    },
+    {
+      "x": 947.0286637105389,
+      "y": 814.8888075492539,
+      "mode": "fixed",
+      "weapon": "ak47",
+      "respawnMs": 10000,
+      "maxRespawns": 100,
+      "fromSky": false
+    },
+    {
+      "x": 766.5402770868632,
+      "y": 1044.084444243451,
+      "mode": "fixed",
+      "weapon": "spear",
+      "respawnMs": 10000,
+      "maxRespawns": 100,
+      "fromSky": false
+    },
+    {
+      "x": 1580,
+      "y": 1040,
+      "mode": "fixed",
+      "weapon": "dagger",
+      "respawnMs": 5000,
+      "maxRespawns": 100
+    },
+    {
+      "x": 1861.0943514289286,
+      "y": 1041.9043518811636,
+      "mode": "fixed",
+      "weapon": "dagger",
+      "respawnMs": 5000,
+      "maxRespawns": 100
+    },
+    {
+      "x": 1423.8814096754988,
+      "y": 835.8071818790194,
+      "mode": "fixed",
+      "weapon": "ak47",
+      "respawnMs": 5000,
+      "maxRespawns": 100
+    },
+    {
+      "x": 1176.0826052041075,
+      "y": 503.17175722470415,
+      "mode": "fixed",
+      "weapon": "shotgun",
+      "respawnMs": 10000,
+      "maxRespawns": 10
+    },
+    {
+      "x": 1907.4297253330233,
+      "y": 670.8018162651557,
+      "mode": "fixed",
+      "weapon": "pistol",
+      "respawnMs": 10000,
+      "maxRespawns": 0
+    },
+    {
+      "x": 483.60935435297006,
+      "y": 718.7016993946098,
+      "mode": "fixed",
+      "item": "armor",
+      "respawnMs": 30000,
+      "maxRespawns": 10
+    },
+    {
+      "x": 2075.999325935993,
+      "y": 722.9145136934255,
+      "mode": "fixed",
+      "item": "armor",
+      "respawnMs": 30000,
+      "maxRespawns": 10
+    }
+  ]
+}

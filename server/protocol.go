@@ -264,6 +264,11 @@ type playerStatWire struct {
 	Shield int  `json:"shield"`
 	Dead   bool `json:"dead"`
 	Kills  int  `json:"kills"`
+	// Lives = 剩余生命数（含当前这条；0 = 已出局）；Revives = 剩余复活次数
+	Lives   int `json:"lives"`
+	Revives int `json:"revives"`
+	// RespawnInMs = 距复活还有多少毫秒（0 = 不在等待复活）
+	RespawnInMs int `json:"respawnInMs,omitempty"`
 }
 
 type matchStartMsg struct {
@@ -350,6 +355,23 @@ type hpMsg struct {
 	// Attack 攻击批次 id（客户端用它给"打击反馈"去重：提前播过就不再重复播）
 	Attack int64          `json:"attack,omitempty"`
 	Kills  map[string]int `json:"kills"`
+	// Lives = 剩余生命数（含当前这条；0 = 已出局）；Revives = 剩余复活次数
+	Lives   int `json:"lives"`
+	Revives int `json:"revives"`
+	// RespawnInMs = 距复活还有多少毫秒（0 = 不复活/不在等待）
+	RespawnInMs int `json:"respawnInMs,omitempty"`
+}
+
+// respawnMsg 服务端复活某人：位置由服务端指定（客户端各自把自己/远端玩家瞬移过去）。
+type respawnMsg struct {
+	T       string  `json:"t"`
+	ID      int     `json:"id"`
+	X       float64 `json:"x"`
+	Y       float64 `json:"y"`
+	HP      int     `json:"hp"`
+	Shield  int     `json:"shield"`
+	Lives   int     `json:"lives"`
+	Revives int     `json:"revives"`
 }
 
 type dropAddMsg struct {

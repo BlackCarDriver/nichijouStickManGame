@@ -49,14 +49,14 @@ type dropZone struct {
 }
 
 type mapWeaponSpawn struct {
-	ID          string   `json:"id"`
-	X           float64  `json:"x"`
-	Y           float64  `json:"y"`
-	Mode        string   `json:"mode"`
-	Weapon      string   `json:"weapon"`
-	Type        string   `json:"type"`
+	ID     string  `json:"id"`
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Mode   string  `json:"mode"`
+	Weapon string  `json:"weapon"`
+	Type   string  `json:"type"`
 	// Item：投放道具（medkit / armor）。填了就按"补给点"处理，不受武器池影响
-	Item string `json:"item"`
+	Item        string   `json:"item"`
 	Pool        []string `json:"pool"`
 	RespawnMs   int      `json:"respawnMs"`
 	MaxRespawns *int     `json:"maxRespawns"`
@@ -94,7 +94,12 @@ type prefabFile struct {
 }
 
 type mapFile struct {
-	Name            string           `json:"name"`
+	Name string `json:"name"`
+	// Mode = 地图级对局模式：random（默认）/ ffa / tdm
+	// 服务端 config 的 mode 被显式固定为 ffa/tdm 时会覆盖它（调试/回归用）。
+	Mode string `json:"mode"`
+	// Lives = 地图级命数（可复活次数）；nil = 用服务端默认（1）
+	Lives           *int             `json:"lives"`
 	Width           float64          `json:"width"`
 	Height          float64          `json:"height"`
 	SpawnPoints     []spawnPoint     `json:"spawnPoints"`
@@ -179,6 +184,10 @@ func loadGameData(dataDir string) (*gameData, error) {
 		}
 		if mf.Name == "" || len(mf.SpawnPoints) == 0 {
 			continue
+		}
+		// 地图模式只接受 random/ffa/tdm；其余（写错/缺省）一律当作 random
+		if mf.Mode != modeFFA && mf.Mode != modeTDM {
+			mf.Mode = modeRandom
 		}
 		mf.Weapons = append(mf.Weapons, expandPrefabWeapons(gd.prefabs, mf.Prefabs)...)
 		gd.maps[mf.Name] = &mf

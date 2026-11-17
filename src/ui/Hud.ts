@@ -30,6 +30,9 @@ export class Hud {
   private players: Player[] = [];
   private profiles: PlayerProfile[] = [];
   private kills: Map<number, number> | null = null;
+  /** playerId → 剩余生命数 / 剩余复活次数（团队战/带命数的对局才会用） */
+  private lives: Map<number, number> | null = null;
+  private revives: Map<number, number> | null = null;
 
   // ---- 团队战：顶部/底部队伍比分 ----
   private teamMode = false;
@@ -62,6 +65,12 @@ export class Hud {
 
   bindKills(kills: Map<number, number>): void {
     this.kills = kills;
+  }
+
+  /** 绑定命数（剩余生命 / 剩余复活次数）；显示为面板右上角的“复活 ×N” / “出局” */
+  bindLives(lives: Map<number, number>, revives?: Map<number, number>): void {
+    this.lives = lives;
+    this.revives = revives ?? null;
   }
 
   /**
@@ -217,7 +226,7 @@ export class Hud {
       if (!slot) return;
 
       const k = this.kills?.get(player.id) ?? 0;
-      slot.killText.setText(`${k} 杀`);
+      slot.killText.setText(this.killLabel(player.id, k));
 
       const held = player.heldWeapon;
       if (!held) {
@@ -234,6 +243,18 @@ export class Hud {
     });
 
     if (this.teamMode) this.drawScore();
+  }
+
+  /** 右上角文案：击杀数 + 命数（没命就标“出局”） */
+  private killLabel(playerId: number, kills: number): string {
+    const lives = this.lives?.get(playerId);
+    if (kills <= 0 && lives === undefined) return '';
+    const parts = [kills > 0 ? `${kills} 杀` : '0 杀'];
+    if (lives !== undefined) {
+      const revives = this.revives?.get(playerId) ?? Math.max(0, lives - 1);
+      parts.push(lives <= 0 ? '出局' : revives > 0 ? `复活 ×${revives}` : '最后一条命');
+    }
+    return parts.join(' · ');
   }
 
   /** 单个面板的绘制：底板 / 头像 / 血条 / 护盾条 */

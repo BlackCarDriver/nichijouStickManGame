@@ -6,7 +6,7 @@
  */
 
 /** 游戏同步协议版本（与 server/main.go 的 gameProtocolVersion 一致；前后端必须同版本上线） */
-export const GAME_PROTOCOL_VERSION = 7;
+export const GAME_PROTOCOL_VERSION = 8;
 
 /** 对局模式：ffa = 个人混战（最后一人胜出）；tdm = 红蓝团队战（消灭对方全队获胜） */
 export type MatchMode = 'ffa' | 'tdm';
@@ -87,6 +87,12 @@ export interface PlayerStat {
   shield: number;
   dead: boolean;
   kills: number;
+  /** 剩余生命数（含当前这条；0 = 已出局） */
+  lives: number;
+  /** 剩余复活次数 */
+  revives: number;
+  /** 距复活还有多少毫秒（0/不填 = 不在等待复活） */
+  respawnInMs?: number;
 }
 
 export interface MatchStartMsg {
@@ -282,6 +288,31 @@ export interface HpMsg {
   /** 攻击批次 id：客户端用它给"打击反馈"去重（提前播过就不再重复播） */
   attack?: number;
   kills: Record<string, number>;
+  /** 剩余生命数（含当前这条；0 = 已出局） */
+  lives: number;
+  /** 剩余复活次数 */
+  revives: number;
+  /** 距复活还有多少毫秒（0/不填 = 不在等待复活） */
+  respawnInMs?: number;
+}
+
+/**
+ * 服务端指定的复活：位置由服务端给（客户端把自己/远端玩家瞬移过去）。
+ *
+ * 为什么位置由服务端定：复活点不能由客户端自己挑（否则可以选在敌人背后），
+ * 而位置又是客户端权威的，所以只能服务端点名 + 客户端执行。
+ */
+export interface RespawnMsg {
+  t: 'respawn';
+  id: number;
+  x: number;
+  y: number;
+  hp: number;
+  shield: number;
+  /** 复活后的剩余生命数（含这一条） */
+  lives: number;
+  /** 复活后的剩余复活次数 */
+  revives: number;
 }
 
 export interface DropAddMsg {
@@ -372,6 +403,7 @@ export type ServerMsg =
   | HostMsg
   | ShotBatchMsg
   | HpMsg
+  | RespawnMsg
   | DropAddMsg
   | PickMsg
   | ObjMsg

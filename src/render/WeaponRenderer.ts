@@ -118,6 +118,45 @@ export function drawHeldWeapon(g: Phaser.GameObjects.Graphics, o: WeaponDrawOpti
       break;
     }
 
+    case 'mg': {
+      // 粗枪身
+      g.lineStyle(th, color, 1);
+      const b0 = at(-th * 2.0);
+      const b1 = at(len * 0.86);
+      g.lineBetween(b0.x, b0.y, b1.x, b1.y);
+      // 枪管散热罩（前段短划线，区别于 AK 的实心枪管）
+      g.lineStyle(th * 0.62, 0x22242b, 1);
+      for (let i = 0; i < 4; i++) {
+        const t0 = at(len * (0.6 + i * 0.08));
+        const t1 = at(len * (0.64 + i * 0.08));
+        g.lineBetween(t0.x, t0.y, t1.x, t1.y);
+      }
+      // 枪口
+      const muzzle0 = at(len * 0.86);
+      const muzzle1 = at(len);
+      g.lineStyle(th * 0.5, 0x1b1d23, 1);
+      g.lineBetween(muzzle0.x, muzzle0.y, muzzle1.x, muzzle1.y);
+      // 弹鼓（挂在枪身下方）
+      const drum = at(len * 0.34, -th * 1.5);
+      g.fillStyle(0x2a2c33, 1);
+      g.fillCircle(drum.x, drum.y, th * 1.15);
+      g.lineStyle(2, 0x4a4d57, 1);
+      g.strokeCircle(drum.x, drum.y, th * 1.15);
+      // 两脚架
+      g.lineStyle(2, 0x2a2c33, 1);
+      const legRoot = at(len * 0.7);
+      const legA = at(len * 0.84, -th * 1.4);
+      const legB = at(len * 0.84, th * 1.4);
+      g.lineBetween(legRoot.x, legRoot.y, legA.x, legA.y);
+      g.lineBetween(legRoot.x, legRoot.y, legB.x, legB.y);
+      // 枪托
+      g.lineStyle(th * 1.1, 0x24262c, 1);
+      const s0 = at(-th * 2.0);
+      const s1 = at(-th * 3.8, -th * 0.9);
+      g.lineBetween(s0.x, s0.y, s1.x, s1.y);
+      break;
+    }
+
     case 'laser': {
       g.lineStyle(th, color, 1);
       const l0 = at(-th);

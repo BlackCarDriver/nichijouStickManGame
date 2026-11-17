@@ -5,8 +5,8 @@
  * 用法：
  *   node tools/net-smoke.mjs [ws://127.0.0.1:8095/ws]
  *
- * 需要服务端以 --dev 启动（允许 ?dev=1&nick=xxx 假身份）：
- *   cd server && go run . --dev
+ * 需要服务端以 --dev --lives 0 启动（允许 ?dev=1&nick=xxx 假身份；本脚本假定一命到底）：
+ *   cd server && go run . --dev --lives 0
  *
  * 覆盖：开局、房主选举、输入中继、权威世界快照（snap）、伤害与击杀、
  *       拾取仲裁、物体销毁广播、聊天、延迟测量、掉线/观战/重开。

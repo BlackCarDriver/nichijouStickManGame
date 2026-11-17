@@ -29,7 +29,8 @@ export type WeaponVisualStyle =
   | 'grenade'
   | 'lightsaber'
   | 'sniper'
-  | 'shotgun';
+  | 'shotgun'
+  | 'mg';
 
 export interface BulletConfig {
   kind: BulletKind;
@@ -171,6 +172,22 @@ export interface WeaponVisual {
 }
 
 /**
+ * 抛壳表现（**纯视觉**，不参与物理）。
+ * 不填 = 该武器不抛壳（激光 / 火箭 / 手榴弹 / 近战武器）。
+ * 落点高度由 CasingSystem 在出生时向下打一条射线自动求，不用配。
+ */
+export interface CasingConfig {
+  /** 弹壳长度（px，沿旋转轴） */
+  length: number;
+  /** 弹壳宽度（px） */
+  width: number;
+  /** 弹壳颜色（hex）：黄铜 = #d8b056，霰弹壳 = #b5432f */
+  color: string;
+  /** 弹出初速（px/帧，16.7ms 一帧）；不填 = 5（越大飞得越远） */
+  speed?: number;
+}
+
+/**
  * 超级战士增益（拾取该武器时自动获得，不能换武器）。
  * 目前只有光刀使用。
  */
@@ -207,6 +224,8 @@ export interface WeaponJson {
   /** 弹药数；-1 = 无限（近战武器不消耗弹药） */
   ammo: number;
   bullet?: BulletConfig;
+  /** 开火抛壳（纯视觉）：不填 = 不抛壳 */
+  casing?: CasingConfig;
   beam?: BeamConfig;
   melee?: MeleeConfig;
   throw?: ThrowConfig;

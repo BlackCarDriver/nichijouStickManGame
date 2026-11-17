@@ -37,6 +37,7 @@ import { ExplosionSystem } from '../combat/ExplosionSystem';
 import { AimSightSystem } from '../combat/AimSightSystem';
 import { GrenadeSystem } from '../combat/GrenadeSystem';
 import { FxSystem } from '../fx/FxSystem';
+import { CasingSystem } from '../fx/CasingSystem';
 import { Hud } from '../ui/Hud';
 import { DeathNotice } from '../ui/DeathNotice';
 import { getFakeProfiles } from '../config/playerProfiles';
@@ -128,6 +129,14 @@ export class GameScene extends Phaser.Scene {
   private netErrorLogged = false;
   /** playerId → 击杀数 */
   private readonly kills = new Map<number, number>();
+  /** playerId → 剩余生命数（含当前这条；0 = 已出局） */
+  private readonly lives = new Map<number, number>();
+  /** playerId → 剩余复活次数 */
+  private readonly revives = new Map<number, number>();
+  /** playerId → 复活截止时刻（performance.now 毫秒；不在等复活则不存在） */
+  private readonly respawnAt = new Map<number, number>();
+  /** 本地死亡提示的倒计时刷新节流 */
+  private respawnTextAt = 0;
   private mapObjects: MapObjectRuntime[] = [];
   // ---- 联机 ----
   private onlineData: MatchContext | null = null;
@@ -162,6 +171,8 @@ export class GameScene extends Phaser.Scene {
   private damageSystem!: DamageSystem;
   private explosion!: ExplosionSystem;
   private fx!: FxSystem;
+  /** 抛壳特效（纯视觉，仅实弹枪） */
+  private casings!: CasingSystem;
   private hud!: Hud;
   private damageNumbers!: DamageNumbers;
   private slashTrail!: SlashTrail;
@@ -238,6 +249,9 @@ export class GameScene extends Phaser.Scene {
     this.players = [];
     this.mapObjects = [];
     this.oneWayBodies = [];
+    this.lives.clear();
+    this.revives.clear();
+    this.respawnAt.clear();
     this.bodyToPlayer.clear();
   }
 
@@ -293,6 +307,7 @@ export class GameScene extends Phaser.Scene {
 
     // ---- 表现层 ----
     this.fx = new FxSystem(this);
+    this.casings = new CasingSystem(this);
 
     // ---- 破坏 / 伤害 ----
     this.worldRegistry = new WorldRegistry();
@@ -323,6 +338,7 @@ export class GameScene extends Phaser.Scene {
       this.worldRegistry,
       this.bodyToPlayer,
       this.fx,
+      this.casings,
     );
 
     // ---- 瞄准辅助线（狙击枪红外线）----
@@ -362,6 +378,8 @@ export class GameScene extends Phaser.Scene {
     // 单机用假资料占位；联机用服务端下发的房间玩家昵称
     this.hud.bind(this.players, this.profiles());
     this.hud.bindKills(this.kills);
+    // 命数（可复活次数）：HUD 面板显示"复活 ×N"
+    this.hud.bindLives(this.lives, this.revives);
     // 团队战：底部队伍比分（玩家 → 队伍 由 roster 决定）
     this.hud.setTeams(this.matchMode, (player) => this.teamOfNetId(this.netIdOfEntity(player)));
     // 出生空手：所有武器一律靠捡（天降武器 + 场上掉落物）
@@ -402,6 +420,9 @@ export class GameScene extends Phaser.Scene {
         mapObjects: this.mapObjects,
         worldSize: { width: this.mapData.width, height: this.mapData.height },
         kills: this.kills,
+        lives: this.lives,
+        revives: this.revives,
+        respawnAt: this.respawnAt,
         onRosterChanged: () => this.onRosterChanged(),
         spawnPlayer: (entry, stat) => this.spawnNetPlayer(entry, stat),
         onChat: (nick, text) => this.showChatBubble(nick, text),
@@ -716,10 +737,12 @@ export class GameScene extends Phaser.Scene {
       }
       this.handlePlayerDeath(victim, killerId);
     };
-    // 复活（单机倒计时结束 / 联机换局）：收起死亡提示
+    // 复活（单机倒计时结束 / 联机服务端 respawn）：收起死亡提示并交还镜头
     const onPlayerRespawn = (player: Player): void => {
       if (this.online && player !== this.online.localPlayer) return;
       this.deathNotice?.hide();
+      this.spectateTarget = null;
+      this.respawnTextAt = 0;
     };
     // 统一音效路由
     const onSfx = (name: string): void => {
@@ -805,6 +828,7 @@ export class GameScene extends Phaser.Scene {
       ['hazard', () => this.hazard.destroy()],
       ['weapon', () => this.weaponSystem.destroy()],
       ['fx', () => this.fx.destroy()],
+      ['casings', () => this.casings.destroy()],
       ['damageNumbers', () => this.damageNumbers.destroy()],
       ['slashTrail', () => this.slashTrail.destroy()],
       ['hud', () => this.hud.destroy()],
@@ -891,6 +915,7 @@ export class GameScene extends Phaser.Scene {
     this.updateCameraZoom(this.cameraTarget);
     this.gameFeel.update(this.cameras.main, this.cameraRig.shakeOffset, delta);
     this.fx.update(delta);
+    this.casings.update(delta);
     this.slashTrail.update(delta, this.players);
     this.damageNumbers.update(delta);
     this.hud.update();
@@ -1097,12 +1122,46 @@ export class GameScene extends Phaser.Scene {
       : killer
         ? `你被 ${this.playerDisplayName(killer)} 用 ${weapon} 击败`
         : `你被${weapon}击败`;
-    const follow = this.online
-      ? this.spectateTarget
-        ? `观战中 · 跟随 ${this.playerDisplayName(this.spectateTarget)}`
-        : '观战中'
-      : '';
-    this.deathNotice?.show(title, follow);
+    let sub = '';
+    if (this.online) {
+      const pending = this.respawnAt.get(victim.id) ?? 0;
+      if (pending > 0) {
+        // 还有命：显示复活倒计时（每帧刷新），而不是“观战中”
+        sub = this.respawnText(victim.id);
+      } else {
+        sub = this.spectateTarget
+          ? `已出局 · 跟随 ${this.playerDisplayName(this.spectateTarget)}`
+          : '已出局 · 观战中';
+      }
+    }
+    this.deathNotice?.show(title, sub);
+  }
+
+  /** 复活倒计时文案（“2 秒后复活 · 还剩 ×N 次”） */
+  private respawnText(playerId: number): string {
+    const deadline = this.respawnAt.get(playerId) ?? 0;
+    const left = Math.max(0, Math.ceil((deadline - performance.now()) / 1000));
+    const revives = this.revives.get(playerId) ?? 0;
+    return left > 0 ? `${left} 秒后复活 · 还剩 ${revives} 次` : '正在复活…';
+  }
+
+  /** 死亡提示里的倒计时定时刷新（只换副标题，不重建面板） */
+  private updateRespawnText(): void {
+    const local = this.online?.localPlayer;
+    if (!local || !local.health.isDead || !this.deathNotice?.isVisible) {
+      this.respawnTextAt = 0;
+      return;
+    }
+    // 命尽/已出局：没有复活倒计时，保留“已出局 · 观战中”的文案
+    const deadline = this.respawnAt.get(local.id) ?? 0;
+    if (deadline <= 0) {
+      this.respawnTextAt = 0;
+      return;
+    }
+    const now = performance.now();
+    if (now - this.respawnTextAt < 180) return;
+    this.respawnTextAt = now;
+    this.deathNotice.setSub(this.respawnText(local.id));
   }
 
   /** 致命伤害的武器名（'fist'/'kick' 等特殊值 + 环境伤害都有可读文案） */
@@ -1216,6 +1275,7 @@ export class GameScene extends Phaser.Scene {
     this.syncOnline(delta);
 
     this.sights.update(this.players);
+    this.updateRespawnText();
     this.grenades.update(delta, this.players);
     this.projectileSystem.update(delta);
     this.pickups.tryPickup(EMPTY_PRESSED);
@@ -1244,6 +1304,7 @@ export class GameScene extends Phaser.Scene {
     try {
       this.gameFeel.update(this.cameras.main, this.cameraRig.shakeOffset, delta);
       this.fx.update(delta);
+      this.casings.update(delta);
       this.slashTrail.update(delta, this.players);
       this.damageNumbers.update(delta);
       this.hud.update();

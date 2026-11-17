@@ -23,6 +23,12 @@
         "piercePlayers": false,
         "bounceRestitution": 0.72
       },
+      "casing": {
+        "length": 6.5,
+        "width": 2.8,
+        "color": "#d8b056",
+        "speed": 4.6
+      },
       "recoil": {
         "push": 1.2,
         "climbDeg": 0.9,
@@ -59,6 +65,12 @@
         "spreadDeg": 3.5,
         "bounceRestitution": 0.72
       },
+      "casing": {
+        "length": 9.0,
+        "width": 3.2,
+        "color": "#d8b056",
+        "speed": 5.4
+      },
       "recoil": {
         "push": 0.9,
         "climbDeg": 0.75,
@@ -72,6 +84,48 @@
         "color": "#3a3a46"
       },
       "cameraZoom": 1.0
+    },
+    "machinegun": {
+      "name": "机枪",
+      "attackMode": "shoot",
+      "automatic": true,
+      "fireRate": 12,
+      "damage": 7,
+      "knockback": 2.2,
+      "ammo": 120,
+      "bullet": {
+        "kind": "streak",
+        "speed": 1950,
+        "range": 1700,
+        "size": 2.4,
+        "color": "#ffcf6b",
+        "trail": 26,
+        "maxBounces": 3,
+        "bounceDamageMul": 0.7,
+        "pierceDamageMul": 0.6,
+        "piercePlayers": false,
+        "spreadDeg": 6.0,
+        "bounceRestitution": 0.7
+      },
+      "casing": {
+        "length": 8.5,
+        "width": 3.4,
+        "color": "#c9a24a",
+        "speed": 5.8
+      },
+      "recoil": {
+        "push": 0.65,
+        "climbDeg": 0.55,
+        "climbMaxDeg": 9.5,
+        "recoverMs": 3400
+      },
+      "visual": {
+        "style": "mg",
+        "length": 46,
+        "thickness": 7,
+        "color": "#34363e"
+      },
+      "cameraZoom": 0.98
     },
     "laser": {
       "name": "激光枪",
@@ -235,6 +289,12 @@
         "piercePlayers": false,
         "bounceRestitution": 0.7
       },
+      "casing": {
+        "length": 12.0,
+        "width": 3.4,
+        "color": "#e0be6a",
+        "speed": 4.8
+      },
       "sight": {
         "color": "#ff9b9b",
         "width": 1.6,
@@ -277,6 +337,12 @@
         "pellets": 7,
         "spreadDeg": 5.3,
         "bounceRestitution": 0.68
+      },
+      "casing": {
+        "length": 9.5,
+        "width": 5.0,
+        "color": "#b5432f",
+        "speed": 4.0
       },
       "recoil": {
         "push": 7.0,

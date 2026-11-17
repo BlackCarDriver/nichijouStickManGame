@@ -4,7 +4,7 @@
  * 走完 大厅 → 准备 → 开局 → 输入中继 → 伤害仲裁 → 拾取仲裁 → 聊天 的全链路。
  *
  * 前置：
- *   cd server && go build -o /tmp/stickman-server . && /tmp/stickman-server --dev
+ *   cd server && go build -o /tmp/stickman-server . && /tmp/stickman-server --dev --lives 0   # 本脚本假定一命到底
  *   npm run build        （由 Go 服务托管 dist/）
  *
  * 用法：node tools/net-e2e.mjs [baseURL]
@@ -816,7 +816,7 @@ async function main() {
 
   await a.cdp.waitFor(`document.querySelector('.mp-modal:not(.hidden)') !== null`, 12000);
   const modalText = await a.cdp.eval(`document.querySelector('.mp-modal-card').textContent`);
-  check('最后一人胜出后弹出结算', modalText.includes(nickA) && /秒后切换/.test(modalText), modalText.slice(0, 90));
+  check('最后一人胜出后弹出结算', modalText.includes(nickA) && /秒后开始下一局/.test(modalText), modalText.slice(0, 90));
 
   await a.cdp.waitFor(
     `(() => { const s = window.__game.scene.getScene('GameScene'); return s && s.mapData.name !== ${JSON.stringify(mapBefore)}; })()`,

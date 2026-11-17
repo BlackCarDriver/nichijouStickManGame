@@ -20,6 +20,7 @@
 export type SfxName =
   | 'pistol'
   | 'ak47'
+  | 'machinegun'
   | 'shotgun'
   | 'sniper'
   | 'rocket'
@@ -37,6 +38,7 @@ export type SfxName =
 const WEAPON_SFX: Record<string, SfxName> = {
   pistol: 'pistol',
   ak47: 'ak47',
+  machinegun: 'machinegun',
   shotgun: 'shotgun',
   sniper: 'sniper',
   rocket: 'rocket',
@@ -103,6 +105,14 @@ export class AudioSystem {
         this.blast(0.4, 2200, 0.075);
         this.thump(0.42, 185, 65, 0.085);
         this.tail(0.1, 0.16, 1100);
+        break;
+
+      // ---- 机枪：比 AK 更闷，连发时听得出“钝”而不是“脆” ----
+      case 'machinegun':
+        this.crack(0.36, 2500, 0.03);
+        this.blast(0.48, 1650, 0.085);
+        this.thump(0.5, 168, 62, 0.09);
+        this.tail(0.12, 0.15, 950);
         break;
 
       // ---- 霰弹枪：厚 + 重 ----

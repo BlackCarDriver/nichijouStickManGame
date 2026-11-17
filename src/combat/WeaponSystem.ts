@@ -4,6 +4,7 @@ import type { Player } from '../entities/Player';
 import { PLAYER_CONFIG } from '../entities/Player';
 import type { WorldRegistry } from '../world/WorldRegistry';
 import type { FxSystem } from '../fx/FxSystem';
+import type { CasingSystem } from '../fx/CasingSystem';
 import type { DamageSystem } from './DamageSystem';
 import type { ProjectileSystem } from './ProjectileSystem';
 import { getWeapon, createHeldWeapon } from './WeaponFormat';
@@ -71,6 +72,8 @@ export class WeaponSystem {
   private readonly registry: WorldRegistry;
   private readonly bodyToPlayer: Map<number, Player>;
   private readonly fx: FxSystem;
+  /** 抛壳（纯视觉，仅实弹枪使用） */
+  private readonly casings: CasingSystem;
   /** playerId → 剩余攻击冷却（秒） */
   private readonly cooldowns = new Map<number, number>();
   /** playerId → 剩余踢冷却（秒） */
@@ -95,6 +98,7 @@ export class WeaponSystem {
     registry: WorldRegistry,
     bodyToPlayer: Map<number, Player>,
     fx: FxSystem,
+    casings: CasingSystem,
   ) {
     this.scene = scene;
     this.projectiles = projectiles;
@@ -102,6 +106,7 @@ export class WeaponSystem {
     this.registry = registry;
     this.bodyToPlayer = bodyToPlayer;
     this.fx = fx;
+    this.casings = casings;
     this.preview = new TrajectoryPreview(scene, 829);
   }
 
@@ -471,8 +476,39 @@ export class WeaponSystem {
     }
 
     this.fx.hitSpark(from, { x: Math.cos(angle), y: Math.sin(angle) }, parseColor(bullet.color));
+    this.ejectCasing(player, weapon);
     player.setAttack('stab', 90); // 轻微后坐
     return true;
+  }
+
+  /**
+   * 抛壳（纯视觉）：从**机匣**（枪口往回收约 1/3 枪长）向枪管上侧弹出。
+   * 一枪只抛一枚（霰弹枪 7 颗弹丸也只有 1 个壳）。
+   */
+  private ejectCasing(player: Player, weapon: WeaponJson): void {
+    const casing = weapon.casing;
+    if (!casing) return;
+    const aim = player.aim;
+    const dirX = Math.cos(aim);
+    const dirY = Math.sin(aim);
+    // 枪管"上侧"单位向量：随瞄准整体旋转（朝上打时抛壳方向变成侧向），物理上才说得通
+    const outX = player.facing * dirY;
+    const outY = -player.facing * dirX;
+    const from = player.muzzle;
+    const port = weapon.visual.length * 0.34;
+    this.casings.spawn({
+      x: from.x - dirX * port + outX * weapon.visual.thickness * 0.45,
+      y: from.y - dirY * port + outY * weapon.visual.thickness * 0.45,
+      outX,
+      outY,
+      backX: dirX,
+      backY: dirY,
+      color: parseColor(casing.color, 0xd8b056),
+      length: casing.length,
+      width: casing.width,
+      speed: casing.speed,
+      ignoreBody: player.body,
+    });
   }
 
   // ==========================================================

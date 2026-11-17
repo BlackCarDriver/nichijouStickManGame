@@ -1,0 +1,170 @@
+{
+  "version": 1,
+  "name": "map_bajiaolong",
+  "mode": "random",
+  "lives": 1,
+  "width": 2400,
+  "height": 1200,
+  "spawnPoints": [
+    {
+      "x": 90.76023318060106,
+      "y": 300
+    },
+    {
+      "x": 169.43115287062835,
+      "y": 300
+    },
+    {
+      "x": 2156.076554420492,
+      "y": 314.6836787601093
+    },
+    {
+      "x": 2225.5077072911204,
+      "y": 318.6709196900273
+    },
+    {
+      "x": 257.4056347304644,
+      "y": 299.9362046495902
+    },
+    {
+      "x": 2305.454597047954,
+      "y": 315.8851683692624
+    }
+  ],
+  "weaponDropZones": [
+    {
+      "x": 200,
+      "y": 80,
+      "w": 2000,
+      "h": 100
+    }
+  ],
+  "objects": [
+    {
+      "id": "wall_left",
+      "type": "rect",
+      "x": 0,
+      "y": 0,
+      "w": 40,
+      "h": 1200,
+      "material": "wall"
+    },
+    {
+      "id": "wall_right",
+      "type": "rect",
+      "x": 2360,
+      "y": 0,
+      "w": 40,
+      "h": 1200,
+      "material": "wall"
+    },
+    {
+      "type": "rect",
+      "x": 40,
+      "y": 340,
+      "w": 260,
+      "h": 50,
+      "material": "ground_2",
+      "id": "o4"
+    },
+    {
+      "type": "rect",
+      "x": 2100,
+      "y": 340,
+      "w": 260,
+      "h": 50,
+      "material": "ground_2",
+      "id": "o5"
+    },
+    {
+      "type": "rect",
+      "x": 20,
+      "y": 1140,
+      "w": 2350,
+      "h": 60,
+      "material": "hotGround",
+      "id": "o6"
+    },
+    {
+      "type": "rect",
+      "x": 400,
+      "y": 500,
+      "w": 100,
+      "h": 640,
+      "material": "ice",
+      "id": "o12"
+    },
+    {
+      "type": "rect",
+      "x": 700,
+      "y": 640,
+      "w": 100,
+      "h": 500,
+      "material": "ice",
+      "id": "o13"
+    },
+    {
+      "type": "rect",
+      "x": 1500,
+      "y": 640,
+      "w": 100,
+      "h": 500,
+      "material": "ice",
+      "id": "o14"
+    },
+    {
+      "type": "rect",
+      "x": 1900,
+      "y": 500,
+      "w": 100,
+      "h": 640,
+      "material": "ice",
+      "id": "o15"
+    },
+    {
+      "type": "rect",
+      "x": 800,
+      "y": 1100,
+      "w": 700,
+      "h": 40,
+      "material": "ground",
+      "id": "o16"
+    }
+  ],
+  "prefabs": [],
+  "joints": [],
+  "weapons": [
+    {
+      "x": 1540,
+      "y": 560,
+      "mode": "fixed",
+      "weapon": "spear",
+      "respawnMs": 10000,
+      "maxRespawns": 0
+    },
+    {
+      "x": 1954.6198834096995,
+      "y": 401.4566710107923,
+      "mode": "fixed",
+      "weapon": "dagger",
+      "respawnMs": 10000,
+      "maxRespawns": 0
+    },
+    {
+      "x": 447.97448185983615,
+      "y": 457.3418393800547,
+      "mode": "fixed",
+      "weapon": "spear",
+      "respawnMs": 10000,
+      "maxRespawns": 0
+    },
+    {
+      "x": 758.6071243396175,
+      "y": 609.2397668193989,
+      "mode": "fixed",
+      "weapon": "dagger",
+      "respawnMs": 10000,
+      "maxRespawns": 0
+    }
+  ]
+}

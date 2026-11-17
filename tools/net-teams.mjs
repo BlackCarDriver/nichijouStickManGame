@@ -114,11 +114,18 @@ async function main() {
     `mode=${startC.mode}`,
   );
 
-  // 结束首局：只剩一人
-  a.send({ t: 'dmg', target: seatB, src: seatA, amount: 200, kind: 'bullet', crit: false, attack: 101, ignoreInvuln: true });
-  await sleep(150);
-  a.send({ t: 'dmg', target: seatC, src: seatA, amount: 200, kind: 'bullet', crit: false, attack: 102, ignoreInvuln: true });
-  const firstEnd = await a.wait('match_end', undefined, 5000);
+  // 结束首局：把对手打到"命尽"（带命数的地图要打穿复活次数）
+  const revives = Math.max(0, startA.stats.find((x) => x.id === seatA)?.revives ?? 0);
+  let atk = 101;
+  for (const seatOfTarget of [seatB, seatC]) {
+    for (let i = 0; i <= revives; i++) {
+      a.clear();
+      a.send({ t: 'dmg', target: seatOfTarget, src: seatA, amount: 200, kind: 'bullet', crit: false, attack: atk++, ignoreInvuln: true });
+      await a.wait('hp', (x) => x.id === seatOfTarget && x.dead === true, 5000);
+      if (i < revives) await a.wait('hp', (x) => x.id === seatOfTarget && x.dead === false, 8000);
+    }
+  }
+  const firstEnd = await a.wait('match_end', undefined, 8000);
   check('混战只剩一人结算', firstEnd.mode === 'ffa' && firstEnd.reason === 'lastman', JSON.stringify({ mode: firstEnd.mode, reason: firstEnd.reason }));
 
   // 下一局：3 人齐 → 团队战
@@ -152,6 +159,9 @@ async function main() {
   const b2 = seat.get(`teamB_${tag}`);
   const c2 = seat.get(`teamC_${tag}`);
 
+  // 本局命数（可复活次数）：--lives 0 时是一命到底；默认 1 时会先复活
+  const lives = Math.max(0, (m.stats.find((x) => x.id === b2)?.revives ?? 0));
+
   // 同队（A、C 都红队）：服务端直接丢弃
   c.clear();
   c.send({ t: 'dmg', target: a2, src: c2, amount: 30, kind: 'bullet', crit: false, attack: 201, ignoreInvuln: true });
@@ -164,11 +174,32 @@ async function main() {
   const hp = await c.wait('hp', (x) => x.id === b2, 3000);
   check('跨队伤害正常结算（100 → 70）', hp.hp === 70, `hp=${hp.hp} shield=${hp.shield}`);
 
-  // 蓝队全灭 → 立即结算
-  c.clear();
-  c.send({ t: 'dmg', target: b2, src: c2, amount: 200, kind: 'bullet', crit: false, attack: 203, ignoreInvuln: true });
-  const end = await c.wait('match_end', undefined, 5000);
-  check('一方全灭即结算（teamwipe）', end.reason === 'teamwipe' && end.mode === 'tdm', JSON.stringify({ reason: end.reason, mode: end.mode }));
+  // 打死 B：还有命 → 3 秒后复活，本局不结束；命尽 → 蓝队全灭立即结算
+  let attack = 203;
+  const hp0 = hp.hp;
+  let deaths = 0;
+  for (let i = 0; i <= lives; i++) {
+    c.clear();
+    b.clear();
+    c.send({ t: 'dmg', target: b2, src: c2, amount: 200, kind: 'bullet', crit: false, attack: attack++, ignoreInvuln: true });
+    const dead = await c.wait('hp', (x) => x.id === b2 && x.dead === true, 4000);
+    deaths++;
+    if (i < lives) {
+      const stillAlive = (dead.lives ?? 0) > 0;
+      const respawn = await c.wait('respawn', (x) => x.id === b2, 6000);
+      const revived = await c.wait('hp', (x) => x.id === b2 && x.dead === false, 4000);
+      check(
+        `第 ${deaths} 次死亡后复活（还剩 ${dead.revives} 次复活）`,
+        stillAlive && respawn.hp === 100 && revived.hp === 100,
+        JSON.stringify({ dead: { lives: dead.lives, revives: dead.revives }, respawn: { x: respawn.x, y: respawn.y, lives: respawn.lives } }),
+      );
+      check('还有命时本局不结束', !b.msgs.some((x) => x.t === 'match_end'));
+    }
+  }
+  check(`命尽后死亡次数 = 命数+1（${deaths} 次）`, deaths === lives + 1, `deaths=${deaths} lives=${lives} hp0=${hp0}`);
+
+  const end = await c.wait('match_end', undefined, 6000);
+  check('蓝队命尽 → 一方全灭即结算（teamwipe）', end.reason === 'teamwipe' && end.mode === 'tdm', JSON.stringify({ reason: end.reason, mode: end.mode }));
   check('胜方为红队（team0）', end.winnerTeam === 0 && end.winner === '红队', JSON.stringify({ winner: end.winner, winnerTeam: end.winnerTeam }));
   check('results 带队伍信息', end.results.every((r) => typeof r.team === 'number'), JSON.stringify(end.results));
   check(

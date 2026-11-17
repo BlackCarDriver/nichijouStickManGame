@@ -14,6 +14,18 @@
 
 export const MAP_FORMAT_VERSION = 1;
 
+/**
+ * 地图级对局模式（地图属性里的 `mode`）。
+ *
+ * - `random`（默认，字段不填时也是它）：每局按服务端规则随机抽一个模式
+ * - `ffa`：这张地图固定打个人混战（最后一人胜出）
+ * - `tdm`：这张地图固定打红蓝团队战（消灭对方全队获胜；人数 <2 时仍会回落混战）
+ *
+ * ⚠️ 服务端 `config/plugin_config.json` 的 `mode` 若被显式设成 ffa/tdm，
+ * 会**覆盖**地图设置（调试/固定赛事用）；默认 `random` 时以地图为准。
+ */
+export type MapMode = 'random' | 'ffa' | 'tdm';
+
 /** 图层：solid = 参与物理；decor = 纯视觉（背景装饰，无碰撞） */
 export type ObjectLayer = 'solid' | 'decor';
 
@@ -227,6 +239,13 @@ export interface MapWeaponSpawn {
 export interface MapData {
   version: number;
   name: string;
+  /** 对局模式：random（默认）/ ffa 混战 / tdm 团队战（不填 = random） */
+  mode?: MapMode;
+  /**
+   * 命数（可复活次数）：不填 = 1；0 = 一命到底。
+   * 每次死亡扣 1 次，还有次数就 3 秒后满血空手回出生点；计完就本局出局。
+   */
+  lives?: number;
   width: number;
   height: number;
   spawnPoints: SpawnPoint[];

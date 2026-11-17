@@ -1,6 +1,8 @@
 {
   "version": 1,
   "name": "fight",
+  "mode": "random",
+  "lives": 1,
   "width": 2400,
   "height": 1200,
   "spawnPoints": [

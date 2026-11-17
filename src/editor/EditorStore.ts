@@ -397,6 +397,8 @@ export class EditorStore {
     const map: MapData = {
       version: MAP_FORMAT_VERSION,
       name: clean,
+      mode: 'random',
+      lives: 1,
       width: 2400,
       height: 1200,
       spawnPoints: [

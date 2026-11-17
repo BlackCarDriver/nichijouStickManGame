@@ -69,6 +69,14 @@ export class DeathNotice {
     this.root.setVisible(false);
   }
 
+  /** 只换副标题（复活倒计时这类高频刷新用，不重建面板） */
+  setSub(text: string): void {
+    if (!this.visible) return;
+    if (this.sub.text === text) return;
+    this.sub.setText(text);
+    this.sub.setVisible(text.trim() !== '');
+  }
+
   get isVisible(): boolean {
     return this.visible;
   }

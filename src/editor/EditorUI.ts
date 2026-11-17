@@ -14,7 +14,7 @@ import { listMaps, listPrefabs } from '../map/MapRegistry';
 import { getWeapon, listWeaponIds } from '../combat/WeaponFormat';
 import { getItem, listItemIds } from '../world/ItemFormat';
 import type { Issue } from '../map/MapValidator';
-import type { MapObject, MapObjectLabel, ObjectLabelAnchor } from '../map/MapFormat';
+import type { MapData, MapObject, MapObjectLabel, ObjectLabelAnchor } from '../map/MapFormat';
 import { setStatus, setStatusSink } from './status';
 import { objectBounds, objectCenter } from './geometry';
 import { textureUrl } from '../map/TextureLoader';
@@ -1583,6 +1583,37 @@ function mapForm(): HTMLElement {
   return h('div', {}, [
     h('h3', { class: 'ed-h3' }, ['地图属性']),
     field('名称', textInput(map.name, (v) => { map.name = v; store.commit(); })),
+    field(
+      '对局模式',
+      selectInput(
+        [
+          { value: 'random', label: '随机（每局随机，默认）' },
+          { value: 'ffa', label: '混战（最后一人胜出）' },
+          { value: 'tdm', label: '团队战（红蓝两队，消灭对方全队）' },
+        ],
+        map.mode ?? 'random',
+        (v) => {
+          map.mode = v as MapData['mode'];
+          store.commit();
+        },
+      ),
+    ),
+    h('p', { class: 'ed-help' }, [
+      '随机会每局重新抽（结算弹窗会预告下一局模式）；固定后这张图每局都用选定模式。',
+      '团队战至少需要 2 人，人不够时仍会回落混战；服务端 config/--mode 显式指定时优先用它。',
+    ]),
+    field(
+      '命数（可复活次数）',
+      numberInput(map.lives ?? 1, (v) => {
+        map.lives = Math.max(0, Math.round(v));
+        store.commit();
+      }),
+    ),
+    h('p', { class: 'ed-help' }, [
+      '默认 1：每人自带 1 次复活；写 0 = 一命到底。',
+      '每次死亡扣 1 次，还有次数就 3 秒后满血空手回到出生点；计完在本局出局（等下一局）。',
+      '团队战同样是“全队命数耗尽”才判负。',
+    ]),
     h('div', { class: 'ed-grid2' }, [
       field('宽', numberInput(map.width, (v) => { map.width = Math.max(100, v); store.commit(); })),
       field('高', numberInput(map.height, (v) => { map.height = Math.max(100, v); store.commit(); })),

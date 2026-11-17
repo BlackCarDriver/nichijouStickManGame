@@ -36,6 +36,12 @@ export interface OnlineMatchDeps {
   worldSize: { width: number; height: number };
   /** player.id（实体 id）→ 击杀数，HUD 共享同一个 Map */
   kills: Map<number, number>;
+  /** player.id → 剩余生命数（含当前这条；0 = 已出局），HUD 共享 */
+  lives: Map<number, number>;
+  /** player.id → 剩余复活次数（死亡提示/复活倒计时用） */
+  revives: Map<number, number>;
+  /** player.id → 复活截止时刻（performance.now() 毫秒；不在等待复活则不存在） */
+  respawnAt: Map<number, number>;
   /** 玩家退出/加入后重建 HUD 面板 */
   onRosterChanged: () => void;
   /** 对局中途加入的新玩家：由 GameScene 创建火柴人并返回 */
@@ -271,11 +277,12 @@ export class OnlineMatch {
     const local = this.localPlayer;
     if (local) this.lastShieldSent = local.health.shield;
 
-    // 已有玩家状态（重连 / 中途观战：击杀数、血量、是否阵亡）
+    // 已有玩家状态（重连 / 中途观战：击杀数、血量、是否阵亡、剩余命数）
     for (const st of deps.ctx.stats ?? []) {
       const player = deps.players.get(st.id);
       if (!player) continue;
       deps.kills.set(player.id, st.kills);
+      this.applyLives(player, st.lives, st.revives, st.dead ? (st.respawnInMs ?? 0) : 0);
       player.applyNetSnapshot({ hp: st.hp, shield: st.shield, dead: st.dead });
     }
 
@@ -883,6 +890,9 @@ export class OnlineMatch {
       case 'hp':
         this.applyHp(msg);
         break;
+      case 'respawn':
+        this.applyRespawn(msg);
+        break;
       case 'drop_add':
         this.spawnDrop(msg.item);
         break;
@@ -964,11 +974,38 @@ export class OnlineMatch {
       attackId: msg.attack,
     });
     if (msg.id === this.localNetId) this.lastShieldSent = msg.shield;
+    this.applyLives(p, msg.lives, msg.revives, msg.dead ? (msg.respawnInMs ?? 0) : 0);
 
     for (const [seat, kills] of Object.entries(msg.kills ?? {})) {
       const player = this.deps.players.get(Number(seat));
       if (player) this.deps.kills.set(player.id, kills);
     }
+  }
+
+  /**
+   * 记录命数（剩余生命/复活次数/复活倒计时）。
+   * `respawnInMs > 0` 表示正在等复活；0 = 不在等待（活着或已出局）。
+   */
+  private applyLives(player: Player, lives: number, revives: number, respawnInMs: number): void {
+    const value = Number.isFinite(lives) ? Math.max(0, lives) : 0;
+    this.deps.lives.set(player.id, value);
+    this.deps.revives.set(player.id, Number.isFinite(revives) ? Math.max(0, revives) : Math.max(0, value - 1));
+    if (respawnInMs > 0) this.deps.respawnAt.set(player.id, performance.now() + respawnInMs);
+    else this.deps.respawnAt.delete(player.id);
+  }
+
+  /**
+   * 服务端指定复活：把玩家瞬移到服务端给的出生点并恢复满血（装备在死亡时已经掉光了）。
+   *
+   * 远端玩家必须清掉位置插值样本，否则会从“死亡点”滑行到“出生点”。
+   */
+  private applyRespawn(msg: ServerMsg & { t: 'respawn' }): void {
+    const player = this.deps.players.get(msg.id);
+    if (!player) return;
+    this.posStreams.delete(msg.id);
+    this.lastRemoteAt.delete(msg.id);
+    player.netRespawn(msg.x, msg.y);
+    this.applyLives(player, msg.lives, msg.revives, 0);
   }
 
   private spawnDrop(drop: DropWire): void {
@@ -1161,6 +1198,7 @@ export class OnlineMatch {
       seq: 0, mx: 0, jh: false, cr: false, ah: false, kh: false, sw: false, aim: 0, pending: 0,
     });
     this.deps.kills.set(player.id, stat.kills ?? 0);
+    this.applyLives(player, stat.lives, stat.revives, stat.dead ? (stat.respawnInMs ?? 0) : 0);
     player.applyNetSnapshot({ hp: stat.hp, shield: stat.shield, dead: stat.dead });
     player.envDamageReporter = undefined;
     this.syncRemoteDriven();
@@ -1176,6 +1214,9 @@ export class OnlineMatch {
     this.lastRemoteAt.delete(netId);
     this.entityToNet.delete(player.id);
     this.deps.kills.delete(player.id);
+    this.deps.lives.delete(player.id);
+    this.deps.revives.delete(player.id);
+    this.deps.respawnAt.delete(player.id);
     player.destroy();
     this.deps.onRosterChanged();
   }
